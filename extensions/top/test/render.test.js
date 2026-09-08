@@ -288,7 +288,7 @@ test('workspace save rotates environment through the explicit revision-bound pat
     )
     .map((patch) => patch.SetProp.id)
     .find((node) =>
-      stage.surface.dispatch({ trigger: 'Expand', node, id: `${node}:Expand`, expanded: true }),
+      stage.surface.dispatch({ trigger: 'Expand', node, id: `${node}:Expand`, value: true }),
     );
   assert.notEqual(environment, undefined);
   await settled();
@@ -549,6 +549,63 @@ test('an installed catalogue extension exposes its update review without retypin
   assert.ok(labelled(stage, 'Update with selected access'));
 });
 
+test('reviewing an unchanged installed digest is an explicit no-op', async () => {
+  const digest = `sha256:${'a'.repeat(64)}`;
+  let updates = 0;
+  const stage = host();
+  stage.render(
+    h(Extensions, {
+      api: {
+        extensions: {
+          list: async () => [
+            {
+              name: 'storybook',
+              image_digest: digest,
+              version: '1.0.0',
+              enabled: true,
+              status: 'duty',
+            },
+          ],
+          catalogue: firstPartyCatalogue,
+          startAcquisition: async () => ({ job: 'unchanged-update' }),
+          acquisition: async () => ({
+            job: 'unchanged-update',
+            reference: 'ghcr.io/husklet/husklet/extension-storybook:latest',
+            revision: 2,
+            state: 'ready',
+            progress: null,
+            candidate: {
+              name: 'storybook',
+              version: '1.0.0',
+              image_digest: digest,
+              installed_image_digest: digest,
+              requested: ['containers:read'],
+            },
+            error: null,
+          }),
+          updateAndWait: async () => {
+            updates += 1;
+          },
+        },
+        watchExtensions: async () => () => {},
+      },
+    }),
+  );
+  await settled();
+  invoke(stage, 'Review update');
+  await settled();
+  await settled();
+
+  assert.ok(
+    labelled(
+      stage,
+      'storybook is up to date. The reviewed image already matches the installed image; access was not changed.',
+    ),
+  );
+  assert.equal(labelled(stage, 'Update with selected access'), undefined);
+  assert.equal(updates, 0);
+});
+
 test('extension discovery distinguishes catalogue loading from a complete empty catalogue', async () => {
   let resolveCatalogue;
   const catalogue = new Promise((resolve) => {
@@ -685,7 +742,10 @@ test('extension inspection keeps invalid and failed references recoverable with 
   assert.ok(labelled(stage, `Reviewed image sha256:${'c'.repeat(12)}…${'c'.repeat(8)}`));
   assert.ok(labelled(stage, 'Source registry.example/reviewed:1'));
   assert.ok(
-    labelled(stage, 'All access is off by default. Enable only what this extension needs.'),
+    labelled(
+      stage,
+      'All access is off. Expand exact grants and enable only what this extension needs.',
+    ),
   );
   assert.ok(labelled(stage, 'View containers and processes (containers:read)'));
   assert.deepEqual(latestSwitchValues(stage), [false]);
@@ -781,7 +841,8 @@ for (const updating of [false, true]) {
     ])
       assert.ok(labelled(stage, label), label);
     assert.ok(labelled(stage, 'Review decision · 0/10 selected'));
-    assert.ok(labelled(stage, 'Review every permission choice before continuing.'));
+    assert.ok(labelled(stage, 'Exact grants · 0/10 selected'));
+    expand(stage, 'Exact grants · 0/10 selected');
     assert.ok(labelled(stage, 'Container access · 0/4'));
     assert.ok(labelled(stage, '0/6 workspace paths allowed'));
     assert.deepEqual(latestSwitchValues(stage), Array(10).fill(false));
@@ -943,6 +1004,8 @@ test('extension image entry submits from the keyboard and consent explains reque
   assert.ok(labelled(stage, 'View containers and processes (containers:read)'));
   assert.ok(labelled(stage, 'Read and write terminal text (terminals:output)'));
   assert.ok(labelled(stage, 'Review decision · 0/2 selected'));
+  assert.ok(labelled(stage, 'Exact grants · 0/2 selected'));
+  expand(stage, 'Exact grants · 0/2 selected');
   assert.ok(labelled(stage, 'Product access · 0/2'));
   assert.equal(
     labelled(stage, 'Workspace files'),
@@ -5032,7 +5095,7 @@ function expand(stage, label) {
     .reverse();
   assert.ok(
     nodes.some((node) =>
-      stage.surface.dispatch({ trigger: 'Expand', node, id: `${node}:Expand`, value: true }),
+      stage.surface.dispatch({ trigger: 'Expand', node, id: `${node}:Expand`, expanded: true }),
     ),
     `${label} expands`,
   );
