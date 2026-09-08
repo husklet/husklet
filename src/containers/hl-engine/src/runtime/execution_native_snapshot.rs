@@ -7,6 +7,8 @@
 use crate::composition::{CheckpointSink, CompositionError};
 use sha2::{Digest as _, Sha256};
 use std::io;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 #[cfg(target_os = "linux")]
 use std::os::unix::fs::{FileExt, MetadataExt};
 use std::path::{Path, PathBuf};
@@ -32,10 +34,238 @@ const STOP_DEADLINE: Duration = Duration::from_secs(2);
 #[cfg(target_os = "linux")]
 const ABORT_CLEANUP_TIMEOUT: Duration = Duration::from_secs(2);
 
-pub(super) const REGISTER_OBJECT: &str = "native/registers.x86-v1";
-pub(super) const MEMORY_OBJECT: &str = "native/memory.x86-v1";
+pub(crate) const REGISTER_OBJECT: &str = "native/registers.x86-v1";
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub(crate) fn pin_native_process(pid: libc::pid_t) -> io::Result<OwnedFd> {
+    // SAFETY: pidfd_open consumes only scalar arguments and returns a new descriptor or -1; it retains no pointer.
+    let descriptor = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
+    if descriptor < 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        // SAFETY: the successful syscall returned a new owned descriptor, transferred exactly once here.
+        Ok(unsafe { OwnedFd::from_raw_fd(descriptor as libc::c_int) })
+    }
+}
+pub(crate) const MEMORY_OBJECT: &str = "native/memory.x86-v1";
 const MANIFEST_MAGIC: &[u8; 16] = b"HLNATIVE-X86-V1\0";
 const MANIFEST_SIZE: usize = 160;
+
+pub(crate) struct NativeSnapshotObjects {
+    pub(crate) registers: Vec<u8>,
+    pub(crate) memory: Vec<u8>,
+    pub(crate) manifest: Vec<u8>,
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn capture_stopped_native(
+    pid: libc::pid_t,
+    deadline: Instant,
+) -> Result<NativeSnapshotObjects, CompositionError> {
+    let registers = capture_until(pid, deadline)
+        .map_err(|error| {
+            if error.kind() == io::ErrorKind::TimedOut {
+                CompositionError::DeadlineExceeded
+            } else {
+                CompositionError::RuntimeConstruction
+            }
+        })?
+        .encode()
+        .to_vec();
+    let memory = capture_stopped_memory(pid, deadline)
+        .and_then(|image| {
+            image
+                .encode()
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, format!("{error:?}")))
+        })
+        .map_err(|error| {
+            if error.kind() == io::ErrorKind::TimedOut {
+                CompositionError::DeadlineExceeded
+            } else {
+                CompositionError::RuntimeConstruction
+            }
+        })?;
+    if Instant::now() >= deadline {
+        return Err(CompositionError::DeadlineExceeded);
+    }
+    let manifest = native_manifest(&registers, &memory);
+    validate_native_objects(&manifest, |name| match name {
+        REGISTER_OBJECT => Some(registers.clone()),
+        MEMORY_OBJECT => Some(memory.clone()),
+        _ => None,
+    })
+    .map_err(|_| CompositionError::RuntimeConstruction)?;
+    Ok(NativeSnapshotObjects {
+        registers,
+        memory,
+        manifest,
+    })
+}
+
+/// Hydrates a freshly launched, group-stopped process from a validated NativeX86V1 image.
+///
+/// The first milestone deliberately requires the launcher to reproduce the complete VMA layout. It
+/// refuses before mutation when ASLR, the executable, loader, root, or mapped file contents differ;
+/// remote mmap/open reconstruction is a later widening, never an implicit partial restore.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub(crate) struct PreparedNativeRestore {
+    pid: libc::pid_t,
+    _pidfd: OwnedFd,
+    registers: X86RegisterRecord,
+    image: NativeMemoryImage,
+    guard: TraceGuard,
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub(crate) fn prepare_native_restore(
+    pid: libc::pid_t,
+    pidfd: OwnedFd,
+    registers: &[u8],
+    memory: &[u8],
+    deadline: Instant,
+) -> io::Result<PreparedNativeRestore> {
+    let registers = X86RegisterRecord::decode(registers)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, format!("invalid register image: {error:?}")))?;
+    let image = NativeMemoryImage::decode(memory)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, format!("invalid memory image: {error:?}")))?;
+    if pid <= 1 || pid == unsafe { libc::getpid() } || !process_incarnation_matches(pid, pidfd.as_raw_fd())? {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "native restore requires another pinned process",
+        ));
+    }
+    check_deadline(deadline)?;
+    ptrace(libc::PTRACE_SEIZE, pid, 0, 0)?;
+    let mut guard = TraceGuard {
+        pid,
+        was_group_stopped: false,
+        ptrace_stopped: false,
+    };
+    ptrace(libc::PTRACE_INTERRUPT, pid, 0, 0)?;
+    guard.was_group_stopped = wait_for_ptrace_stop_until(pid, deadline)?;
+    guard.ptrace_stopped = true;
+    if !process_incarnation_matches(pid, pidfd.as_raw_fd())? {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "native restore target incarnation changed",
+        ));
+    }
+    let root = PathBuf::from(format!("/proc/{pid}/root"));
+    let current = parse_maps(&std::fs::read(format!("/proc/{pid}/maps"))?, &root, deadline)?;
+    let mismatch = current.iter().zip(&image.mappings).position(|(current, captured)| {
+        current.start != captured.start
+            || current.end != captured.end
+            || current.offset != captured.offset
+            || current.protection != captured.protection
+            || current.device_major != captured.device_major
+            || current.device_minor != captured.device_minor
+            || current.inode != captured.inode
+            || current.kernel_special != captured.kernel_special
+            || current.root_relative != captured.root_relative
+            || current.file_digest != captured.file_digest
+    });
+    if current.len() != image.mappings.len() || mismatch.is_some() {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "fresh process address-space layout differs from NativeX86V1 image",
+        ));
+    }
+
+    Ok(PreparedNativeRestore {
+        pid,
+        _pidfd: pidfd,
+        registers,
+        image,
+        guard,
+    })
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub(crate) fn complete_native_restore(prepared: PreparedNativeRestore, deadline: Instant) -> io::Result<()> {
+    let PreparedNativeRestore {
+        pid,
+        _pidfd,
+        registers,
+        image,
+        guard,
+    } = prepared;
+    if !process_incarnation_matches(pid, _pidfd.as_raw_fd())? {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "native restore target incarnation changed",
+        ));
+    }
+    let process_memory = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(format!("/proc/{pid}/mem"))?;
+    for mapping in &image.mappings {
+        if mapping.kernel_special {
+            continue;
+        }
+        write_process_mem_exact(&process_memory, mapping.start, &mapping.bytes, deadline)?;
+    }
+
+    let mut raw: libc::user_regs_struct = unsafe { std::mem::zeroed() };
+    unsafe {
+        std::ptr::write_unaligned((&raw mut raw).cast::<[u64; REGISTER_COUNT]>(), registers.registers);
+    }
+    let mut iov = libc::iovec {
+        iov_base: (&raw mut raw).cast(),
+        iov_len: std::mem::size_of_val(&raw),
+    };
+    ptrace(
+        libc::PTRACE_SETREGSET,
+        pid,
+        libc::NT_PRSTATUS as usize,
+        (&raw mut iov) as usize,
+    )?;
+    ptrace(
+        libc::PTRACE_SETSIGMASK,
+        pid,
+        std::mem::size_of_val(&registers.signal_mask),
+        (&raw const registers.signal_mask) as usize,
+    )?;
+    check_deadline(deadline)?;
+    drop(guard);
+    Ok(())
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+fn process_incarnation_matches(pid: libc::pid_t, pidfd: std::os::fd::RawFd) -> io::Result<bool> {
+    if pidfd < 0 {
+        return Ok(false);
+    }
+    let info = std::fs::read_to_string(format!("/proc/self/fdinfo/{pidfd}"))?;
+    let pinned = info
+        .lines()
+        .find_map(|line| line.strip_prefix("Pid:\t"))
+        .and_then(|value| value.trim().parse::<libc::pid_t>().ok());
+    Ok(pinned == Some(pid))
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+fn write_process_mem_exact(memory: &std::fs::File, address: u64, bytes: &[u8], deadline: Instant) -> io::Result<()> {
+    let mut written = 0;
+    while written < bytes.len() {
+        check_deadline(deadline)?;
+        let offset = address
+            .checked_add(written as u64)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "native mapping address overflow"))?;
+        match memory.write_at(&bytes[written..], offset) {
+            Ok(0) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::WriteZero,
+                    "short write restoring native process memory",
+                ));
+            }
+            Ok(count) => written += count,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
+}
 
 fn native_manifest(registers: &[u8], memory: &[u8]) -> Vec<u8> {
     let mut out = vec![0; MANIFEST_SIZE];
@@ -55,7 +285,7 @@ fn object_name(name: &str) -> [u8; 32] {
     field
 }
 
-pub(super) fn validate_native_objects(
+pub(crate) fn validate_native_objects(
     manifest: &[u8],
     object: impl Fn(&str) -> Option<Vec<u8>>,
 ) -> Result<(), InvalidNativeImage> {
@@ -80,7 +310,7 @@ pub(super) fn validate_native_objects(
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum InvalidNativeImage {
+pub(crate) enum InvalidNativeImage {
     Manifest,
     Missing,
     Digest,
@@ -110,47 +340,16 @@ pub(super) fn publish_stopped_native(
     }
     let transaction = sink.begin_until(deadline)?;
     let result = (|| {
-        let registers = capture_until(pid, deadline)
-            .map_err(|error| {
-                if error.kind() == io::ErrorKind::TimedOut {
-                    CompositionError::DeadlineExceeded
-                } else {
-                    CompositionError::RuntimeConstruction
-                }
-            })?
-            .encode();
-        let memory = capture_stopped_memory(pid, deadline)
-            .and_then(|image| {
-                image
-                    .encode()
-                    .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, format!("{error:?}")))
-            })
-            .map_err(|error| {
-                if error.kind() == io::ErrorKind::TimedOut {
-                    CompositionError::DeadlineExceeded
-                } else {
-                    CompositionError::RuntimeConstruction
-                }
-            })?;
-        if Instant::now() >= deadline {
-            return Err(CompositionError::DeadlineExceeded);
-        }
-        let manifest = native_manifest(&registers, &memory);
-        validate_native_objects(&manifest, |name| match name {
-            REGISTER_OBJECT => Some(registers.to_vec()),
-            MEMORY_OBJECT => Some(memory.clone()),
-            _ => None,
-        })
-        .map_err(|_| CompositionError::RuntimeConstruction)?;
-        sink.put_until(transaction, REGISTER_OBJECT, &registers, deadline)?;
-        sink.put_until(transaction, MEMORY_OBJECT, &memory, deadline)?;
+        let image = capture_stopped_native(pid, deadline)?;
+        sink.put_until(transaction, REGISTER_OBJECT, &image.registers, deadline)?;
+        sink.put_until(transaction, MEMORY_OBJECT, &image.memory, deadline)?;
         sink.put_until(
             transaction,
             crate::runtime::checkpoint::image_envelope::OBJECT,
             &crate::runtime::checkpoint::image_envelope::Reader::NativeX86V1.encode(),
             deadline,
         )?;
-        sink.commit_until(transaction, &manifest, deadline)
+        sink.commit_until(transaction, &image.manifest, deadline)
     })();
     if result.is_err() {
         // Publication's deadline may itself be the reason for failure. Cleanup owns a separate,
@@ -378,7 +577,6 @@ fn validate_mappings(mappings: &[NativeMapping]) -> Result<(), InvalidMemoryImag
                 if !canonical_relative(path)
                     || path.len() > MAX_PATH_BYTES
                     || path.contains(&0)
-                    || !mapping.bytes.is_empty()
                     || mapping.file_digest.is_none()
                 {
                     return Err(InvalidMemoryImage::Path);
@@ -393,14 +591,14 @@ fn validate_mappings(mappings: &[NativeMapping]) -> Result<(), InvalidMemoryImag
                 {
                     return Err(InvalidMemoryImage::Kind);
                 }
-                if mapping.bytes.len() as u64 != length {
-                    return Err(InvalidMemoryImage::Payload);
-                }
-                copied = copied
-                    .checked_add(mapping.bytes.len())
-                    .ok_or(InvalidMemoryImage::Overflow)?;
             }
         }
+        if mapping.bytes.len() as u64 != length {
+            return Err(InvalidMemoryImage::Payload);
+        }
+        copied = copied
+            .checked_add(mapping.bytes.len())
+            .ok_or(InvalidMemoryImage::Overflow)?;
     }
     if copied > MAX_CAPTURE_BYTES {
         return Err(InvalidMemoryImage::Overflow);
@@ -471,13 +669,13 @@ pub(super) fn capture_stopped_memory(pid: libc::pid_t, deadline: Instant) -> io:
     let mut mappings = Vec::with_capacity(specifications.len());
     for mut mapping in specifications {
         check_deadline(deadline)?;
-        if !mapping.kernel_special && mapping.root_relative.is_none() {
+        if !mapping.kernel_special {
             let length = usize::try_from(mapping.end - mapping.start)
                 .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "mapping length exceeds host"))?;
             copied = copied
                 .checked_add(length)
                 .filter(|total| *total <= MAX_CAPTURE_BYTES)
-                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "anonymous memory exceeds capture bound"))?;
+                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "native memory exceeds capture bound"))?;
             mapping.bytes = read_process_mem_exact(&memory, mapping.start, length, deadline)?;
         }
         mappings.push(mapping);
@@ -1024,6 +1222,8 @@ mod tests {
     use std::collections::BTreeMap;
     use std::num::NonZeroU64;
     use std::os::fd::RawFd;
+    use std::os::unix::process::CommandExt;
+    use std::process::{Child, Command, Stdio};
     use std::sync::Mutex;
     use std::time::{Duration, Instant};
 
@@ -1033,6 +1233,45 @@ mod tests {
         fail_at: Option<&'static str>,
         begin_failure: bool,
         expire_at: Option<&'static str>,
+    }
+
+    static mut FRESH_EXEC_SENTINEL: u64 = 0;
+
+    fn spawn_fresh_exec_restore_child(test: &str, rendezvous: &Path) -> (Child, u64) {
+        let mut command = Command::new(std::env::current_exe().expect("test executable"));
+        command
+            .args(["--exact", test, "--nocapture", "--test-threads=1"])
+            .env("HL_ENGINE_NATIVE_RESTORE_CHILD", "1")
+            .env("HL_ENGINE_NATIVE_RESTORE_RENDEZVOUS", rendezvous)
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit());
+        unsafe {
+            command.pre_exec(|| {
+                let current = libc::personality(!0_u64 as libc::c_ulong);
+                if current < 0
+                    || libc::personality((current as libc::c_ulong) | libc::ADDR_NO_RANDOMIZE as libc::c_ulong) < 0
+                {
+                    return Err(io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let child = command.spawn().expect("spawn fresh-exec restore child");
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let address = loop {
+            if let Ok(value) = std::fs::read_to_string(rendezvous)
+                && let Ok(address) = u64::from_str_radix(value.trim(), 16)
+            {
+                break address;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "fresh-exec child did not publish its sentinel address"
+            );
+            std::thread::yield_now();
+        };
+        wait_until_stopped(child.id() as libc::pid_t);
+        (child, address)
     }
 
     impl CheckpointSink for AtomicSink {
@@ -1156,6 +1395,82 @@ mod tests {
         );
         drop(state);
         kill_and_reap(pid);
+    }
+
+    #[test]
+    fn native_image_restores_a_separately_execed_process_after_the_original_is_reaped() {
+        const TEST: &str = "runtime::execution::native_snapshot::tests::native_image_restores_a_separately_execed_process_after_the_original_is_reaped";
+        const CAPTURED: u64 = 0x5a71_cafe_9876_4321;
+        if std::env::var_os("HL_ENGINE_NATIVE_RESTORE_CHILD").is_some() {
+            unsafe {
+                std::ptr::write_volatile(&raw mut FRESH_EXEC_SENTINEL, CAPTURED);
+                std::fs::write(
+                    std::env::var_os("HL_ENGINE_NATIVE_RESTORE_RENDEZVOUS").expect("rendezvous path"),
+                    format!("{:x}\n", (&raw const FRESH_EXEC_SENTINEL) as usize),
+                )
+                .expect("publish sentinel address");
+                libc::raise(libc::SIGSTOP);
+                std::process::exit((std::ptr::read_volatile(&raw const FRESH_EXEC_SENTINEL) != CAPTURED) as i32);
+            }
+        }
+
+        let rendezvous = tempfile::NamedTempFile::new().unwrap();
+        let (mut original, original_address) = spawn_fresh_exec_restore_child(TEST, rendezvous.path());
+        let original_pid = original.id() as libc::pid_t;
+        let capture_started = Instant::now();
+        let image = capture_stopped_native(original_pid, Instant::now() + Duration::from_secs(10)).unwrap();
+        let capture_elapsed = capture_started.elapsed();
+        assert_eq!(unsafe { libc::kill(original_pid, libc::SIGKILL) }, 0);
+        assert!(
+            original.wait().unwrap().code().is_none(),
+            "original must die before restore"
+        );
+
+        std::fs::write(rendezvous.path(), b"").unwrap();
+        let (mut replacement, replacement_address) = spawn_fresh_exec_restore_child(TEST, rendezvous.path());
+        let replacement_pid = replacement.id() as libc::pid_t;
+        assert_ne!(replacement_pid, original_pid);
+        assert_eq!(
+            replacement_address, original_address,
+            "ASLR-disabled fresh exec must reproduce layout"
+        );
+        let memory = std::fs::OpenOptions::new()
+            .write(true)
+            .open(format!("/proc/{replacement_pid}/mem"))
+            .unwrap();
+        memory
+            .write_all_at(&0xdead_beef_dead_beef_u64.to_ne_bytes(), replacement_address)
+            .unwrap();
+        let restore_started = Instant::now();
+        let replacement_pidfd = unsafe { libc::syscall(libc::SYS_pidfd_open, replacement_pid, 0) } as RawFd;
+        assert!(replacement_pidfd >= 0, "pidfd_open replacement");
+        let substituted_pidfd = unsafe { libc::syscall(libc::SYS_pidfd_open, libc::getpid(), 0) } as RawFd;
+        assert!(substituted_pidfd >= 0, "pidfd_open substitution");
+        assert!(
+            !process_incarnation_matches(replacement_pid, substituted_pidfd).unwrap(),
+            "numeric target accepted a pidfd for another process incarnation"
+        );
+        unsafe { libc::close(substituted_pidfd) };
+        let prepared = prepare_native_restore(
+            replacement_pid,
+            unsafe { OwnedFd::from_raw_fd(replacement_pidfd) },
+            &image.registers,
+            &image.memory,
+            Instant::now() + Duration::from_secs(10),
+        )
+        .unwrap();
+        complete_native_restore(prepared, Instant::now() + Duration::from_secs(10)).unwrap();
+        let restore_elapsed = restore_started.elapsed();
+        assert_eq!(unsafe { libc::kill(replacement_pid, libc::SIGCONT) }, 0);
+        assert!(
+            replacement.wait().unwrap().success(),
+            "restored process must resume at captured state"
+        );
+        eprintln!(
+            "native fresh-exec capture_us={} restore_us={}",
+            capture_elapsed.as_micros(),
+            restore_elapsed.as_micros()
+        );
     }
 
     #[test]

@@ -119,7 +119,7 @@ impl BoxProjection {
 mod checkpoint;
 #[cfg(target_os = "linux")]
 #[path = "execution_native_snapshot.rs"]
-mod native_snapshot;
+pub(super) mod native_snapshot;
 #[cfg(all(unix, test))]
 pub(crate) use checkpoint::await_capture_completion;
 #[cfg(unix)]
@@ -301,22 +301,23 @@ struct NativeHostCapabilities {
 fn syscall_has_errno(number: libc::c_long, arguments: [libc::c_long; 3], accepted: &[i32]) -> bool {
     // SAFETY: capability probes use invalid scalar arguments and are required to fail without changing state.
     let result = unsafe { libc::syscall(number, arguments[0], arguments[1], arguments[2]) };
-    result >= 0 || std::io::Error::last_os_error().raw_os_error().is_some_and(|error| accepted.contains(&error))
+    result >= 0
+        || std::io::Error::last_os_error()
+            .raw_os_error()
+            .is_some_and(|error| accepted.contains(&error))
 }
 
 #[cfg(all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64")))]
 fn same_isa_executable_header(regular: bool, header: Option<[u8; 20]>) -> bool {
     let Some(header) = header else { return false };
     let machine = if cfg!(target_arch = "aarch64") { 183 } else { 62 };
-    regular
-        && header[..6] == [0x7f, b'E', b'L', b'F', 2, 1]
-        && u16::from_le_bytes([header[18], header[19]]) == machine
+    regular && header[..6] == [0x7f, b'E', b'L', b'F', 2, 1] && u16::from_le_bytes([header[18], header[19]]) == machine
 }
 
 #[cfg(all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64")))]
 fn executable_is_same_isa(path: Option<&[u8]>) -> bool {
-    use std::os::unix::fs::{FileExt, OpenOptionsExt};
     use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::{FileExt, OpenOptionsExt};
     let Some(path) = path else { return false };
     let mut header = [0_u8; 20];
     let file = std::fs::OpenOptions::new()
@@ -353,7 +354,9 @@ fn isolated_hostname_projection_ready(plan: &crate::launcher::plan::RuntimePlan)
     let Some(hostname) = plan.box_policy.hostname.as_deref() else {
         return false;
     };
-    if !hostname_valid(hostname) { return false; }
+    if !hostname_valid(hostname) {
+        return false;
+    }
     [plan.rootfs.as_deref(), plan.box_policy.lower_layers.as_deref()]
         .into_iter()
         .flatten()
@@ -384,7 +387,10 @@ fn hostname_projection_root_ready(root: &[u8]) -> bool {
 #[cfg(unix)]
 fn hostname_projection_volume_ready(volumes: &[u8]) -> bool {
     volumes.split(|byte| *byte == b',').any(|raw| {
-        let record = raw.strip_prefix(b"ro:").or_else(|| raw.strip_prefix(b"rw:")).unwrap_or(raw);
+        let record = raw
+            .strip_prefix(b"ro:")
+            .or_else(|| raw.strip_prefix(b"rw:"))
+            .unwrap_or(raw);
         let Some(split) = record.iter().position(|byte| *byte == b':') else {
             return false;
         };
@@ -403,18 +409,23 @@ fn hostname_projection_file_ready(path: &[u8]) -> bool {
 #[cfg(unix)]
 fn rootfs_is_directory(path: &[u8]) -> bool {
     use std::os::unix::ffi::OsStrExt;
-    std::fs::symlink_metadata(std::ffi::OsStr::from_bytes(path))
-        .is_ok_and(|metadata| metadata.file_type().is_dir())
+    std::fs::symlink_metadata(std::ffi::OsStr::from_bytes(path)).is_ok_and(|metadata| metadata.file_type().is_dir())
 }
 
 #[cfg(not(unix))]
-fn rootfs_is_directory(_path: &[u8]) -> bool { false }
+fn rootfs_is_directory(_path: &[u8]) -> bool {
+    false
+}
 
 #[cfg(not(unix))]
-fn isolated_hostname_projection_ready(_plan: &crate::launcher::plan::RuntimePlan) -> bool { false }
+fn isolated_hostname_projection_ready(_plan: &crate::launcher::plan::RuntimePlan) -> bool {
+    false
+}
 
 #[cfg(not(all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64"))))]
-fn executable_is_same_isa(_path: Option<&[u8]>) -> bool { false }
+fn executable_is_same_isa(_path: Option<&[u8]>) -> bool {
+    false
+}
 
 fn native_host_capabilities(plan: &crate::launcher::plan::RuntimePlan) -> NativeHostCapabilities {
     #[cfg(all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64")))]
@@ -422,9 +433,7 @@ fn native_host_capabilities(plan: &crate::launcher::plan::RuntimePlan) -> Native
         // GET_NOTIF_SIZES is observational; invalid clone3/pidfd_getfd arguments prove syscall presence.
         let mut sizes = [0_u16; 3];
         // SAFETY: the kernel writes exactly `seccomp_notif_sizes` (three u16 fields) for operation 3.
-        let seccomp_notify = unsafe {
-            libc::syscall(libc::SYS_seccomp, 3, 0, sizes.as_mut_ptr()) == 0
-        };
+        let seccomp_notify = unsafe { libc::syscall(libc::SYS_seccomp, 3, 0, sizes.as_mut_ptr()) == 0 };
         NativeHostCapabilities {
             linux_native_supervised: true,
             host_isa: Some(if cfg!(target_arch = "aarch64") {
@@ -478,13 +487,8 @@ fn native_eligibility_for_request(
         return Err(NativeSupervisedRefusal::Host);
     }
     let host = probe();
-    let eligibility = native_eligibility_with_sentry(
-        isa,
-        plan,
-        checkpoint,
-        host,
-        requested == NativeSupervisedRequest::On,
-    );
+    let eligibility =
+        native_eligibility_with_sentry(isa, plan, checkpoint, host, requested == NativeSupervisedRequest::On);
     if requested == NativeSupervisedRequest::Auto {
         native_auto_eligibility(plan, host, eligibility)
     } else {
@@ -504,19 +508,33 @@ fn volume_spec_supported(spec: Option<&[u8]>) -> bool {
     let Some(spec) = spec else { return true };
     let mut guests: Vec<&[u8]> = Vec::new();
     for raw in spec.split(|byte| *byte == b',') {
-        if raw.is_empty() || guests.len() == 32 { return false; }
-        let record = raw.strip_prefix(b"ro:").or_else(|| raw.strip_prefix(b"rw:")).unwrap_or(raw);
-        let Some(split) = record.iter().position(|byte| *byte == b':') else { return false };
+        if raw.is_empty() || guests.len() == 32 {
+            return false;
+        }
+        let record = raw
+            .strip_prefix(b"ro:")
+            .or_else(|| raw.strip_prefix(b"rw:"))
+            .unwrap_or(raw);
+        let Some(split) = record.iter().position(|byte| *byte == b':') else {
+            return false;
+        };
         let (guest, host) = (&record[..split], &record[split + 1..]);
-        if !valid_guest_path(guest) || guest == b"/proc" || guest.starts_with(b"/proc/") ||
-            !host.starts_with(b"/") || host.contains(&b':') || guest.len() >= 4096 {
+        if !valid_guest_path(guest)
+            || guest == b"/proc"
+            || guest.starts_with(b"/proc/")
+            || !host.starts_with(b"/")
+            || host.contains(&b':')
+            || guest.len() >= 4096
+        {
             return false;
         }
         let overlaps = guests.iter().any(|prior| {
-            (guest.starts_with(prior) && (guest.len() == prior.len() || guest[prior.len()] == b'/')) ||
-            (prior.starts_with(guest) && (prior.len() == guest.len() || prior[guest.len()] == b'/'))
+            (guest.starts_with(prior) && (guest.len() == prior.len() || guest[prior.len()] == b'/'))
+                || (prior.starts_with(guest) && (prior.len() == guest.len() || prior[guest.len()] == b'/'))
         });
-        if overlaps { return false; }
+        if overlaps {
+            return false;
+        }
         guests.push(guest);
     }
     true
@@ -527,10 +545,7 @@ fn translated_backend_control(plan: &crate::launcher::plan::RuntimePlan) -> Opti
         return Some("translation-cache-policy");
     }
     plan.options.iter().find_map(|(name, _)| {
-        (name == "HL_PCACHE"
-            || name == "HL_PCACHE_DIR"
-            || name.starts_with("HL_TRANSLIT"))
-        .then_some(name)
+        (name == "HL_PCACHE" || name == "HL_PCACHE_DIR" || name.starts_with("HL_TRANSLIT")).then_some(name)
     })
 }
 
@@ -552,30 +567,60 @@ fn native_eligibility_with_sentry(
     allow_sentry_only: bool,
 ) -> Result<(), NativeSupervisedRefusal> {
     use NativeSupervisedRefusal as R;
-    if !host.linux_native_supervised || !host.root { return Err(R::Host); }
-    if !host.clone3 || !host.pidfd_getfd || !host.seccomp_notify { return Err(R::Kernel); }
-    if host.host_isa != Some(isa) { return Err(R::GuestIsa); }
-    if !host.executable_same_isa { return Err(R::Executable); }
-    if plan.rootfs.is_none() || plan.executable_host.is_none() || !host.rootfs_directory { return Err(R::Root); }
+    if !host.linux_native_supervised || !host.root {
+        return Err(R::Host);
+    }
+    if !host.clone3 || !host.pidfd_getfd || !host.seccomp_notify {
+        return Err(R::Kernel);
+    }
+    if host.host_isa != Some(isa) {
+        return Err(R::GuestIsa);
+    }
+    if !host.executable_same_isa {
+        return Err(R::Executable);
+    }
+    if plan.rootfs.is_none() || plan.executable_host.is_none() || !host.rootfs_directory {
+        return Err(R::Root);
+    }
     let box_policy = &plan.box_policy;
-    if box_policy.uid < -1 || box_policy.gid < -1 { return Err(R::Identity); }
-    if plan.options.get_bytes("HL_MEM_MAX").is_some() || plan.options.get_bytes("HL_PIDS_MAX").is_some() ||
-        plan.options.get_bytes("HL_CPUS").is_some() {
+    if box_policy.uid < -1 || box_policy.gid < -1 {
+        return Err(R::Identity);
+    }
+    if plan.options.get_bytes("HL_MEM_MAX").is_some()
+        || plan.options.get_bytes("HL_PIDS_MAX").is_some()
+        || plan.options.get_bytes("HL_CPUS").is_some()
+    {
         return Err(R::Cgroup);
     }
-    if box_policy.lower_layers.as_deref().is_some_and(|layers| layers.contains(&b'\n')) {
+    if box_policy
+        .lower_layers
+        .as_deref()
+        .is_some_and(|layers| layers.contains(&b'\n'))
+    {
         return Err(R::Overlay);
     }
-    if box_policy.file_owners.is_some() && box_policy.lower_layers.is_none() { return Err(R::Ownership); }
-    if !volume_spec_supported(box_policy.volumes.as_deref()) { return Err(R::Volumes); }
-    // Keep every configured checkpoint role translated until native late-capture/member lifecycle
-    // fixtures prove the shared trigger across a real product plan. The typed split prevents a future
-    // proof for FreshCoordinator from accidentally admitting Restore or malformed partial services.
-    if checkpoint != NativeCheckpointIntent::None
-        || box_policy.checkpoint_mode != 0
+    if box_policy.file_owners.is_some() && box_policy.lower_layers.is_none() {
+        return Err(R::Ownership);
+    }
+    if !volume_spec_supported(box_policy.volumes.as_deref()) {
+        return Err(R::Volumes);
+    }
+    // NativeX86V1 currently admits one fresh coordinator. Domain members and restore need the native
+    // re-fork path; malformed service combinations must not become native merely because capture works.
+    let native_lifecycle = matches!(
+        checkpoint,
+        NativeCheckpointIntent::FreshCoordinator | NativeCheckpointIntent::Restore
+    );
+    if native_lifecycle && isa != crate::activation::GuestIsa::X86_64 {
+        return Err(R::Checkpoint);
+    }
+    if !matches!(
+        checkpoint,
+        NativeCheckpointIntent::None | NativeCheckpointIntent::FreshCoordinator | NativeCheckpointIntent::Restore
+    ) || box_policy.checkpoint_mode & !3 != 0
         || box_policy.checkpoint_policy != 0
-        || plan.options.get_bytes("HL_CHECKPOINT").is_some()
-        || plan.options.get_bytes("HL_RESTORE").is_some()
+        || (plan.options.get_bytes("HL_CHECKPOINT").is_some() && !native_lifecycle)
+        || (plan.options.get_bytes("HL_RESTORE").is_some() && checkpoint != NativeCheckpointIntent::Restore)
     {
         return Err(R::Checkpoint);
     }
@@ -584,8 +629,12 @@ fn native_eligibility_with_sentry(
     {
         return Err(R::Sandbox);
     }
-    if plan.options.get_bytes("HL_SECCOMP_BASELINE").is_some() { return Err(R::Seccomp); }
-    if translated_backend_control(plan).is_some() { return Err(R::BackendControl); }
+    if plan.options.get_bytes("HL_SECCOMP_BASELINE").is_some() {
+        return Err(R::Seccomp);
+    }
+    if translated_backend_control(plan).is_some() {
+        return Err(R::BackendControl);
+    }
     let isolated = box_policy.flags & BOX_NETWORK_ISOLATED != 0;
     let supported_network = match box_policy.network_mode {
         // Isolated launches always receive a fresh netns. The typed namespace is its process-domain
@@ -594,15 +643,22 @@ fn native_eligibility_with_sentry(
         2 => !isolated && box_policy.network_namespace.is_none(),
         _ => false,
     };
-    if !supported_network || !box_policy.publish.is_empty() || !box_policy.network_interfaces.is_empty() ||
-        box_policy.network_bridge.is_some() || box_policy.ip.is_some() || box_policy.egress_proxy.is_some() {
+    if !supported_network
+        || !box_policy.publish.is_empty()
+        || !box_policy.network_interfaces.is_empty()
+        || box_policy.network_bridge.is_some()
+        || box_policy.ip.is_some()
+        || box_policy.egress_proxy.is_some()
+    {
         return Err(R::Network);
     }
     let allowed = BOX_ROOTFS_READ_ONLY
         | BOX_NETWORK_ISOLATED
         | BOX_TRANSLATION_CACHE_DISABLED
         | if allow_sentry_only { BOX_SENTRY_ONLY } else { 0 };
-    if box_policy.flags & !allowed != 0 { return Err(R::BoxFlags); }
+    if box_policy.flags & !allowed != 0 {
+        return Err(R::BoxFlags);
+    }
     Ok(())
 }
 
@@ -628,7 +684,9 @@ fn native_auto_eligibility(
     if plan.options.get_bytes("HL_C_DIAGNOSTICS").is_some() {
         eligibility = Err(NativeSupervisedRefusal::BackendControl);
     }
-    if plan.box_policy.volumes.is_some() { eligibility = Err(NativeSupervisedRefusal::Volumes); }
+    if plan.box_policy.volumes.is_some() {
+        eligibility = Err(NativeSupervisedRefusal::Volumes);
+    }
     if plan.box_policy.lower_layers.is_some() || plan.box_policy.file_owners.is_some() {
         eligibility = Err(NativeSupervisedRefusal::Overlay);
     }
@@ -673,45 +731,87 @@ mod native_eligibility_tests {
         }
     }
 
-    fn verdict(plan: &crate::launcher::plan::RuntimePlan, host: NativeHostCapabilities) -> Result<(), NativeSupervisedRefusal> {
-        native_eligibility(crate::activation::GuestIsa::X86_64, plan, NativeCheckpointIntent::None, host)
+    fn verdict(
+        plan: &crate::launcher::plan::RuntimePlan,
+        host: NativeHostCapabilities,
+    ) -> Result<(), NativeSupervisedRefusal> {
+        native_eligibility(
+            crate::activation::GuestIsa::X86_64,
+            plan,
+            NativeCheckpointIntent::None,
+            host,
+        )
     }
 
     #[test]
     fn pure_eligibility_names_every_refusal_class() {
         assert_eq!(verdict(&plan(), host()), Ok(()));
 
-        let mut changed = host(); changed.root = false;
+        let mut changed = host();
+        changed.root = false;
         assert_eq!(verdict(&plan(), changed), Err(NativeSupervisedRefusal::Host));
-        let mut changed = host(); changed.clone3 = false;
+        let mut changed = host();
+        changed.clone3 = false;
         assert_eq!(verdict(&plan(), changed), Err(NativeSupervisedRefusal::Kernel));
-        assert_eq!(native_eligibility(crate::activation::GuestIsa::Aarch64, &plan(), NativeCheckpointIntent::None, host()), Err(NativeSupervisedRefusal::GuestIsa));
-        let mut changed = host(); changed.executable_same_isa = false;
+        assert_eq!(
+            native_eligibility(
+                crate::activation::GuestIsa::Aarch64,
+                &plan(),
+                NativeCheckpointIntent::None,
+                host()
+            ),
+            Err(NativeSupervisedRefusal::GuestIsa)
+        );
+        let mut changed = host();
+        changed.executable_same_isa = false;
         assert_eq!(verdict(&plan(), changed), Err(NativeSupervisedRefusal::Executable));
 
-        let mut changed = plan(); changed.rootfs = None;
+        let mut changed = plan();
+        changed.rootfs = None;
         assert_eq!(verdict(&changed, host()), Err(NativeSupervisedRefusal::Root));
-        let mut changed = plan(); changed.box_policy.uid = -2;
+        let mut changed = plan();
+        changed.box_policy.uid = -2;
         assert_eq!(verdict(&changed, host()), Err(NativeSupervisedRefusal::Identity));
-        let mut changed = plan(); changed.options.set("HL_MEM_MAX", "1", true).unwrap();
+        let mut changed = plan();
+        changed.options.set("HL_MEM_MAX", "1", true).unwrap();
         assert_eq!(verdict(&changed, host()), Err(NativeSupervisedRefusal::Cgroup));
-        let mut changed = plan(); changed.box_policy.lower_layers = Some(b"a\nb".to_vec());
+        let mut changed = plan();
+        changed.box_policy.lower_layers = Some(b"a\nb".to_vec());
         assert_eq!(verdict(&changed, host()), Err(NativeSupervisedRefusal::Overlay));
-        let mut changed = plan(); changed.box_policy.file_owners = Some(b"0:0".to_vec());
+        let mut changed = plan();
+        changed.box_policy.file_owners = Some(b"0:0".to_vec());
         assert_eq!(verdict(&changed, host()), Err(NativeSupervisedRefusal::Ownership));
-        let mut changed = plan(); changed.box_policy.volumes = Some(b"rw:/proc/x:/tmp".to_vec());
+        let mut changed = plan();
+        changed.box_policy.volumes = Some(b"rw:/proc/x:/tmp".to_vec());
         assert_eq!(verdict(&changed, host()), Err(NativeSupervisedRefusal::Volumes));
-        let mut changed = plan(); changed.box_policy.publish.push(crate::config::PortPublication { host_ipv4_be: 0, host_port: 1, guest_port: 1 });
+        let mut changed = plan();
+        changed.box_policy.publish.push(crate::config::PortPublication {
+            host_ipv4_be: 0,
+            host_port: 1,
+            guest_port: 1,
+        });
         assert_eq!(verdict(&changed, host()), Err(NativeSupervisedRefusal::Network));
         let changed = plan();
-        assert_eq!(native_eligibility(crate::activation::GuestIsa::X86_64, &changed, NativeCheckpointIntent::Restore, host()), Err(NativeSupervisedRefusal::Checkpoint));
-        let mut changed = plan(); changed.options.set("HL_UNTRUSTED", "1", true).unwrap();
+        assert_eq!(
+            native_eligibility(
+                crate::activation::GuestIsa::X86_64,
+                &changed,
+                NativeCheckpointIntent::Restore,
+                host()
+            ),
+            Ok(())
+        );
+        let mut changed = plan();
+        changed.options.set("HL_UNTRUSTED", "1", true).unwrap();
         assert_eq!(verdict(&changed, host()), Err(NativeSupervisedRefusal::Sandbox));
-        let mut changed = plan(); changed.options.set("HL_SECCOMP_BASELINE", "default", true).unwrap();
+        let mut changed = plan();
+        changed.options.set("HL_SECCOMP_BASELINE", "default", true).unwrap();
         assert_eq!(verdict(&changed, host()), Err(NativeSupervisedRefusal::Seccomp));
-        let mut changed = plan(); changed.options.set("HL_TRANSLIT", "1", true).unwrap();
+        let mut changed = plan();
+        changed.options.set("HL_TRANSLIT", "1", true).unwrap();
         assert_eq!(verdict(&changed, host()), Err(NativeSupervisedRefusal::BackendControl));
-        let mut changed = plan(); changed.box_policy.flags = 1 << 1;
+        let mut changed = plan();
+        changed.box_policy.flags = 1 << 1;
         assert_eq!(verdict(&changed, host()), Err(NativeSupervisedRefusal::BoxFlags));
     }
 
@@ -724,11 +824,16 @@ mod native_eligibility_tests {
         options.set("HL_NATIVE_SUPERVISED", "1", true).unwrap();
         assert_eq!(native_request(&options), NativeSupervisedRequest::On);
         assert_eq!(native_selection(NativeSupervisedRequest::Auto, Ok(())), Ok(true));
-        assert_eq!(native_selection(NativeSupervisedRequest::Auto, Err(NativeSupervisedRefusal::Network)), Ok(false));
+        assert_eq!(
+            native_selection(NativeSupervisedRequest::Auto, Err(NativeSupervisedRefusal::Network)),
+            Ok(false)
+        );
         assert_eq!(native_selection(NativeSupervisedRequest::Off, Ok(())), Ok(false));
         assert_eq!(
             native_selection(NativeSupervisedRequest::On, Err(NativeSupervisedRefusal::Network)),
-            Err(CompositionError::NativeSupervisedRefused(NativeSupervisedRefusal::Network))
+            Err(CompositionError::NativeSupervisedRefused(
+                NativeSupervisedRefusal::Network
+            ))
         );
 
         let probes = std::cell::Cell::new(0);
@@ -737,7 +842,10 @@ mod native_eligibility_tests {
             crate::activation::GuestIsa::X86_64,
             &plan(),
             NativeCheckpointIntent::None,
-            || { probes.set(probes.get() + 1); host() },
+            || {
+                probes.set(probes.get() + 1);
+                host()
+            },
         );
         assert_eq!(probes.get(), 0, "explicit OFF performed host/path preflight");
         assert_eq!(native_selection(NativeSupervisedRequest::Off, eligibility), Ok(false));
@@ -796,7 +904,10 @@ mod native_eligibility_tests {
         ] {
             assert!(!volume_spec_supported(Some(invalid)), "accepted {invalid:?}");
         }
-        let too_many = (0..33).map(|index| format!("rw:/v{index}:/tmp/v{index}")).collect::<Vec<_>>().join(",");
+        let too_many = (0..33)
+            .map(|index| format!("rw:/v{index}:/tmp/v{index}"))
+            .collect::<Vec<_>>()
+            .join(",");
         assert!(!volume_spec_supported(Some(too_many.as_bytes())));
     }
 
@@ -812,7 +923,11 @@ mod native_eligibility_tests {
         ] {
             let mut changed = plan();
             changed.options.set(name, value, true).unwrap();
-            assert_eq!(verdict(&changed, host()), Err(NativeSupervisedRefusal::BackendControl), "{name}");
+            assert_eq!(
+                verdict(&changed, host()),
+                Err(NativeSupervisedRefusal::BackendControl),
+                "{name}"
+            );
             assert_eq!(
                 native_selection(NativeSupervisedRequest::Auto, verdict(&changed, host())),
                 Ok(false),
@@ -820,10 +935,15 @@ mod native_eligibility_tests {
             );
             assert_eq!(
                 native_selection(NativeSupervisedRequest::On, verdict(&changed, host())),
-                Err(CompositionError::NativeSupervisedRefused(NativeSupervisedRefusal::BackendControl)),
+                Err(CompositionError::NativeSupervisedRefused(
+                    NativeSupervisedRefusal::BackendControl
+                )),
                 "explicit ON ignored {name}",
             );
-            assert_eq!(native_selection(NativeSupervisedRequest::Off, verdict(&changed, host())), Ok(false));
+            assert_eq!(
+                native_selection(NativeSupervisedRequest::Off, verdict(&changed, host())),
+                Ok(false)
+            );
         }
         let mut changed = plan();
         changed.box_policy.translation_cache = Some(b"/tmp/cache".to_vec());
@@ -840,7 +960,10 @@ mod native_eligibility_tests {
         );
 
         let mut options = crate::options::Options::default();
-        assert_eq!(options.set("HL_NATIVE_EXECUTION", "0", true), Err(crate::options::OptionError::UnknownName));
+        assert_eq!(
+            options.set("HL_NATIVE_EXECUTION", "0", true),
+            Err(crate::options::OptionError::UnknownName)
+        );
     }
 
     #[test]
@@ -849,14 +972,21 @@ mod native_eligibility_tests {
         isolated.box_policy.network_mode = 0;
         isolated.box_policy.flags = BOX_NETWORK_ISOLATED;
         isolated.box_policy.hostname = Some(b"builder".to_vec());
-        assert_eq!(native_auto_eligibility(&isolated, host(), verdict(&isolated, host())), Ok(()));
+        assert_eq!(
+            native_auto_eligibility(&isolated, host(), verdict(&isolated, host())),
+            Ok(())
+        );
         let mut unavailable = host();
         unavailable.isolated_hostname_projection = false;
         assert_eq!(
             native_auto_eligibility(&isolated, unavailable, verdict(&isolated, unavailable)),
             Err(NativeSupervisedRefusal::Network),
         );
-        for invalid in [b"line\nbreak".as_slice(), b"under_score".as_slice(), b"-edge".as_slice()] {
+        for invalid in [
+            b"line\nbreak".as_slice(),
+            b"under_score".as_slice(),
+            b"-edge".as_slice(),
+        ] {
             assert!(!hostname_valid(invalid));
         }
         assert!(hostname_valid(b"build-agent.example"));
@@ -878,9 +1008,8 @@ mod native_eligibility_tests {
         actual.rootfs = Some(root.path().as_os_str().as_encoded_bytes().to_vec());
         actual.box_policy.lower_layers = None;
         actual.rootfs = Some(upper.path().as_os_str().as_encoded_bytes().to_vec());
-        actual.box_policy.volumes = Some(
-            format!("rw:/etc/hosts:{}", root.path().join("etc/hosts").display()).into_bytes(),
-        );
+        actual.box_policy.volumes =
+            Some(format!("rw:/etc/hosts:{}", root.path().join("etc/hosts").display()).into_bytes());
         assert!(
             isolated_hostname_projection_ready(&actual),
             "the engine-owned identity mount carrying /etc/hosts was ignored"
@@ -888,10 +1017,16 @@ mod native_eligibility_tests {
         actual.rootfs = Some(root.path().as_os_str().as_encoded_bytes().to_vec());
         actual.box_policy.volumes = None;
         actual.box_policy.hostname = Some(b"line\nbreak".to_vec());
-        assert!(!isolated_hostname_projection_ready(&actual), "invalid hostname admitted");
+        assert!(
+            !isolated_hostname_projection_ready(&actual),
+            "invalid hostname admitted"
+        );
         actual.box_policy.hostname = Some(b"builder".to_vec());
         actual.box_policy.hostname = None;
-        assert!(!isolated_hostname_projection_ready(&actual), "missing hostname admitted");
+        assert!(
+            !isolated_hostname_projection_ready(&actual),
+            "missing hostname admitted"
+        );
         actual.box_policy.hostname = Some(b"builder".to_vec());
         std::fs::remove_file(root.path().join("etc/hosts")).unwrap();
         std::fs::create_dir(root.path().join("etc/hosts")).unwrap();
@@ -913,7 +1048,10 @@ mod native_eligibility_tests {
         std::fs::write(outside.path().join("hosts"), b"127.0.0.1 outside\n").unwrap();
         #[cfg(unix)]
         std::os::unix::fs::symlink(outside.path(), root.path().join("etc")).unwrap();
-        assert!(!isolated_hostname_projection_ready(&actual), "intermediate etc symlink escaped root");
+        assert!(
+            !isolated_hostname_projection_ready(&actual),
+            "intermediate etc symlink escaped root"
+        );
 
         let mut wrong_mode = isolated;
         wrong_mode.box_policy.network_mode = 1;
@@ -942,14 +1080,20 @@ mod native_eligibility_tests {
         let mut valid = [0_u8; 20];
         valid[..6].copy_from_slice(&[0x7f, b'E', b'L', b'F', 2, 1]);
         valid[18..20].copy_from_slice(&(if cfg!(target_arch = "aarch64") { 183_u16 } else { 62 }).to_le_bytes());
-        assert!(!same_isa_executable_header(false, Some(valid)), "valid bytes over nonregular authority admitted");
+        assert!(
+            !same_isa_executable_header(false, Some(valid)),
+            "valid bytes over nonregular authority admitted"
+        );
         assert!(same_isa_executable_header(true, Some(valid)));
 
         let real_root = tempfile::tempdir().unwrap();
         let root_link = directory.path().join("root-link");
         symlink(real_root.path(), &root_link).unwrap();
         assert!(rootfs_is_directory(real_root.path().as_os_str().as_encoded_bytes()));
-        assert!(!rootfs_is_directory(root_link.as_os_str().as_encoded_bytes()), "symlinked rootfs admitted");
+        assert!(
+            !rootfs_is_directory(root_link.as_os_str().as_encoded_bytes()),
+            "symlinked rootfs admitted"
+        );
     }
 
     #[test]
@@ -961,35 +1105,73 @@ mod native_eligibility_tests {
         assert_eq!(native_selection(NativeSupervisedRequest::Auto, refusal), Ok(false));
         assert_eq!(
             native_selection(NativeSupervisedRequest::On, refusal),
-            Err(CompositionError::NativeSupervisedRefused(NativeSupervisedRefusal::Kernel)),
+            Err(CompositionError::NativeSupervisedRefused(
+                NativeSupervisedRefusal::Kernel
+            )),
         );
         assert_eq!(native_selection(NativeSupervisedRequest::Off, refusal), Ok(false));
     }
 
     #[test]
-    fn checkpoint_intent_is_typed_but_only_none_is_admitted_without_lifecycle_proof() {
-        assert_eq!(native_eligibility(crate::activation::GuestIsa::X86_64, &plan(), NativeCheckpointIntent::None, host()), Ok(()));
+    fn checkpoint_intent_admits_only_the_proven_x86_coordinator_lifecycle() {
+        assert_eq!(
+            native_eligibility(
+                crate::activation::GuestIsa::X86_64,
+                &plan(),
+                NativeCheckpointIntent::None,
+                host()
+            ),
+            Ok(())
+        );
         for intent in [
             NativeCheckpointIntent::FreshCoordinator,
-            NativeCheckpointIntent::DomainMember,
             NativeCheckpointIntent::Restore,
-            NativeCheckpointIntent::Partial,
         ] {
+            assert_eq!(
+                native_eligibility(crate::activation::GuestIsa::X86_64, &plan(), intent, host()),
+                Ok(())
+            );
+        }
+        for intent in [NativeCheckpointIntent::DomainMember, NativeCheckpointIntent::Partial] {
             let refusal = native_eligibility(crate::activation::GuestIsa::X86_64, &plan(), intent, host());
             assert_eq!(refusal, Err(NativeSupervisedRefusal::Checkpoint), "{intent:?}");
             assert_eq!(native_selection(NativeSupervisedRequest::Auto, refusal), Ok(false));
             assert!(matches!(
                 native_selection(NativeSupervisedRequest::On, refusal),
-                Err(CompositionError::NativeSupervisedRefused(NativeSupervisedRefusal::Checkpoint)),
+                Err(CompositionError::NativeSupervisedRefused(
+                    NativeSupervisedRefusal::Checkpoint
+                )),
             ));
         }
-        assert_eq!(native_checkpoint_intent(false, false, false, false), NativeCheckpointIntent::None);
-        assert_eq!(native_checkpoint_intent(true, true, false, false), NativeCheckpointIntent::FreshCoordinator);
-        assert_eq!(native_checkpoint_intent(false, false, true, false), NativeCheckpointIntent::DomainMember);
-        assert_eq!(native_checkpoint_intent(true, true, false, true), NativeCheckpointIntent::Restore);
-        assert_eq!(native_checkpoint_intent(true, false, false, false), NativeCheckpointIntent::Partial);
-        assert_eq!(native_checkpoint_intent(true, true, true, false), NativeCheckpointIntent::Partial);
-        for configure in ["mode", "policy", "option"] {
+        assert_eq!(
+            native_checkpoint_intent(false, false, false, false),
+            NativeCheckpointIntent::None
+        );
+        assert_eq!(
+            native_checkpoint_intent(true, true, false, false),
+            NativeCheckpointIntent::FreshCoordinator
+        );
+        assert_eq!(
+            native_checkpoint_intent(false, false, true, false),
+            NativeCheckpointIntent::DomainMember
+        );
+        assert_eq!(
+            native_checkpoint_intent(true, true, false, true),
+            NativeCheckpointIntent::Restore
+        );
+        assert_eq!(
+            native_checkpoint_intent(true, false, false, false),
+            NativeCheckpointIntent::Partial
+        );
+        assert_eq!(
+            native_checkpoint_intent(true, true, true, false),
+            NativeCheckpointIntent::Partial
+        );
+        for (configure, expected) in [
+            ("mode", Ok(())),
+            ("policy", Err(NativeSupervisedRefusal::Checkpoint)),
+            ("option", Err(NativeSupervisedRefusal::Checkpoint)),
+        ] {
             let mut configured = plan();
             match configure {
                 "mode" => configured.box_policy.checkpoint_mode = 1,
@@ -998,9 +1180,14 @@ mod native_eligibility_tests {
                 _ => unreachable!(),
             }
             assert_eq!(
-                native_eligibility(crate::activation::GuestIsa::X86_64, &configured, NativeCheckpointIntent::None, host()),
-                Err(NativeSupervisedRefusal::Checkpoint),
-                "unpaired {configure} checkpoint configuration admitted",
+                native_eligibility(
+                    crate::activation::GuestIsa::X86_64,
+                    &configured,
+                    NativeCheckpointIntent::None,
+                    host()
+                ),
+                expected,
+                "{configure} checkpoint configuration had the wrong admission result",
             );
         }
     }
@@ -1024,12 +1211,7 @@ mod native_eligibility_tests {
             NativeCheckpointIntent::Restore,
             NativeCheckpointIntent::Partial,
         ] {
-            let arm = native_eligibility(
-                crate::activation::GuestIsa::Aarch64,
-                &plan(),
-                intent,
-                arm_host,
-            );
+            let arm = native_eligibility(crate::activation::GuestIsa::Aarch64, &plan(), intent, arm_host);
             assert_eq!(arm, Err(NativeSupervisedRefusal::Checkpoint), "{intent:?}");
             assert_eq!(native_selection(NativeSupervisedRequest::Auto, arm), Ok(false));
             assert_eq!(
@@ -1070,20 +1252,21 @@ impl RuntimeFactory for ProductionFactory {
             request.services.checkpoint_sink.is_some(),
             request.services.checkpoint_source.is_some(),
             {
-                #[cfg(unix)] { request.services.checkpoint_channel.is_some() }
-                #[cfg(not(unix))] { false }
+                #[cfg(unix)]
+                {
+                    request.services.checkpoint_channel.is_some()
+                }
+                #[cfg(not(unix))]
+                {
+                    false
+                }
             },
-            request.plan.options.get_bytes("HL_RESTORE").is_some()
-                || request.plan.box_policy.checkpoint_mode & 2 != 0,
+            request.plan.options.get_bytes("HL_RESTORE").is_some() || request.plan.box_policy.checkpoint_mode & 2 != 0,
         );
         // OFF is a strict translated path: do not even inspect host paths or probe kernel support.
-        let eligibility = native_eligibility_for_request(
-            requested,
-            request.isa,
-            request.plan,
-            checkpoint,
-            || native_host_capabilities(request.plan),
-        );
+        let eligibility = native_eligibility_for_request(requested, request.isa, request.plan, checkpoint, || {
+            native_host_capabilities(request.plan)
+        });
         // A native volume source is authenticated with openat2/open_tree immediately before namespace
         // projection. AUTO cannot prove that future transaction without opening authority-bearing FDs,
         // so it conservatively stays translated; explicit ON retains the existing secure late validation.
@@ -1096,7 +1279,11 @@ impl RuntimeFactory for ProductionFactory {
             .map(|terminal| {
                 NativeTerminalBridge::attach(
                     terminal,
-                    if native_supervised { InputDiscipline::Host } else { InputDiscipline::Linux },
+                    if native_supervised {
+                        InputDiscipline::Host
+                    } else {
+                        InputDiscipline::Linux
+                    },
                 )
             })
             .transpose()?;
@@ -1323,7 +1510,10 @@ impl GuestMachine for ProductionMachine {
             // other place that reports, and it never runs when admission refuses.
             Some(
                 checkpoint
-                    .begin_recovery(std::time::Instant::now() + crate::composition::DEFAULT_CHECKPOINT_TIMEOUT)
+                    .begin_recovery(
+                        std::time::Instant::now() + crate::composition::DEFAULT_CHECKPOINT_TIMEOUT,
+                        self.native_supervised(),
+                    )
                     .inspect_err(|error| eprintln!("[restore] refuse: recovery admission rejected: {error:?}"))?,
             )
         } else {

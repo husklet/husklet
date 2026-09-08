@@ -23,6 +23,8 @@ pub(super) struct Connection<'a> {
     pub(super) peer: Option<hl_native::AuthenticatedCheckpointPeer>,
     /// The capture generation this connection proved membership of, if any.
     pub(super) registered: Option<u64>,
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    pub(super) prepared_native: Option<crate::runtime::execution::native_snapshot::PreparedNativeRestore>,
     pub(super) _accepted: AcceptedChannel,
 }
 

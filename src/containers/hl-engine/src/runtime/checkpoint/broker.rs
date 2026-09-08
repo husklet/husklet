@@ -1,8 +1,9 @@
 use super::{
     CLAIM, COMMIT, CaptureFailure, CapturePhase, DECIDES_REFUSAL, GROUP_BEGIN, GROUP_COMMIT, MARK_IRREVERSIBLE,
-    MEMBER_EXITED, MEMBER_RESTORED, MEMBER_STDIO, OBJECT_BEGIN, OBJECT_FINISH, OBJECT_TELL, OBJECT_WRITE,
-    OBJECT_WRITE_AT, REFUSAL_LATCHED, REGISTER_READY, RELEASE_EXIT, RELEASE_HOLD, RELEASE_RESUME, RELEASE_WAIT,
-    REQUEST_BYTES, Reply, Request, SEAL_MEMBERSHIP, SETTLE_REFUSAL, Server,
+    MEMBER_EXITED, MEMBER_RESTORED, MEMBER_STDIO, NATIVE_RESTORE_COMPLETE, NATIVE_RESTORE_PREPARE, NATIVE_SNAPSHOT,
+    OBJECT_BEGIN, OBJECT_FINISH, OBJECT_TELL, OBJECT_WRITE, OBJECT_WRITE_AT, REFUSAL_LATCHED, REGISTER_READY,
+    RELEASE_EXIT, RELEASE_HOLD, RELEASE_RESUME, RELEASE_WAIT, REQUEST_BYTES, Reply, Request, SEAL_MEMBERSHIP,
+    SETTLE_REFUSAL, Server,
     participants::{ExecutorId, ProcessIdentity},
 };
 use std::{
@@ -113,6 +114,8 @@ impl Server {
             id,
             peer,
             registered: None,
+            #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+            prepared_native: None,
             _accepted: accepted,
         };
         let Ok(mut channels) = self.channels.lock() else {
@@ -288,6 +291,30 @@ impl Server {
                 }
                 continue;
             }
+            if request.op == NATIVE_SNAPSHOT {
+                let captured = self.capture_registered_native(&connection, &request, &encoded_name, &payload);
+                let reply = if captured.is_ok() { Reply::ok() } else { Reply::error() };
+                let _ = reply.write(&mut channel);
+                if captured.is_err() {
+                    return;
+                }
+                continue;
+            }
+            if request.op == NATIVE_RESTORE_PREPARE {
+                let prepared = self.prepare_registered_native(&mut connection, &request, &encoded_name, &payload);
+                let reply = if prepared.is_ok() { Reply::ok() } else { Reply::error() };
+                let _ = reply.write(&mut channel);
+                if prepared.is_err() {
+                    return;
+                }
+                continue;
+            }
+            if request.op == NATIVE_RESTORE_COMPLETE {
+                let restored = self.complete_registered_native(&mut connection, &request, &encoded_name, &payload);
+                let reply = if restored.is_ok() { Reply::ok() } else { Reply::error() };
+                let _ = reply.write(&mut channel);
+                return;
+            }
             if let Some(active) = self.membership_scope()
                 && publishes_capture_bytes(request.op)
                 && connection.registered != Some(active)
@@ -308,6 +335,140 @@ impl Server {
             }
         }
     }
+
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    fn capture_registered_native(
+        &self,
+        connection: &Connection<'_>,
+        request: &Request,
+        encoded_name: &[u8],
+        payload: &[u8],
+    ) -> Result<(), ()> {
+        let generation = u64::from(request.generation);
+        if !encoded_name.is_empty()
+            || payload.len() != 8
+            || connection.registered != Some(generation)
+            || self.membership_scope() != Some(generation)
+        {
+            return Err(());
+        }
+        let peer = connection.peer.as_ref().ok_or(())?;
+        let raw = u64::from_ne_bytes(payload.try_into().map_err(|_| ())?);
+        let pid = libc::pid_t::try_from(raw).map_err(|_| ())?;
+        if pid <= 1 || !native_descends_from(pid, peer.host_pid) {
+            return Err(());
+        }
+        self.commit_stopped_native(pid, generation).map_err(|failure| {
+            self.fail_as(
+                format!("native checkpoint capture failed for stopped process {pid}: {failure:?}"),
+                failure,
+            );
+        })
+    }
+
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    fn prepare_registered_native(
+        &self,
+        connection: &mut Connection<'_>,
+        request: &Request,
+        encoded_name: &[u8],
+        payload: &[u8],
+    ) -> Result<(), ()> {
+        let generation = u64::from(request.generation);
+        if !encoded_name.is_empty() || payload.len() != 8 {
+            return Err(());
+        }
+        let peer = connection.peer.as_ref().ok_or(())?;
+        let raw = u64::from_ne_bytes(payload.try_into().map_err(|_| ())?);
+        let pid = libc::pid_t::try_from(raw).map_err(|_| ())?;
+        let pidfd = crate::runtime::execution::native_snapshot::pin_native_process(pid).map_err(|_| ())?;
+        if pid <= 1 || !native_descends_from(pid, peer.host_pid) {
+            return Err(());
+        }
+        let prepared = self.prepare_native_restore(pid, pidfd, generation).map_err(|failure| {
+            self.fail_as(
+                format!("native checkpoint restore failed for stopped process {pid}: {failure:?}"),
+                failure,
+            );
+        })?;
+        connection.prepared_native = Some(prepared);
+        Ok(())
+    }
+
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    fn complete_registered_native(
+        &self,
+        connection: &mut Connection<'_>,
+        request: &Request,
+        encoded_name: &[u8],
+        payload: &[u8],
+    ) -> Result<(), ()> {
+        if !encoded_name.is_empty() || !payload.is_empty() {
+            return Err(());
+        }
+        let prepared = connection.prepared_native.take().ok_or(())?;
+        self.complete_prepared_native_restore(prepared, u64::from(request.generation))
+            .map_err(|failure| {
+                self.fail_as("native checkpoint restore completion failed".into(), failure);
+            })
+    }
+
+    #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+    fn capture_registered_native(
+        &self,
+        _connection: &Connection<'_>,
+        _request: &Request,
+        _encoded_name: &[u8],
+        _payload: &[u8],
+    ) -> Result<(), ()> {
+        Err(())
+    }
+
+    #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+    fn prepare_registered_native(
+        &self,
+        _connection: &mut Connection<'_>,
+        _request: &Request,
+        _encoded_name: &[u8],
+        _payload: &[u8],
+    ) -> Result<(), ()> {
+        Err(())
+    }
+
+    #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+    fn complete_registered_native(
+        &self,
+        _connection: &mut Connection<'_>,
+        _request: &Request,
+        _encoded_name: &[u8],
+        _payload: &[u8],
+    ) -> Result<(), ()> {
+        Err(())
+    }
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+fn native_descends_from(mut pid: libc::pid_t, ancestor: u64) -> bool {
+    for _ in 0..4096 {
+        if u64::try_from(pid).ok() == Some(ancestor) {
+            return true;
+        }
+        let Ok(status) = std::fs::read_to_string(format!("/proc/{pid}/status")) else {
+            return false;
+        };
+        let Some(parent) = status
+            .lines()
+            .find_map(|line| line.strip_prefix("PPid:\t"))
+            .and_then(|value| value.trim().parse::<libc::pid_t>().ok())
+        else {
+            return false;
+        };
+        if parent <= 0 || parent == pid {
+            return false;
+        }
+        pid = parent;
+    }
+    false
 }
 
 /// Operations that publish or complete capture state. A process that has not
