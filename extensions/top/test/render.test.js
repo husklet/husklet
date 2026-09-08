@@ -1052,6 +1052,45 @@ test('installed extensions expose truthful enabled, disabled, fault and retry st
   assert.ok(labelled(stage, 'assistant recovered and verified.'));
 });
 
+test('installed extensions distinguish durable exact-file and subtree authority', async () => {
+  const stage = host();
+  stage.render(
+    h(Extensions, {
+      api: {
+        extensions: {
+          list: async () => [
+            {
+              name: 'indexer',
+              image_digest: `sha256:${'a'.repeat(64)}`,
+              version: '1.0.0',
+              enabled: true,
+              status: 'duty',
+              filesystem: {
+                read: [{ subtree: 'documents' }],
+                write: [{ exact: 'settings/index.json' }],
+                create: [],
+                delete: [],
+                rename: [],
+              },
+            },
+          ],
+        },
+        watchExtensions: async () => () => {},
+      },
+    }),
+  );
+  await settled();
+
+  assert.ok(labelled(stage, 'Workspace file access · 2 grants'));
+  assert.ok(labelled(stage, 'View contents folder · documents/ and everything inside'));
+  assert.ok(labelled(stage, 'Modify existing contents file · settings/index.json'));
+  assert.equal(
+    labelled(stage, 'Modify existing contents folder · settings/ and everything inside'),
+    undefined,
+    'an exact persisted grant is never presented as subtree authority',
+  );
+});
+
 test('installed extensions translate the host duty stage into a developer-facing state', async () => {
   const stage = host();
   stage.render(

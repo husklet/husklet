@@ -1711,6 +1711,14 @@
               "name": "PaneProvider"
             }
           }
+        },
+        {
+          "name": "filesystem",
+          "optional": true,
+          "schema": {
+            "kind": "ref",
+            "name": "FilesystemGrant"
+          }
         }
       ],
       "kind": "struct",
@@ -11877,7 +11885,7 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:01f683100047b129",
+  "source_fingerprint": "fnv1a64:1858ed5fb4b2d9bc",
   "specification_version": 1,
   "topics": [
     {

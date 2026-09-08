@@ -1550,6 +1550,7 @@ mod tests {
                 version: "1.0.0".into(),
                 enabled: true,
                 pane_providers: Vec::new(),
+                filesystem: hl_extension::FilesystemGrant::default(),
             }])
         }
 
@@ -1771,6 +1772,7 @@ mod tests {
             version: "1.0.0".into(),
             enabled: true,
             pane_providers: Vec::new(),
+            filesystem: hl_extension::FilesystemGrant::default(),
         }]);
         conversation.with_extension_events(events);
 

@@ -48,6 +48,8 @@ export interface ExtensionSummary {
   version?: string;
   enabled?: boolean;
   pane_providers?: ExtensionPaneProvider[];
+  /** Durable, manifest-intersected workspace file authority. */
+  filesystem?: FilesystemGrant;
 }
 export interface ExtensionProviderDeclaration {
   extension: string;

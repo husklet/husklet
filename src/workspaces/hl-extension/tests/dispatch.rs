@@ -817,6 +817,7 @@ impl ExtensionStore for Host {
             version: "1.0.0".into(),
             enabled: true,
             pane_providers: Vec::new(),
+            filesystem: hl_extension::FilesystemGrant::default(),
         }])
     }
     fn inspect(&self, name: &str) -> Result<ExtensionSummary, HostError> {
@@ -828,6 +829,7 @@ impl ExtensionStore for Host {
             version: "1.0.0".into(),
             enabled: true,
             pane_providers: Vec::new(),
+            filesystem: hl_extension::FilesystemGrant::default(),
         })
     }
     fn enable(&self, _name: &str, _image_digest: &str) -> Result<(), HostError> {

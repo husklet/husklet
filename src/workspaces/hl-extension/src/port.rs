@@ -685,6 +685,9 @@ pub struct ExtensionSummary {
     pub enabled: bool,
     #[serde(default)]
     pub pane_providers: Vec<crate::PaneProvider>,
+    /// Durable, manifest-intersected workspace file authority.
+    #[serde(default)]
+    pub filesystem: crate::FilesystemGrant,
 }
 
 pub const EXTENSION_REFERENCE_BYTES: usize = 512;

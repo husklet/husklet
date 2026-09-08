@@ -1,5 +1,5 @@
 // Generated from Rust hl-extension protocol/v1.json. Do not edit.
-// Protocol artifact fnv1a64:cfa50bfab2f31f2c
+// Protocol artifact fnv1a64:0e00b552a7654341
 export const PROTOCOL_SPECIFICATION_VERSION = 1;
 export const PROTOCOL_VERSION = 1;
 export const PROTOCOL_BOUNDS = Object.freeze({
@@ -2009,6 +2009,14 @@ const definitions = {
             "kind": "ref",
             "name": "PaneProvider"
           }
+        }
+      },
+      {
+        "name": "filesystem",
+        "optional": true,
+        "schema": {
+          "kind": "ref",
+          "name": "FilesystemGrant"
         }
       }
     ],

@@ -124,6 +124,28 @@ function FilesystemConsent({
   );
 }
 
+function InstalledFilesystemAccess({ grant }: { grant?: FilesystemGrant }) {
+  if (!grant || filesystemGrantCount(grant) === 0) return null;
+  return (
+    <Column gap={1}>
+      <Text
+        label={`Workspace file access · ${filesystemGrantCount(grant)} grants`}
+        color="text-dim"
+      />
+      {FILESYSTEM_VERBS.flatMap(({ key, label }) =>
+        filesystemRoots(grant, key).map((selector) => (
+          <Text
+            key={`${key}:${filesystemSelectorKey(selector)}`}
+            label={filesystemConsentLabel(selector, label)}
+            color="text-dim"
+            wrap
+          />
+        )),
+      )}
+    </Column>
+  );
+}
+
 export function Extensions({ api }: { api: WorkspaceApi }) {
   const [installed, setInstalled] = React.useState<ExtensionSummary[]>([]);
   const [catalogue, setCatalogue] = React.useState<ExtensionCatalogue | null>(null);
@@ -790,6 +812,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                         />
                       </Row>
                       <ExtensionFault extension={extension} />
+                      <InstalledFilesystemAccess grant={extension.filesystem} />
                       <LifecycleFeedback
                         extensionName={extension.name}
                         pending={pendingLifecycle}
