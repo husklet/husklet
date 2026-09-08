@@ -643,9 +643,14 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
         />
         <Row gap={3} align="start" wrap>
           <Column gap={2} width={CONTENT_WIDTH}>
-            {!acquisition && <Heading label="Discover" scale="caption" />}
+            {!acquisition && <Heading label="Browse extensions" scale="caption" />}
             {!acquisition && (
               <Column gap={2}>
+                <Text
+                  label="Add trusted tools to this workspace. You will review access before anything is installed."
+                  color="text-dim"
+                  wrap
+                />
                 {catalogueState === 'loading' && (
                   <Row gap={1} align="center">
                     <Spinner />
@@ -668,7 +673,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                       width={CONTENT_WIDTH}
                       variant="filled"
                     >
-                      <CardHeader label={entry.title} detail={`${entry.publisher} · ${entry.id}`} />
+                      <CardHeader label={entry.title} detail={`By ${entry.publisher}`} />
                       <CardContent gap={1}>
                         <Text label={entry.description} color="text-dim" wrap />
                         <Text
@@ -689,7 +694,9 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                         />
                         <Row>
                           <Button
-                            label={`Review ${entry.title}`}
+                            label={`View ${entry.title}`}
+                            variant="filled"
+                            tone="accent"
                             enabled={!busy && compatibility.compatible !== false}
                             onInvoke={() => inspect(entry.reference)}
                           />
@@ -703,433 +710,444 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                 )}
                 {catalogueState === 'error' && (
                   <Column gap={1}>
-                    <InlineMessage
-                      label={`Catalogue unavailable: ${catalogueError}`}
-                      tone="warning"
+                    <RecoveryState
+                      operation="Extension catalogue"
+                      error={catalogueError}
+                      retryLabel="Retry catalogue"
+                      onRetry={loadCatalogue}
                     />
-                    <Row>
-                      <Button label="Retry catalogue" onInvoke={loadCatalogue} />
-                    </Row>
                   </Column>
                 )}
               </Column>
             )}
-            <Card grow={false} justify="start" width={CONTENT_WIDTH} variant="outline">
-              <CardHeader
-                label={
-                  acquisition?.candidate
-                    ? `Review ${acquisition.candidate.name}`
-                    : 'Install from image'
-                }
-                detail={
-                  acquisition?.candidate
-                    ? acquisition.candidate.installed_image_digest
+            {!acquisition ? (
+              <Expander label="Install from an OCI image" expanded={false}>
+                <Card grow={false} justify="start" width={CONTENT_WIDTH} variant="outline">
+                  <CardContent>
+                    <Row gap={1}>
+                      <Entry
+                        value={reference}
+                        placeholder="registry.example/extension:version"
+                        tooltip={
+                          reference || 'Paste a full OCI image reference; press Enter to inspect'
+                        }
+                        width={{ chars: 40 }}
+                        onChange={(event: Change) =>
+                          setReference(String(event.value ?? '').slice(0, 512))
+                        }
+                        onSubmit={() => inspect()}
+                      />
+                      <Button
+                        label={busy === 'inspect' ? 'Inspecting…' : 'Inspect'}
+                        variant="filled"
+                        tone="accent"
+                        enabled={Boolean(reference.trim()) && !busy}
+                        onInvoke={() => inspect()}
+                      />
+                    </Row>
+                    <Text
+                      label="Paste a full image reference · Enter to inspect. The acquired manifest is authoritative for compatibility and permissions."
+                      color="text-dim"
+                      wrap
+                    />
+                  </CardContent>
+                </Card>
+              </Expander>
+            ) : (
+              <Card grow={false} justify="start" width={CONTENT_WIDTH} variant="outline">
+                <CardHeader
+                  label={`Review ${acquisition.candidate?.name ?? 'extension'}`}
+                  detail={
+                    acquisition.candidate?.installed_image_digest
                       ? 'Update extension'
                       : 'Install extension'
-                    : 'OCI image reference'
-                }
-              />
-              {!acquisition && (
-                <CardContent>
-                  <Row gap={1}>
-                    <Entry
-                      value={reference}
-                      placeholder="registry.example/extension:version"
-                      tooltip={
-                        reference || 'Paste a full OCI image reference; press Enter to inspect'
-                      }
-                      width={{ chars: 40 }}
-                      onChange={(event: Change) =>
-                        setReference(String(event.value ?? '').slice(0, 512))
-                      }
-                      onSubmit={() => inspect()}
+                  }
+                />
+                {acquisition?.candidate && (
+                  <CardContent gap={1}>
+                    <Text
+                      label={`${acquisition.candidate.name} · ${acquisition.candidate.version}`}
                     />
-                    <Button
-                      label={busy === 'inspect' ? 'Inspecting…' : 'Inspect'}
-                      enabled={Boolean(reference.trim()) && !busy}
-                      onInvoke={() => inspect()}
+                    <Text label={`Source ${acquisition.reference}`} color="text-dim" wrap />
+                    <Text
+                      label={`Reviewed image ${compactDigest(acquisition.candidate.image_digest)}`}
+                      tooltip={acquisition.candidate.image_digest}
+                      wrap
                     />
-                  </Row>
-                  <Text
-                    label="Paste a full image reference · Enter to inspect. The acquired manifest is authoritative for compatibility and permissions."
-                    color="text-dim"
-                    wrap
-                  />
-                </CardContent>
-              )}
-              {acquisition?.candidate && (
-                <CardContent gap={1}>
-                  <Text
-                    label={`${acquisition.candidate.name} · ${acquisition.candidate.version}`}
-                  />
-                  <Text label={`Source ${acquisition.reference}`} color="text-dim" wrap />
-                  <Text
-                    label={`Reviewed image ${compactDigest(acquisition.candidate.image_digest)}`}
-                    tooltip={acquisition.candidate.image_digest}
-                    wrap
-                  />
-                  {acquisition.candidate.installed_image_digest ? (
+                    {acquisition.candidate.installed_image_digest ? (
+                      <InlineMessage
+                        label={`Replaces installed image ${compactDigest(acquisition.candidate.installed_image_digest)}. Access below was reset and must be approved again.`}
+                        tone="warning"
+                      />
+                    ) : null}
+                    <Heading label="Review permissions" scale="caption" />
                     <InlineMessage
-                      label={`Replaces installed image ${compactDigest(acquisition.candidate.installed_image_digest)}. Access below was reset and must be approved again.`}
+                      label="All access is off. Expand exact grants and enable only what this extension needs."
                       tone="warning"
                     />
-                  ) : null}
-                  <Heading label="Review permissions" scale="caption" />
-                  <InlineMessage
-                    label="All access is off. Expand exact grants and enable only what this extension needs."
-                    tone="warning"
-                  />
-                  {(requestedImages.remove.length > 0 || requestedImages.prune_all_unused) && (
-                    <InlineMessage
-                      label="Destructive access requested. Image removal deletes named images; prune deletes every unused image in this workspace."
-                      tone="warning"
-                    />
-                  )}
-                  <Expander
-                    label={`Exact grants · ${grantedPermissionCount}/${requestedPermissionCount} selected`}
-                    expanded={permissionDetailsExpanded}
-                    onExpand={(event: Change) => setPermissionDetailsExpanded(Boolean(event.value))}
-                  >
-                    <Column gap={1}>
-                      {acquisition.candidate.requested.length > 0 && (
-                        <Text
-                          label={`Product access · ${granted.length}/${acquisition.candidate.requested.length}`}
-                          color="text-dim"
-                        />
-                      )}
-                      {acquisition.candidate.requested.length > 0 && (
-                        <Row gap={1} align="center">
-                          {granted.length > 0 && (
-                            <Button
-                              label="Clear product access"
-                              variant="ghost"
-                              onInvoke={() => setGranted([])}
-                            />
-                          )}
-                        </Row>
-                      )}
-                      {acquisition.candidate.requested.map((capability) => (
-                        <FormControlLabel
-                          key={capability}
-                          label={`${capabilityLabel(capability)} (${capability})`}
-                          gap={2}
-                        >
-                          <Switch
-                            checked={granted.includes(capability)}
-                            onToggle={(event: Change) =>
-                              setGranted((current) =>
-                                event.value
-                                  ? [...new Set([...current, capability])]
-                                  : current.filter((item) => item !== capability),
-                              )
-                            }
-                          />
-                        </FormControlLabel>
-                      ))}
-                      {(requestedContainers.selectors.length > 0 || requestedContainers.create) && (
-                        <>
+                    {(requestedImages.remove.length > 0 || requestedImages.prune_all_unused) && (
+                      <InlineMessage
+                        label="Destructive access requested. Image removal deletes named images; prune deletes every unused image in this workspace."
+                        tone="warning"
+                      />
+                    )}
+                    <Expander
+                      label={`Exact grants · ${grantedPermissionCount}/${requestedPermissionCount} selected`}
+                      expanded={permissionDetailsExpanded}
+                      onExpand={(event: Change) =>
+                        setPermissionDetailsExpanded(Boolean(event.value))
+                      }
+                    >
+                      <Column gap={1}>
+                        {acquisition.candidate.requested.length > 0 && (
                           <Text
-                            label={`Container access · ${grantedContainers.selectors.length + Number(grantedContainers.create)}/${requestedContainers.selectors.length + Number(requestedContainers.create)}`}
+                            label={`Product access · ${granted.length}/${acquisition.candidate.requested.length}`}
                             color="text-dim"
                           />
-                          <Text
-                            label="Container access starts off. Select only what this extension needs."
-                            color="text-dim"
-                            wrap
-                          />
-                        </>
-                      )}
-                      {requestedContainers.selectors.map((selector) => {
-                        const key = selectorKey(selector);
-                        const selected = grantedContainers.selectors.some(
-                          (candidate) => selectorKey(candidate) === key,
-                        );
-                        return (
-                          <FormControlLabel key={key} label={selectorLabel(selector)} gap={2}>
+                        )}
+                        {acquisition.candidate.requested.length > 0 && (
+                          <Row gap={1} align="center">
+                            {granted.length > 0 && (
+                              <Button
+                                label="Clear product access"
+                                variant="ghost"
+                                onInvoke={() => setGranted([])}
+                              />
+                            )}
+                          </Row>
+                        )}
+                        {acquisition.candidate.requested.map((capability) => (
+                          <FormControlLabel
+                            key={capability}
+                            label={`${capabilityLabel(capability)} (${capability})`}
+                            gap={2}
+                          >
                             <Switch
-                              checked={selected}
+                              checked={granted.includes(capability)}
+                              onToggle={(event: Change) =>
+                                setGranted((current) =>
+                                  event.value
+                                    ? [...new Set([...current, capability])]
+                                    : current.filter((item) => item !== capability),
+                                )
+                              }
+                            />
+                          </FormControlLabel>
+                        ))}
+                        {(requestedContainers.selectors.length > 0 ||
+                          requestedContainers.create) && (
+                          <>
+                            <Text
+                              label={`Container access · ${grantedContainers.selectors.length + Number(grantedContainers.create)}/${requestedContainers.selectors.length + Number(requestedContainers.create)}`}
+                              color="text-dim"
+                            />
+                            <Text
+                              label="Container access starts off. Select only what this extension needs."
+                              color="text-dim"
+                              wrap
+                            />
+                          </>
+                        )}
+                        {requestedContainers.selectors.map((selector) => {
+                          const key = selectorKey(selector);
+                          const selected = grantedContainers.selectors.some(
+                            (candidate) => selectorKey(candidate) === key,
+                          );
+                          return (
+                            <FormControlLabel key={key} label={selectorLabel(selector)} gap={2}>
+                              <Switch
+                                checked={selected}
+                                onToggle={(event: Change) =>
+                                  setGrantedContainers((current) => ({
+                                    ...current,
+                                    selectors: event.value
+                                      ? current.selectors.some(
+                                          (candidate) => selectorKey(candidate) === key,
+                                        )
+                                        ? current.selectors
+                                        : [...current.selectors, selector]
+                                      : current.selectors.filter(
+                                          (candidate) => selectorKey(candidate) !== key,
+                                        ),
+                                  }))
+                                }
+                              />
+                            </FormControlLabel>
+                          );
+                        })}
+                        {requestedContainers.create && (
+                          <FormControlLabel label="Create new containers" gap={2}>
+                            <Switch
+                              checked={grantedContainers.create}
                               onToggle={(event: Change) =>
                                 setGrantedContainers((current) => ({
                                   ...current,
-                                  selectors: event.value
-                                    ? current.selectors.some(
-                                        (candidate) => selectorKey(candidate) === key,
-                                      )
-                                      ? current.selectors
-                                      : [...current.selectors, selector]
-                                    : current.selectors.filter(
-                                        (candidate) => selectorKey(candidate) !== key,
-                                      ),
+                                  create: Boolean(event.value),
                                 }))
                               }
                             />
                           </FormControlLabel>
-                        );
-                      })}
-                      {requestedContainers.create && (
-                        <FormControlLabel label="Create new containers" gap={2}>
-                          <Switch
-                            checked={grantedContainers.create}
-                            onToggle={(event: Change) =>
-                              setGrantedContainers((current) => ({
-                                ...current,
-                                create: Boolean(event.value),
-                              }))
-                            }
+                        )}
+                        {imageGrantCount(requestedImages) > 0 && (
+                          <Text
+                            label={`Image access · ${imageGrantCount(grantedImages)}/${imageGrantCount(requestedImages)}`}
+                            color="text-dim"
                           />
-                        </FormControlLabel>
-                      )}
-                      {imageGrantCount(requestedImages) > 0 && (
-                        <Text
-                          label={`Image access · ${imageGrantCount(grantedImages)}/${imageGrantCount(requestedImages)}`}
-                          color="text-dim"
-                        />
-                      )}
-                      {IMAGE_VERBS.flatMap(({ key: verb, label }) =>
-                        requestedImages[verb].map((selector) => {
-                          const key = imageSelectorKey(selector);
-                          const selected = grantedImages[verb].some(
-                            (candidate) => imageSelectorKey(candidate) === key,
+                        )}
+                        {IMAGE_VERBS.flatMap(({ key: verb, label }) =>
+                          requestedImages[verb].map((selector) => {
+                            const key = imageSelectorKey(selector);
+                            const selected = grantedImages[verb].some(
+                              (candidate) => imageSelectorKey(candidate) === key,
+                            );
+                            return (
+                              <FormControlLabel
+                                key={`${verb}:${key}`}
+                                label={`${label} · ${imageSelectorLabel(selector)}`}
+                                gap={2}
+                              >
+                                <Switch
+                                  checked={selected}
+                                  onToggle={(event: Change) =>
+                                    setGrantedImages((current) => ({
+                                      ...current,
+                                      [verb]: event.value
+                                        ? current[verb].some(
+                                            (candidate) => imageSelectorKey(candidate) === key,
+                                          )
+                                          ? current[verb]
+                                          : [...current[verb], selector]
+                                        : current[verb].filter(
+                                            (candidate) => imageSelectorKey(candidate) !== key,
+                                          ),
+                                    }))
+                                  }
+                                />
+                              </FormControlLabel>
+                            );
+                          }),
+                        )}
+                        {requestedImages.prune_all_unused && (
+                          <FormControlLabel label="Prune every unused image" gap={2}>
+                            <Switch
+                              checked={grantedImages.prune_all_unused}
+                              onToggle={(event: Change) =>
+                                setGrantedImages((current) => ({
+                                  ...current,
+                                  prune_all_unused: Boolean(event.value),
+                                }))
+                              }
+                            />
+                          </FormControlLabel>
+                        )}
+                        {(requestedNetworks.selectors.length > 0 || requestedNetworks.create) && (
+                          <>
+                            <Text
+                              label={`Network access · ${grantedNetworks.selectors.length + Number(grantedNetworks.create)}/${requestedNetworks.selectors.length + Number(requestedNetworks.create)}`}
+                              color="text-dim"
+                            />
+                            <Text
+                              label="Network access starts off. Select only the networks this extension needs."
+                              color="text-dim"
+                              wrap
+                            />
+                          </>
+                        )}
+                        {requestedNetworks.selectors.map((selector) => {
+                          const key = networkSelectorKey(selector);
+                          const selected = grantedNetworks.selectors.some(
+                            (candidate) => networkSelectorKey(candidate) === key,
                           );
                           return (
                             <FormControlLabel
-                              key={`${verb}:${key}`}
-                              label={`${label} · ${imageSelectorLabel(selector)}`}
+                              key={key}
+                              label={networkSelectorLabel(selector)}
                               gap={2}
                             >
                               <Switch
                                 checked={selected}
                                 onToggle={(event: Change) =>
-                                  setGrantedImages((current) => ({
+                                  setGrantedNetworks((current) => ({
                                     ...current,
-                                    [verb]: event.value
-                                      ? current[verb].some(
-                                          (candidate) => imageSelectorKey(candidate) === key,
+                                    selectors: event.value
+                                      ? current.selectors.some(
+                                          (candidate) => networkSelectorKey(candidate) === key,
                                         )
-                                        ? current[verb]
-                                        : [...current[verb], selector]
-                                      : current[verb].filter(
-                                          (candidate) => imageSelectorKey(candidate) !== key,
+                                        ? current.selectors
+                                        : [...current.selectors, selector]
+                                      : current.selectors.filter(
+                                          (candidate) => networkSelectorKey(candidate) !== key,
                                         ),
                                   }))
                                 }
                               />
                             </FormControlLabel>
                           );
-                        }),
-                      )}
-                      {requestedImages.prune_all_unused && (
-                        <FormControlLabel label="Prune every unused image" gap={2}>
-                          <Switch
-                            checked={grantedImages.prune_all_unused}
-                            onToggle={(event: Change) =>
-                              setGrantedImages((current) => ({
-                                ...current,
-                                prune_all_unused: Boolean(event.value),
-                              }))
-                            }
-                          />
-                        </FormControlLabel>
-                      )}
-                      {(requestedNetworks.selectors.length > 0 || requestedNetworks.create) && (
-                        <>
-                          <Text
-                            label={`Network access · ${grantedNetworks.selectors.length + Number(grantedNetworks.create)}/${requestedNetworks.selectors.length + Number(requestedNetworks.create)}`}
-                            color="text-dim"
-                          />
-                          <Text
-                            label="Network access starts off. Select only the networks this extension needs."
-                            color="text-dim"
-                            wrap
-                          />
-                        </>
-                      )}
-                      {requestedNetworks.selectors.map((selector) => {
-                        const key = networkSelectorKey(selector);
-                        const selected = grantedNetworks.selectors.some(
-                          (candidate) => networkSelectorKey(candidate) === key,
-                        );
-                        return (
-                          <FormControlLabel
-                            key={key}
-                            label={networkSelectorLabel(selector)}
-                            gap={2}
-                          >
+                        })}
+                        {requestedNetworks.create && (
+                          <FormControlLabel label="Create new networks" gap={2}>
                             <Switch
-                              checked={selected}
+                              checked={grantedNetworks.create}
                               onToggle={(event: Change) =>
                                 setGrantedNetworks((current) => ({
                                   ...current,
-                                  selectors: event.value
-                                    ? current.selectors.some(
-                                        (candidate) => networkSelectorKey(candidate) === key,
-                                      )
-                                      ? current.selectors
-                                      : [...current.selectors, selector]
-                                    : current.selectors.filter(
-                                        (candidate) => networkSelectorKey(candidate) !== key,
-                                      ),
+                                  create: Boolean(event.value),
                                 }))
                               }
                             />
                           </FormControlLabel>
-                        );
-                      })}
-                      {requestedNetworks.create && (
-                        <FormControlLabel label="Create new networks" gap={2}>
-                          <Switch
-                            checked={grantedNetworks.create}
-                            onToggle={(event: Change) =>
-                              setGrantedNetworks((current) => ({
-                                ...current,
-                                create: Boolean(event.value),
-                              }))
-                            }
+                        )}
+                        {(requestedVolumes.selectors.length > 0 || requestedVolumes.create) && (
+                          <Text
+                            label={`Volume access · ${grantedVolumes.selectors.length + Number(grantedVolumes.create)}/${requestedVolumes.selectors.length + Number(requestedVolumes.create)}`}
+                            color="text-dim"
                           />
-                        </FormControlLabel>
-                      )}
-                      {(requestedVolumes.selectors.length > 0 || requestedVolumes.create) && (
-                        <Text
-                          label={`Volume access · ${grantedVolumes.selectors.length + Number(grantedVolumes.create)}/${requestedVolumes.selectors.length + Number(requestedVolumes.create)}`}
-                          color="text-dim"
-                        />
-                      )}
-                      {requestedVolumes.selectors.map((selector) => {
-                        const key = volumeSelectorKey(selector);
-                        const selected = grantedVolumes.selectors.some(
-                          (candidate) => volumeSelectorKey(candidate) === key,
-                        );
-                        return (
-                          <FormControlLabel key={key} label={volumeSelectorLabel(selector)} gap={2}>
-                            <Switch
-                              checked={selected}
-                              onToggle={(event: Change) =>
-                                setGrantedVolumes((current) => ({
-                                  ...current,
-                                  selectors: event.value
-                                    ? [
-                                        ...current.selectors.filter(
-                                          (candidate) => volumeSelectorKey(candidate) !== key,
-                                        ),
-                                        selector,
-                                      ]
-                                    : current.selectors.filter(
-                                        (candidate) => volumeSelectorKey(candidate) !== key,
-                                      ),
-                                }))
-                              }
-                            />
-                          </FormControlLabel>
-                        );
-                      })}
-                      {requestedVolumes.create && (
-                        <FormControlLabel label="Create new volumes" gap={2}>
-                          <Switch
-                            checked={grantedVolumes.create}
-                            onToggle={(event: Change) =>
-                              setGrantedVolumes((current) => ({
-                                ...current,
-                                create: Boolean(event.value),
-                              }))
-                            }
-                          />
-                        </FormControlLabel>
-                      )}
-                      {filesystemGrantCount(requestedFilesystem) > 0 && (
-                        <>
-                          <Text label="Workspace files" color="text-dim" />
-                          <FilesystemConsent
-                            requested={requestedFilesystem}
-                            granted={grantedFilesystem}
-                            onChange={setGrantedFilesystem}
-                          />
-                        </>
-                      )}
-                      {(requestedWorkspaceEnvironment.read.length > 0 ||
-                        requestedWorkspaceEnvironment.write.length > 0) && (
-                        <Text
-                          label={`Workspace environment values · ${grantedWorkspaceEnvironment.read.length + grantedWorkspaceEnvironment.write.length}/${requestedWorkspaceEnvironment.read.length + requestedWorkspaceEnvironment.write.length}`}
-                          color="text-dim"
-                        />
-                      )}
-                      {(['read', 'write'] as const).flatMap((verb) =>
-                        requestedWorkspaceEnvironment[verb].map((selector) => {
-                          const key = `${verb}:${'all' in selector ? 'all' : `${selector.workspace}:${selector.name}`}`;
-                          const checked = grantedWorkspaceEnvironment[verb].some(
-                            (candidate) => JSON.stringify(candidate) === JSON.stringify(selector),
+                        )}
+                        {requestedVolumes.selectors.map((selector) => {
+                          const key = volumeSelectorKey(selector);
+                          const selected = grantedVolumes.selectors.some(
+                            (candidate) => volumeSelectorKey(candidate) === key,
                           );
                           return (
                             <FormControlLabel
                               key={key}
-                              label={
-                                'all' in selector
-                                  ? `${verb === 'read' ? 'Read' : 'Change'} all workspace environment values`
-                                  : `${verb === 'read' ? 'Read' : 'Change'} ${selector.name} in workspace ${selector.workspace}`
-                              }
+                              label={volumeSelectorLabel(selector)}
                               gap={2}
                             >
                               <Switch
-                                checked={checked}
+                                checked={selected}
                                 onToggle={(event: Change) =>
-                                  setGrantedWorkspaceEnvironment((current) => ({
+                                  setGrantedVolumes((current) => ({
                                     ...current,
-                                    [verb]: event.value
-                                      ? [...current[verb], selector]
-                                      : current[verb].filter(
-                                          (candidate) =>
-                                            JSON.stringify(candidate) !== JSON.stringify(selector),
+                                    selectors: event.value
+                                      ? [
+                                          ...current.selectors.filter(
+                                            (candidate) => volumeSelectorKey(candidate) !== key,
+                                          ),
+                                          selector,
+                                        ]
+                                      : current.selectors.filter(
+                                          (candidate) => volumeSelectorKey(candidate) !== key,
                                         ),
                                   }))
                                 }
                               />
                             </FormControlLabel>
                           );
-                        }),
-                      )}
-                    </Column>
-                  </Expander>
-                </CardContent>
-              )}
-              {acquisition && acquisition.state !== 'ready' && (
-                <CardContent gap={1}>
-                  <Row gap={1} align="center" wrap>
-                    {!['failed', 'cancelled'].includes(acquisition.state) && <Spinner />}
-                    <Text label={acquisitionLabel(acquisition)} wrap />
-                    {!['failed', 'cancelled'].includes(acquisition.state) ? (
-                      <Button
-                        label={busy === 'cancel' ? 'Cancelling…' : 'Cancel'}
-                        enabled={busy !== 'cancel'}
-                        onInvoke={cancel}
-                      />
-                    ) : acquisition.state === 'failed' ? (
-                      <>
+                        })}
+                        {requestedVolumes.create && (
+                          <FormControlLabel label="Create new volumes" gap={2}>
+                            <Switch
+                              checked={grantedVolumes.create}
+                              onToggle={(event: Change) =>
+                                setGrantedVolumes((current) => ({
+                                  ...current,
+                                  create: Boolean(event.value),
+                                }))
+                              }
+                            />
+                          </FormControlLabel>
+                        )}
+                        {filesystemGrantCount(requestedFilesystem) > 0 && (
+                          <>
+                            <Text label="Workspace files" color="text-dim" />
+                            <FilesystemConsent
+                              requested={requestedFilesystem}
+                              granted={grantedFilesystem}
+                              onChange={setGrantedFilesystem}
+                            />
+                          </>
+                        )}
+                        {(requestedWorkspaceEnvironment.read.length > 0 ||
+                          requestedWorkspaceEnvironment.write.length > 0) && (
+                          <Text
+                            label={`Workspace environment values · ${grantedWorkspaceEnvironment.read.length + grantedWorkspaceEnvironment.write.length}/${requestedWorkspaceEnvironment.read.length + requestedWorkspaceEnvironment.write.length}`}
+                            color="text-dim"
+                          />
+                        )}
+                        {(['read', 'write'] as const).flatMap((verb) =>
+                          requestedWorkspaceEnvironment[verb].map((selector) => {
+                            const key = `${verb}:${'all' in selector ? 'all' : `${selector.workspace}:${selector.name}`}`;
+                            const checked = grantedWorkspaceEnvironment[verb].some(
+                              (candidate) => JSON.stringify(candidate) === JSON.stringify(selector),
+                            );
+                            return (
+                              <FormControlLabel
+                                key={key}
+                                label={
+                                  'all' in selector
+                                    ? `${verb === 'read' ? 'Read' : 'Change'} all workspace environment values`
+                                    : `${verb === 'read' ? 'Read' : 'Change'} ${selector.name} in workspace ${selector.workspace}`
+                                }
+                                gap={2}
+                              >
+                                <Switch
+                                  checked={checked}
+                                  onToggle={(event: Change) =>
+                                    setGrantedWorkspaceEnvironment((current) => ({
+                                      ...current,
+                                      [verb]: event.value
+                                        ? [...current[verb], selector]
+                                        : current[verb].filter(
+                                            (candidate) =>
+                                              JSON.stringify(candidate) !==
+                                              JSON.stringify(selector),
+                                          ),
+                                    }))
+                                  }
+                                />
+                              </FormControlLabel>
+                            );
+                          }),
+                        )}
+                      </Column>
+                    </Expander>
+                  </CardContent>
+                )}
+                {acquisition && acquisition.state !== 'ready' && (
+                  <CardContent gap={1}>
+                    <Row gap={1} align="center" wrap>
+                      {!['failed', 'cancelled'].includes(acquisition.state) && <Spinner />}
+                      <Text label={acquisitionLabel(acquisition)} wrap />
+                      {!['failed', 'cancelled'].includes(acquisition.state) ? (
                         <Button
-                          label="Retry inspection"
-                          enabled={!busy}
-                          onInvoke={() => inspect()}
+                          label={busy === 'cancel' ? 'Cancelling…' : 'Cancel'}
+                          enabled={busy !== 'cancel'}
+                          onInvoke={cancel}
                         />
+                      ) : acquisition.state === 'failed' ? (
+                        <>
+                          <Button
+                            label="Retry inspection"
+                            enabled={!busy}
+                            onInvoke={() => inspect()}
+                          />
+                          <Button
+                            label="Dismiss"
+                            variant="ghost"
+                            enabled={!busy}
+                            onInvoke={() => setAcquisition(null)}
+                          />
+                        </>
+                      ) : (
                         <Button
                           label="Dismiss"
-                          variant="ghost"
                           enabled={!busy}
                           onInvoke={() => setAcquisition(null)}
                         />
-                      </>
-                    ) : (
-                      <Button
-                        label="Dismiss"
-                        enabled={!busy}
-                        onInvoke={() => setAcquisition(null)}
+                      )}
+                    </Row>
+                    {acquisition.error && (
+                      <RecoveryState
+                        operation="Inspecting extension image"
+                        error={acquisitionFailure(acquisition.error)}
                       />
                     )}
-                  </Row>
-                  {acquisition.error && (
-                    <InlineMessage label={acquisitionFailure(acquisition.error)} tone="danger" />
-                  )}
-                </CardContent>
-              )}
-            </Card>
-            {error && <InlineMessage label={error} tone="danger" />}
+                  </CardContent>
+                )}
+              </Card>
+            )}
+            {error && <RecoveryState operation="Extension change" error={error} />}
             {notice && (
               <InlineMessage
                 label={notice.label}
@@ -1142,11 +1160,19 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
               <Heading label="Installed" scale="caption" />
               <Button
                 label="Refresh"
+                variant="outline"
                 enabled={!busy && inventoryState !== 'loading'}
                 onInvoke={reload}
               />
             </Row>
-            {watchError && <InlineMessage label={watchError} tone="warning" />}
+            {watchError && (
+              <RecoveryState
+                operation="Extension updates"
+                error={watchError}
+                retryLabel="Refresh extensions"
+                onRetry={reload}
+              />
+            )}
             <ResourceState
               state={inventoryState}
               loadingLabel="Loading installed extensions…"
@@ -1173,26 +1199,27 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                       detail={
                         extension.version ? `Version ${extension.version}` : 'Version unavailable'
                       }
+                      tooltip={`Installed image ${extension.image_digest}`}
                     />
                     <CardContent gap={1}>
                       <Row gap={1} wrap>
                         <Badge
-                          label={extensionState(extension)}
+                          label={capitalize(extensionState(extension))}
                           tone={extension.status.startsWith('fault:') ? 'danger' : 'neutral'}
                         />
                         {extension.name === 'top' ? (
                           <Badge label="Required workspace manager" tone="positive" />
                         ) : null}
                       </Row>
-                      <Text
-                        label={`Image · ${compactDigest(extension.image_digest)}`}
-                        tooltip={extension.image_digest}
-                      />
                       <ExtensionFault extension={extension} />
                       <InstalledPermissionSummary extension={extension} />
                       {updateCompatibility ? (
                         <Text
-                          label={`Update · ${updateCompatibility.label}`}
+                          label={
+                            updateCompatibility.compatible === true
+                              ? 'Update available'
+                              : `Update · ${updateCompatibility.label}`
+                          }
                           color={updateCompatibility.compatible === false ? 'warning' : 'text-dim'}
                           wrap
                         />
@@ -1207,6 +1234,8 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                           <Button
                             key="review-update"
                             label="Review update"
+                            variant="filled"
+                            tone="accent"
                             enabled={!busy && updateCompatibility?.compatible !== false}
                             onInvoke={() => inspect(update.reference)}
                           />
@@ -1215,6 +1244,8 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                           <Button
                             key="lifecycle"
                             label="Retry"
+                            variant="outline"
+                            tone="accent"
                             enabled={!busy}
                             onInvoke={() => lifecycle(extension, 'retry')}
                           />
@@ -1222,6 +1253,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                           <Button
                             key="lifecycle"
                             label="Disable"
+                            variant="ghost"
                             enabled={!busy}
                             onInvoke={() => lifecycle(extension, 'disable')}
                           />
@@ -1229,6 +1261,8 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                           <Button
                             key="lifecycle"
                             label="Enable"
+                            variant="outline"
+                            tone="accent"
                             enabled={!busy}
                             onInvoke={() => lifecycle(extension, 'enable')}
                           />
@@ -1277,6 +1311,8 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                       : 'Install with selected access'
               }
               enabled={!busy && acquisition.state === 'ready'}
+              variant="filled"
+              tone="accent"
               onInvoke={publish}
             />
             <Button

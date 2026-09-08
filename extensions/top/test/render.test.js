@@ -286,18 +286,18 @@ test('Top owns workspace settings and extension management in the same tab', asy
   invoke(stage, 'Extensions');
   await settled();
   await settled();
-  assert.ok(labelled(stage, 'Discover'));
+  assert.ok(labelled(stage, 'Browse extensions'));
   assert.ok(labelled(stage, 'Component playground'));
   assert.ok(
     labelled(stage, 'Image · ghcr.io/husklet/husklet/extension-storybook:latest'),
     'discovery names the exact OCI input that review will inspect',
   );
-  assert.ok(labelled(stage, 'Install from image'));
+  assert.ok(labelled(stage, 'Install from an OCI image'));
   assert.ok(labelled(stage, 'No extensions installed'));
   assert.equal(labelled(stage, 'Workspace control'), undefined);
-  assert.deepEqual(ancestorTags(stage, 'Discover').slice(0, 2), ['Column', 'Row']);
+  assert.deepEqual(ancestorTags(stage, 'Browse extensions').slice(0, 2), ['Column', 'Row']);
   assert.deepEqual(ancestorTags(stage, 'Installed').slice(0, 3), ['Row', 'Column', 'Row']);
-  assert.deepEqual(ancestorTags(stage, 'Review Component playground').slice(0, 3), [
+  assert.deepEqual(ancestorTags(stage, 'View Component playground').slice(0, 3), [
     'Row',
     'CardContent',
     'Card',
@@ -308,9 +308,9 @@ test('Top owns workspace settings and extension management in the same tab', asy
     'cross-axis alignment lets the declared maximum width govern the GTK card',
   );
   assert.equal(
-    ancestorProperty(stage, 'Install from image', 'Card', 'Width') !== undefined,
-    true,
-    'the acquisition card uses the same compact geometry',
+    taggedProperty(stage, 'Install from an OCI image', 'Expander', 'Expanded')?.Flag,
+    false,
+    'advanced image installation is collapsed until requested',
   );
 });
 
@@ -503,7 +503,7 @@ test('extension discovery reviews the first-party Storybook without requiring a 
     }),
   );
   await settled();
-  invoke(stage, 'Review Component playground');
+  invoke(stage, 'View Component playground');
   await settled();
   await settled();
   assert.deepEqual(references, ['ghcr.io/husklet/husklet/extension-storybook:latest']);
@@ -560,11 +560,11 @@ test('extension discovery keeps unknown compatibility reviewable and blocks know
   await settled();
   await settled();
   assert.ok(labelled(stage, 'Compatibility not declared'));
-  assert.equal(isEnabled(stage, 'Review Unknown'), true);
+  assert.equal(isEnabled(stage, 'View Unknown'), true);
   assert.ok(labelled(stage, 'Incompatible · supports arm64; workspace is amd64'));
-  assert.equal(isEnabled(stage, 'Review ARM only'), false);
+  assert.equal(isEnabled(stage, 'View ARM only'), false);
   assert.ok(labelled(stage, 'Incompatible · requires protocol 999; this client uses 1'));
-  assert.equal(isEnabled(stage, 'Review Future protocol'), false);
+  assert.equal(isEnabled(stage, 'View Future protocol'), false);
 });
 
 test('an installed catalogue extension exposes its update review without retyping a reference', async () => {
@@ -612,7 +612,7 @@ test('an installed catalogue extension exposes its update review without retypin
   await settled();
   assert.ok(labelled(stage, 'Review update'));
   assert.equal(
-    labelled(stage, 'Review Component playground'),
+    labelled(stage, 'View Component playground'),
     undefined,
     'installed catalogue entries do not also appear as new installations',
   );
@@ -788,13 +788,15 @@ test('extension discovery can retry a failed catalogue without leaving the page'
     }),
   );
   await settled();
-  assert.ok(labelled(stage, 'Catalogue unavailable: catalogue service is offline'));
+  assert.ok(labelled(stage, 'Extension catalogue could not be completed.'));
+  assert.ok(labelled(stage, 'Technical details'));
+  assert.ok(labelled(stage, 'catalogue service is offline'));
   assert.ok(labelled(stage, 'Retry catalogue'));
 
   invoke(stage, 'Retry catalogue');
   await settled();
   assert.equal(attempts, 2);
-  assert.ok(labelled(stage, 'Review Component playground'));
+  assert.ok(labelled(stage, 'View Component playground'));
 });
 
 test('extension inspection keeps invalid and failed references recoverable with a direct retry', async () => {
@@ -1398,7 +1400,9 @@ test('Top is visibly required and offers no self-disable or self-removal trap', 
 
   assert.ok(labelled(stage, 'Required workspace manager'));
   assert.deepEqual(property(stage, 'top', 'Detail'), { Text: 'Version 0.1.0' });
-  assert.ok(labelled(stage, `Image · sha256:${'a'.repeat(12)}…${'a'.repeat(8)}`));
+  assert.deepEqual(property(stage, 'top', 'Tooltip'), {
+    Text: `Installed image sha256:${'a'.repeat(64)}`,
+  });
   assert.equal(labelled(stage, 'Disable'), undefined);
   assert.equal(labelled(stage, 'Remove'), undefined);
 });
@@ -1453,19 +1457,21 @@ test('installed extensions expose truthful enabled, disabled, fault and retry st
   release();
   await settled();
   await settled();
-  assert.ok(labelled(stage, 'disabled'), 'disabled state replaces stale stopped status');
+  assert.ok(labelled(stage, 'Disabled'), 'disabled state replaces stale stopped status');
   invoke(stage, 'Enable');
   await settled();
   assert.ok(labelled(stage, 'Enabling assistant…'));
   release();
   await settled();
   await settled();
-  assert.ok(labelled(stage, 'running'));
+  assert.ok(labelled(stage, 'Running'));
 
   extension = { ...extension, enabled: true, status: 'fault: socket closed' };
   publish([extension]);
   await settled();
-  assert.ok(labelled(stage, 'faulted'));
+  assert.ok(labelled(stage, 'Faulted'));
+  assert.ok(labelled(stage, 'Extension lost its connection. No change was assumed.'));
+  assert.ok(labelled(stage, 'Technical details'));
   assert.ok(labelled(stage, 'socket closed'));
   assert.equal(
     labelled(stage, 'fault: socket closed'),
@@ -1559,7 +1565,7 @@ test('installed extensions translate the host duty stage into a developer-facing
     }),
   );
   await settled();
-  assert.ok(labelled(stage, 'enabled'));
+  assert.ok(labelled(stage, 'Enabled'));
 });
 
 test('overview never presents stale inventory counts as current during loading or failure', () => {
