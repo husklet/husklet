@@ -57,6 +57,7 @@ node -e '
 
 workflow="$root/.github/workflows/release.yml"
 expect_literal .github/workflows/release.yml '              export HL_STORYBOOK_IMAGE="ghcr.io/$GITHUB_REPOSITORY/extension-storybook:$RELEASE_VERSION"'
+expect_literal .github/workflows/release.yml '        extension: [storybook, top]'
 node -e '
   const fs = require("node:fs");
   const workflow = fs.readFileSync(process.argv[1], "utf8");
