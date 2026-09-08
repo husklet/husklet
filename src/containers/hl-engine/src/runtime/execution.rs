@@ -1167,7 +1167,11 @@ mod native_eligibility_tests {
             native_checkpoint_intent(true, true, true, false),
             NativeCheckpointIntent::Partial
         );
-        for configure in ["mode", "policy", "option"] {
+        for (configure, expected) in [
+            ("mode", Ok(())),
+            ("policy", Err(NativeSupervisedRefusal::Checkpoint)),
+            ("option", Err(NativeSupervisedRefusal::Checkpoint)),
+        ] {
             let mut configured = plan();
             match configure {
                 "mode" => configured.box_policy.checkpoint_mode = 1,
@@ -1182,8 +1186,8 @@ mod native_eligibility_tests {
                     NativeCheckpointIntent::None,
                     host()
                 ),
-                Ok(()),
-                "explicit no-checkpoint intent was overridden by {configure} configuration",
+                expected,
+                "{configure} checkpoint configuration had the wrong admission result",
             );
         }
     }
