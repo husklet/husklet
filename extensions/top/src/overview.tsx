@@ -134,8 +134,8 @@ export function Overview({
     (records) => `${records.filter((item) => item.running).length} running`,
   );
   const imagesSummary = resourceSummary(images, () => 'Available locally');
-  const volumesSummary = resourceSummary(volumes, () => 'Durable local storage');
-  const networksSummary = resourceSummary(networks, () => 'Workspace-local connectivity');
+  const volumesSummary = resourceSummary(volumes, () => 'Local storage');
+  const networksSummary = resourceSummary(networks, () => 'Workspace network');
   const terminalsSummary = resourceSummary(
     terminals,
     (records) => `${records.filter((tab) => tab.pinned).length} pinned`,

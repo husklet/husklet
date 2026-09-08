@@ -208,6 +208,8 @@ test('Top presents workspace, extensions, and every resource navigation choice',
     'the overview exposes extension inventory alongside the other workspace resources',
   );
   assert.ok(labels.includes('On demand'), 'process snapshots remain concise at narrow widths');
+  assert.ok(labels.includes('Local storage'), 'volume summaries remain compact');
+  assert.ok(labels.includes('Workspace network'), 'network summaries remain compact');
   assert.equal(
     frame.patches.filter((patch) => patch.Create?.tag === 'CardActionArea').length,
     8,
