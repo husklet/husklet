@@ -35,7 +35,28 @@ test(
       );
       socket.on('data', (chunk) => {
         for (const frame of reader.take(chunk)) {
-          if (frame.payload?.call !== 'network_list') continue;
+          if (!['network_list', 'network_inspect'].includes(frame.payload?.call)) continue;
+          if (frame.payload.call === 'network_inspect') {
+            socket.write(
+              encode({
+                channel: frame.channel,
+                kind: KIND.response,
+                flags: 1,
+                payload: {
+                  reply: 'network',
+                  with: {
+                    id: staleId,
+                    name: 'stale-net',
+                    driver: 'bridge',
+                    scope: 'local',
+                    kind: 'custom',
+                    endpoints: { containers: [], truncated: false },
+                  },
+                },
+              }),
+            );
+            continue;
+          }
           attempts += 1;
           let flags = 1;
           let payload;
@@ -100,8 +121,10 @@ test(
       invoke(stage, 'Networks');
       await until(() => labelled(stage, 'Reading networks…'));
       await until(() => labelled(stage, 'stale-net'));
+      invoke(stage, 'Inspect');
+      await until(() => labelled(stage, 'Network details'));
       choose(stage, containerId);
-      assert.equal(labelled(stage, 'Connect'), undefined);
+      await until(() => labelled(stage, 'Connect'));
       assert.equal(labelled(stage, 'Disconnect'), undefined);
       invoke(stage, 'Remove');
       assert.ok(labelled(stage, `Remove immutable network ${staleId} (stale-net)?`));
@@ -134,14 +157,16 @@ test(
       await until(() => labelled(stage, 'No networks'));
       assert.equal(attempts, 3);
 
+      const currentStart = stage.frames.length;
       invoke(stage, 'Refresh');
       await until(() => labelled(stage, 'current-net'));
       assert.equal(attempts, 4);
       for (const control of ['Inspect', 'Remove']) assert.ok(labelled(stage, control));
+      const currentPatches = stage.frames.slice(currentStart).flatMap((frame) => frame.patches);
       for (const endpointControl of ['Connect', 'Disconnect'])
         assert.equal(
-          labelled(stage, endpointControl),
-          undefined,
+          currentPatches.some((patch) => patch.SetProp?.value?.Text === endpointControl),
+          false,
           'list inventory never guesses endpoint membership',
         );
     } finally {

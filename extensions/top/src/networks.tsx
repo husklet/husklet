@@ -216,7 +216,7 @@ export function Networks({
       title="Networks"
       subtitle="Bounded network inventory; attachment changes are accepted only for stopped containers."
     >
-      <Column gap={1} align="start">
+      <Row gap={1} align="center" wrap width="fill">
         <Entry
           value={name}
           placeholder="Network name"
@@ -227,28 +227,26 @@ export function Networks({
             setCreation({ state: 'idle', name: '', error: null });
           }}
         />
-        <Row gap={1} wrap>
-          <Button
-            variant="filled"
-            tone="accent"
-            label={
-              creation.state === 'loading'
-                ? 'Creating…'
-                : creation.state === 'error'
-                  ? 'Retry create'
-                  : 'Create'
-            }
-            enabled={creation.state !== 'loading' && name.trim().length > 0}
-            onInvoke={() => void create()}
-          />
-          <Button
-            label="Refresh"
-            variant="outline"
-            enabled={creation.state !== 'loading'}
-            onInvoke={resource.reload}
-          />
-        </Row>
-      </Column>
+        <Button
+          variant="filled"
+          tone="accent"
+          label={
+            creation.state === 'loading'
+              ? 'Creating…'
+              : creation.state === 'error'
+                ? 'Retry create'
+                : 'Create'
+          }
+          enabled={creation.state !== 'loading' && name.trim().length > 0}
+          onInvoke={() => void create()}
+        />
+        <Button
+          label="Refresh"
+          variant="ghost"
+          enabled={creation.state !== 'loading'}
+          onInvoke={resource.reload}
+        />
+      </Row>
       {creation.state === 'loading' ? (
         <Row gap={1} align="center">
           <Spinner />
@@ -262,49 +260,6 @@ export function Networks({
         <Text label={`Created network ${creation.name}.`} color="positive" wrap />
       ) : null}
       {removalNotice ? <Text label={removalNotice} color="positive" wrap /> : null}
-      <Card width="fill" variant="outline">
-        <CardContent gap={1}>
-          <Text label="Container attachment" />
-          <Text label="Required · choose an inspected container" color="text-dim" wrap />
-          {containerChoices.length ? (
-            <Select
-              value={container}
-              choices={containerChoices}
-              tooltip={container || 'Choose a container by name and immutable ID'}
-              width={{ minimum: { chars: 10 }, maximum: { chars: 38 } }}
-              enabled={operation.state !== 'loading'}
-              onChange={(event) => {
-                setContainer(String(event.value ?? ''));
-                setOperation({ state: 'idle', request: null, error: null });
-                setDisconnectRequest(null);
-              }}
-            />
-          ) : (
-            <InlineMessage
-              label={
-                containers.loading
-                  ? 'Reading containers…'
-                  : 'No containers are available to attach.'
-              }
-              tone="neutral"
-            />
-          )}
-          <Column gap={1} align="start">
-            <Text label="Optional aliases" color="text-dim" />
-            <Entry
-              value={aliases}
-              placeholder="Endpoint aliases (comma-separated, optional)"
-              width={{ minimum: { chars: 10 }, maximum: { chars: 38 } }}
-              enabled={operation.state !== 'loading'}
-              onChange={(event) => {
-                setAliases(String(event.value ?? ''));
-                setOperation({ state: 'idle', request: null, error: null });
-              }}
-            />
-          </Column>
-        </CardContent>
-      </Card>
-      <OperationStatus operation={operation} onRetry={attach} />
       <ErrorText error={error} />
       <Column width="fill" grow={false} justify="stretch">
         {inventoryState === 'empty' ? (
@@ -330,11 +285,12 @@ export function Networks({
               const id = resourceReference(network);
               const membership =
                 inspection.id === id && inspection.state === 'ready'
-                  ? inspection.detail?.endpoints
+                  ? (inspection.detail?.endpoints ?? network.endpoints)
                   : network.endpoints;
               const containerId = container.trim();
               const validContainer = immutableContainerId(containerId);
-              const membershipUnknown = validContainer && (!membership || membership.truncated);
+              const membershipUnknown =
+                inspection.id === id && validContainer && (!membership || membership.truncated);
               const endpointAction = validContainer
                 ? membership?.containers.includes(containerId)
                   ? 'disconnect'
@@ -373,21 +329,6 @@ export function Networks({
                       }
                       onInvoke={() => inspect(network)}
                     />
-                    {endpointAction === 'connect' ? (
-                      <Button
-                        label="Connect"
-                        enabled={operation.state !== 'loading'}
-                        onInvoke={() => begin(network, 'connect')}
-                      />
-                    ) : null}
-                    {endpointAction === 'disconnect' ? (
-                      <Button
-                        label="Disconnect"
-                        enabled={operation.state !== 'loading'}
-                        tone="danger"
-                        onInvoke={() => begin(network, 'disconnect')}
-                      />
-                    ) : null}
                     {network.kind !== 'builtin' ? (
                       <ConfirmAction
                         authorityKey={`network:${id}:remove`}
@@ -407,7 +348,77 @@ export function Networks({
                       onCancel={() => setDisconnectRequest(null)}
                     />
                   ) : null}
-                  {inspection.id === id ? <NetworkDetail inspection={inspection} /> : null}
+                  {inspection.id === id ? (
+                    <>
+                      <NetworkDetail inspection={inspection} />
+                      {inspection.state === 'ready' ? (
+                        <CardContent gap={1}>
+                          <Heading label="Container attachment" scale="caption" />
+                          <Text
+                            label="Connect or disconnect one inspected container from this network."
+                            color="text-dim"
+                            wrap
+                          />
+                          {containerChoices.length ? (
+                            <Row gap={1} align="center" wrap width="fill">
+                              <Select
+                                value={container}
+                                choices={containerChoices}
+                                tooltip={container || 'Choose a container by name and immutable ID'}
+                                width={{ minimum: { chars: 10 }, maximum: { chars: 38 } }}
+                                enabled={operation.state !== 'loading'}
+                                onChange={(event) => {
+                                  setContainer(String(event.value ?? ''));
+                                  setOperation({ state: 'idle', request: null, error: null });
+                                  setDisconnectRequest(null);
+                                }}
+                              />
+                              {endpointAction === 'connect' ? (
+                                <Button
+                                  label="Connect"
+                                  variant="filled"
+                                  tone="accent"
+                                  enabled={operation.state !== 'loading'}
+                                  onInvoke={() => begin(network, 'connect')}
+                                />
+                              ) : null}
+                              {endpointAction === 'disconnect' ? (
+                                <Button
+                                  label="Disconnect"
+                                  variant="outline"
+                                  tone="danger"
+                                  enabled={operation.state !== 'loading'}
+                                  onInvoke={() => begin(network, 'disconnect')}
+                                />
+                              ) : null}
+                            </Row>
+                          ) : (
+                            <InlineMessage
+                              label={
+                                containers.loading
+                                  ? 'Reading containers…'
+                                  : 'No containers are available to attach.'
+                              }
+                              tone="neutral"
+                            />
+                          )}
+                          {container ? (
+                            <Entry
+                              value={aliases}
+                              placeholder="Aliases, comma-separated (optional)"
+                              width={{ minimum: { chars: 10 }, maximum: { chars: 38 } }}
+                              enabled={operation.state !== 'loading'}
+                              onChange={(event) => {
+                                setAliases(String(event.value ?? ''));
+                                setOperation({ state: 'idle', request: null, error: null });
+                              }}
+                            />
+                          ) : null}
+                          <OperationStatus operation={operation} onRetry={attach} />
+                        </CardContent>
+                      ) : null}
+                    </>
+                  ) : null}
                 </Card>
               );
             })}

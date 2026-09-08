@@ -254,6 +254,9 @@ test('Top network attachment selects a named container while retaining immutable
   );
   invoke(stage, 'Networks');
   await settled();
+  invoke(stage, 'Inspect');
+  await settled();
+  await settled();
   assert.equal(
     stage.frames
       .flatMap((frame) => frame.patches)
@@ -281,6 +284,7 @@ test('Top network attachment selects a named container while retaining immutable
     }),
     'the native selector reports the exact immutable ID',
   );
+  await settled();
   await settled();
   assert.ok(labelled(stage, 'Connect'));
 });
@@ -3552,13 +3556,10 @@ test('volume and network panels render bounded real inventories and controls', (
     'only the custom network offers removal',
   );
   const networkStage = stageFromFrame(networkFrame);
-  assert.deepEqual(ancestorProperty(networkStage, 'Container attachment', 'Card', 'Width'), {
-    Length: 'Fill',
-  });
   assert.equal(
-    ancestorProperty(networkStage, 'Container attachment', 'Card', 'Grow'),
-    undefined,
-    'the attachment form stays content-height so the empty state follows it',
+    labels(networkFrame).includes('Container attachment'),
+    false,
+    'attachment controls do not precede network selection and inspection',
   );
   assert.deepEqual(ancestorProperty(networkStage, 'private', 'Card', 'Width'), {
     Length: 'Fill',
@@ -5297,7 +5298,11 @@ test('volume and network mutations expose danger only on final confirm and cance
       containers: containerResource(containerId),
     }),
   );
+  invoke(networks, 'Inspect');
+  await settled();
+  await settled();
   chooseContainer(networks, containerId);
+  await settled();
   invoke(networks, 'Disconnect');
   assert.equal(isDestructive(networks, 'Confirm disconnect'), true);
   assert.ok(
@@ -5459,11 +5464,17 @@ test('truncated network membership explains why inspection is required and resol
       containers: containerResource(container),
     }),
   );
-  chooseContainer(stage, container);
-  assert.ok(labelled(stage, 'Attachment status unknown for this container · Inspect to resolve'));
-  assert.equal(labelled(stage, 'Connect'), undefined);
+  assert.equal(
+    stage.frames
+      .flatMap((frame) => frame.patches)
+      .some((patch) => patch.SetProp?.prop === 'Choices'),
+    false,
+    'attachment controls stay hidden until a network is inspected',
+  );
   invoke(stage, 'Inspect');
   await settled();
+  await settled();
+  chooseContainer(stage, container);
   await settled();
   assert.ok(labelled(stage, 'Connect'), 'complete inspection exposes the contextual action');
 });
@@ -5505,21 +5516,20 @@ test('network connect validates aliases, exposes progress, success, bounded fail
   stage.render(
     h(Networks, { api: controlled, resource, containers: containerResource('b'.repeat(64)) }),
   );
-
-  change(stage, 'Endpoint aliases (comma-separated, optional)', 'db,db');
+  invoke(stage, 'Inspect');
+  await settled();
+  await settled();
+  chooseContainer(stage, 'b'.repeat(64));
+  await settled();
+  change(stage, 'Aliases, comma-separated (optional)', 'db,db');
   await settled();
   assert.deepEqual(
     calls,
     [],
     'invalid immutable identity and aliases never reach control authority',
   );
-  assert.equal(
-    labelled(stage, 'Connect'),
-    undefined,
-    'an invalid identity offers no endpoint action',
-  );
+  assert.ok(labelled(stage, 'Connect'), 'the inspected valid container offers its endpoint action');
 
-  chooseContainer(stage, 'b'.repeat(64));
   invoke(stage, 'Connect');
   await settled();
   assert.deepEqual(calls, [], 'duplicate aliases never reach control authority');
@@ -5530,7 +5540,7 @@ test('network connect validates aliases, exposes progress, success, bounded fail
     ),
   );
 
-  change(stage, 'Endpoint aliases (comma-separated, optional)', 'database.internal, database_2');
+  change(stage, 'Aliases, comma-separated (optional)', 'database.internal, database_2');
   invoke(stage, 'Connect');
   await settled();
   assert.ok(labelled(stage, 'Connecting immutable endpoint…'));
@@ -5655,11 +5665,16 @@ test('disconnect consent snapshots immutable identities and can be cancelled wit
       containers: containerResource(first, second),
     }),
   );
+  invoke(stage, 'Inspect');
+  await settled();
+  await settled();
   chooseContainer(stage, first);
+  await settled();
   invoke(stage, 'Disconnect');
   assert.ok(labelled(stage, `Disconnect immutable container ${first} from network ${network}?`));
   const staleConfirm = labelled(stage, 'Confirm disconnect').SetProp.id;
   chooseContainer(stage, second);
+  await settled();
   stage.surface.dispatch({
     trigger: 'Invoke',
     node: staleConfirm,

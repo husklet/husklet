@@ -1079,10 +1079,7 @@ test(
         requests.some(
           (request) =>
             request.call === 'interface_render_at' &&
-            request.with.frame.patches.some(
-              (patch) =>
-                patch.SetProp?.value?.Text === 'Choose a container by name and immutable ID',
-            ),
+            request.with.frame.patches.some((patch) => patch.SetProp?.value?.Text === 'private'),
         ),
       );
       peer.write(
@@ -1117,6 +1114,20 @@ test(
         name: 'socket-net',
       });
       peer.write(
+        encode({ channel: 81, kind: KIND.event, payload: invocation(requests, 'Inspect') }),
+      );
+      await until(() => calls.includes('network_inspect'));
+      await until(() =>
+        requests.some(
+          (request) =>
+            request.call === 'interface_render_at' &&
+            request.with.frame.patches.some(
+              (patch) =>
+                patch.SetProp?.value?.Text === 'Choose a container by name and immutable ID',
+            ),
+        ),
+      );
+      peer.write(
         encode({
           channel: 38,
           kind: KIND.event,
@@ -1127,13 +1138,22 @@ test(
           ),
         }),
       );
+      await until(() =>
+        requests.some(
+          (request) =>
+            request.call === 'interface_render_at' &&
+            request.with.frame.patches.some(
+              (patch) => patch.SetProp?.value?.Text === 'Aliases, comma-separated (optional)',
+            ),
+        ),
+      );
       peer.write(
         encode({
           channel: 39,
           kind: KIND.event,
           payload: changeInvocation(
             requests,
-            'Endpoint aliases (comma-separated, optional)',
+            'Aliases, comma-separated (optional)',
             'database.internal, database_2',
           ),
         }),
