@@ -1821,7 +1821,7 @@ fn all_calls() -> Vec<(Request, Capability)> {
         ),
         (
             Request::TerminalFocusPane { slot: "s1".into() },
-            Capability::TerminalLayoutControl,
+            Capability::TerminalFocus,
         ),
         (
             Request::TerminalFocusPaneObserved {
@@ -1829,7 +1829,7 @@ fn all_calls() -> Vec<(Request, Capability)> {
                 generation: 0,
                 revision: 1,
             },
-            Capability::TerminalLayoutControl,
+            Capability::TerminalFocus,
         ),
         (
             Request::TerminalRetitlePaneObserved {
@@ -2262,6 +2262,21 @@ fn pane_titles_are_utf8_bounded_and_refused_before_terminal_authority() {
         Ok(Reply::Done)
     );
     assert_eq!(host.ledger.reached(), ["terminal.retitle"]);
+}
+
+#[test]
+fn terminal_focus_grant_cannot_mutate_layout() {
+    let host = Host::new();
+    let mut session = session(&[Capability::TerminalFocus], &[]);
+    assert!(session
+        .dispatch(&Request::TerminalFocusPane { slot: "s1".into() }, &services(&host))
+        .is_ok());
+    assert!(host.ledger.reached().is_empty());
+    assert!(matches!(
+        session.dispatch(&Request::TerminalClosePane { slot: "s1".into() }, &services(&host)),
+        Err(Failure::Denied { capability, .. }) if capability == "terminals:layout-control"
+    ));
+    assert!(host.ledger.reached().is_empty());
 }
 
 #[test]

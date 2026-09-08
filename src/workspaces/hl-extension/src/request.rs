@@ -590,6 +590,7 @@ impl Request {
             Self::TerminalTabs | Self::TerminalTopology => Capability::TerminalRead,
             Self::PaneList => Capability::PaneObserve,
             Self::TerminalWritePane { .. } => Capability::TerminalInput,
+            Self::TerminalFocusPane { .. } | Self::TerminalFocusPaneObserved { .. } => Capability::TerminalFocus,
             Self::TerminalSpawn { .. } | Self::TerminalSpawnObserved { .. } => Capability::TerminalProcessControl,
             Self::TerminalOpenTab { .. }
             | Self::TerminalPinTab { .. }
@@ -599,8 +600,6 @@ impl Request {
             | Self::TerminalResizeGridObserved { .. }
             | Self::TerminalClosePane { .. }
             | Self::TerminalClosePaneObserved { .. }
-            | Self::TerminalFocusPane { .. }
-            | Self::TerminalFocusPaneObserved { .. }
             | Self::TerminalRetitlePane { .. }
             | Self::TerminalRetitlePaneObserved { .. }
             | Self::TerminalRatio { .. }
@@ -959,7 +958,6 @@ mod tests {
                 generation: 2,
                 revision: 3,
             },
-            Request::TerminalFocusPane { slot: "1".into() },
             Request::TerminalRetitlePane {
                 slot: "1".into(),
                 title: "Build logs".into(),
@@ -977,6 +975,10 @@ mod tests {
         ] {
             assert_eq!(request.capability(), Capability::TerminalLayoutControl, "{request:?}");
         }
+        assert_eq!(
+            Request::TerminalFocusPane { slot: "1".into() }.capability(),
+            Capability::TerminalFocus
+        );
         assert_eq!(
             Request::InterfaceSplit {
                 slot: "1".into(),

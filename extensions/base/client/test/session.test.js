@@ -4450,7 +4450,7 @@ test('real Unix retitleAndWait arms before CAS and verifies exact title and revi
   }
 });
 
-test('real Unix focusAndWait arms before CAS and verifies exact focused pane identity', async () => {
+test('real Unix focusAndWait uses the least-privilege focus grant and verifies exact identity', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-focus-wait-'));
   const socketPath = path.join(directory, 'host.sock');
   const calls = [];
@@ -4513,7 +4513,7 @@ test('real Unix focusAndWait arms before CAS and verifies exact focused pane ide
         payload: {
           protocol: 1,
           peer: 'focus-wait',
-          granted: ['panes:observe', 'terminals:layout-control'],
+          granted: ['panes:observe', 'terminals:focus'],
         },
       }),
     );

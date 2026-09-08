@@ -133,8 +133,8 @@ order; the JavaScript client's checks are never treated as a security boundary.
 - `host.terminal.resizeGridObserved(...)` — `terminal_resize_grid_observed`, requires `terminals:layout-control`.
 - `host.terminal.close(...)` — `terminal_close_pane`, requires `terminals:layout-control`.
 - `host.terminal.closeObserved(...)` — `terminal_close_pane_observed`, requires `terminals:layout-control`.
-- `host.terminal.focus(...)` — `terminal_focus_pane`, requires `terminals:layout-control`.
-- `host.terminal.focusObserved(...)` — `terminal_focus_pane_observed`, requires `terminals:layout-control`.
+- `host.terminal.focus(...)` — `terminal_focus_pane`, requires `terminals:focus`.
+- `host.terminal.focusObserved(...)` — `terminal_focus_pane_observed`, requires `terminals:focus`.
 - `host.terminal.retitle(...)` — `terminal_retitle_pane`, requires `terminals:layout-control`.
 - `host.terminal.retitleObserved(...)` — `terminal_retitle_pane_observed`, requires `terminals:layout-control`.
 - `host.terminal.ratio(...)` — `terminal_ratio`, requires `terminals:layout-control`.
@@ -150,7 +150,7 @@ order; the JavaScript client's checks are never treated as a security boundary.
 - `host.terminal.splitAndWait(...)` — arms pane changes before a generation/revision-bound split and verifies the returned child slot from bounded inventory; requires `panes:observe`, `terminals:layout-control`, and `terminals:process-control`.
 - `host.terminal.closeAndWait(...)` — arms pane changes before a generation/revision-bound close and proves absence only from a complete pane inventory; requires `panes:observe`, `terminals:layout-control`, and `terminals:process-control`.
 - `host.terminal.retitleAndWait(...)` — arms pane changes before a generation/revision-bound retitle and verifies the exact title at an advanced revision; requires `panes:observe` and `terminals:layout-control`.
-- `host.terminal.focusAndWait(...)` — arms pane changes before generation/revision-bound focus and verifies the same pane is focused at an advanced revision; requires `panes:observe` and `terminals:layout-control`.
+- `host.terminal.focusAndWait(...)` — arms pane changes before generation/revision-bound focus and verifies the same pane is focused at an advanced revision; requires `panes:observe` and the least-privilege `terminals:focus` grant, which cannot close or rearrange panes.
 - `host.terminal.writeAndWait(...)` — arms and reads the exact terminal screen cursor before writing bounded bytes, then returns a later bounded screen revision; requires `panes:observe`, `terminals:output`, and `terminals:input`.
 - `host.terminal.writeObservedAndWait(...)` — the snapshot-bound form of `writeAndWait`: it accepts a previously read `PaneText` directly, rejects stale authority, follows pane-generation replacement, and supports `AbortSignal` cancellation; requires `panes:observe`, `terminals:output`, and `terminals:input`.
 - `host.terminal.writeObservedAndWaitForText(...)` — writes against an inspected terminal cursor, then returns either terminal text or bounded semantic XML when the slot is replaced by a surface; requires `panes:observe`, `terminals:output`, `terminals:input`, and semantic-read authority for a surface replacement.

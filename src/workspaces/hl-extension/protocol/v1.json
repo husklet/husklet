@@ -122,6 +122,11 @@
     {
       "executes": false,
       "mutates": true,
+      "wire": "terminals:focus"
+    },
+    {
+      "executes": false,
+      "mutates": true,
       "wire": "terminals:layout-control"
     },
     {
@@ -405,6 +410,12 @@
         },
         {
           "name": "terminals:input",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "terminals:focus",
           "payload": {
             "kind": "unit"
           }
@@ -8133,11 +8144,11 @@
       "request": "terminal_close_pane_observed"
     },
     {
-      "capability": "terminals:layout-control",
+      "capability": "terminals:focus",
       "request": "terminal_focus_pane"
     },
     {
-      "capability": "terminals:layout-control",
+      "capability": "terminals:focus",
       "request": "terminal_focus_pane_observed"
     },
     {
@@ -13388,7 +13399,7 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:ac55a3678e6ee077",
+  "source_fingerprint": "fnv1a64:4777de4a2403601e",
   "specification_version": 1,
   "topics": [
     {

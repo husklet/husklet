@@ -1,5 +1,5 @@
 // Generated from Rust hl-extension protocol/v1.json. Do not edit.
-// Protocol artifact fnv1a64:78546859f41575c0
+// Protocol artifact fnv1a64:c9a458f2731d89a2
 export const PROTOCOL_SPECIFICATION_VERSION = 1;
 export const PROTOCOL_VERSION = 1;
 export const PROTOCOL_BOUNDS = Object.freeze({
@@ -121,6 +121,11 @@ export const PROTOCOL_CAPABILITIES = Object.freeze([
     "executes": true,
     "mutates": true,
     "wire": "terminals:input"
+  },
+  {
+    "executes": false,
+    "mutates": true,
+    "wire": "terminals:focus"
   },
   {
     "executes": false,
@@ -502,8 +507,8 @@ export const PROTOCOL_REQUEST_CAPABILITIES = Object.freeze({
   "terminal_resize_grid_observed": "terminals:layout-control",
   "terminal_close_pane": "terminals:layout-control",
   "terminal_close_pane_observed": "terminals:layout-control",
-  "terminal_focus_pane": "terminals:layout-control",
-  "terminal_focus_pane_observed": "terminals:layout-control",
+  "terminal_focus_pane": "terminals:focus",
+  "terminal_focus_pane_observed": "terminals:focus",
   "terminal_retitle_pane": "terminals:layout-control",
   "terminal_retitle_pane_observed": "terminals:layout-control",
   "terminal_ratio": "terminals:layout-control",
@@ -730,6 +735,12 @@ const definitions = {
       },
       {
         "name": "terminals:input",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
+        "name": "terminals:focus",
         "payload": {
           "kind": "unit"
         }
