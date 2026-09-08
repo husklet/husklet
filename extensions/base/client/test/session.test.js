@@ -3276,6 +3276,24 @@ test('real Unix writeAndWait subscribes and reads before bytes, then returns adv
       'terminal_write_pane',
       'event_unsubscribe',
     ]);
+    calls.length = 0;
+    reads = 0;
+    const cancellation = new AbortController();
+    const cancelled = terminal.writeObservedAndWait(screen(7, ['$ ']), [3], {
+      lines: 20,
+      timeoutMs: 1_000,
+      signal: cancellation.signal,
+    });
+    setTimeout(() => cancellation.abort('agent stopped'), 5);
+    await assert.rejects(cancelled, (error) => error?.name === 'AbortError');
+    assert.deepEqual(calls, [
+      'event_subscribe',
+      'terminal_read_pane',
+      'terminal_write_pane',
+      'event_unsubscribe',
+    ]);
+    assert.equal((await terminal.read(slot, 20)).revision, 8);
+    assert.equal(calls.at(-1), 'terminal_read_pane', 'the session remains usable after cancellation');
     await session.close();
   } finally {
     for (const connection of connections) connection.destroy();

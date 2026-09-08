@@ -92,7 +92,7 @@ function respond(socket, frame, payload) {
   socket.write(encode({ channel: frame.channel, kind: KIND.response, payload }));
 }
 
-test('LLM terminal agent observes, writes, and waits over the extension socket', async () => {
+test('LLM terminal agent observes, writes, and follows replacement over the extension socket', async () => {
   let reads = 0;
   const pane = {
     slot: 'term',
@@ -119,12 +119,13 @@ test('LLM terminal agent observes, writes, and waits over the extension socket',
         respond(socket, frame, { reply: 'done' });
       else if (call === 'terminal_read_pane') {
         reads += 1;
-        const revision = reads < 3 ? 8 : 9;
+        const generation = reads < 3 ? 4 : 5;
+        const revision = reads < 3 ? 8 : 1;
         respond(socket, frame, {
           reply: 'text',
           with: {
             slot: 'term',
-            generation: 4,
+            generation,
             revision,
             columns: 80,
             rows: 24,
@@ -164,10 +165,40 @@ test('LLM terminal agent observes, writes, and waits over the extension socket',
       }
     },
   );
-  assert.equal(run.result.before, '$ \n');
-  assert.match(run.result.after, /healthy/);
+  assert.equal(run.result.selected.kind, 'terminal');
+  assert.equal(run.result.selected.before, '$ \n');
+  assert.match(run.result.selected.after, /healthy/);
+  assert.equal(run.result.selected.replacement, true);
   assert.equal(run.result.incomplete, false);
   assert.match(run.result.context.find(({ kind }) => kind === 'ui').text, /Deployment healthy/);
+});
+
+test('LLM terminal agent reads a selected semantic surface without terminal input', async () => {
+  const pane = {
+    slot: 'dashboard', generation: 2, revision: 3, kind: 'surface', provider: null,
+    tab: 'tab', title: 'Dashboard', focused: true,
+  };
+  const run = await scenario(
+    'llm-terminal-agent.ts',
+    { slot: 'dashboard', prompt: 'explain status' },
+    (socket, frame) => {
+      const call = frame.payload.call;
+      if (call === 'pane_list')
+        respond(socket, frame, { reply: 'panes', with: { panes: [pane], truncated: false } });
+      else if (call === 'pane_semantic_read')
+        respond(socket, frame, {
+          reply: 'semantics',
+          with: {
+            slot: 'dashboard', generation: 2, revision: 3,
+            root: { id: 0, role: 'status', label: 'Deployment healthy', value: null, disabled: false, destructive: false, actions: [], children: [] },
+            truncated: false,
+          },
+        });
+    },
+  );
+  assert.equal(run.result.selected.kind, 'ui');
+  assert.match(run.result.selected.text, /Deployment healthy/);
+  assert.equal(run.calls.includes('terminal_write_pane'), false);
 });
 
 test('embeddings indexer reconciles, recursively discovers, streams, and CAS-updates', async () => {

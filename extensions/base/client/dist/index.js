@@ -1630,7 +1630,7 @@ export function workspace(session, { signal } = {}) {
             timer = setTimeout(() => finish({ changed: false, after }), timeoutMs);
         });
     };
-    api.terminal.writeAndWait = async (slot, generation, revision, input, { lines, timeoutMs = 30_000 } = {}) => {
+    api.terminal.writeAndWait = async (slot, generation, revision, input, { lines, timeoutMs = 30_000, signal } = {}) => {
         if (typeof slot !== 'string' || slot.length === 0)
             throw new TypeError('terminal input wait requires a nonempty slot');
         if (!Number.isSafeInteger(generation) ||
@@ -1646,31 +1646,39 @@ export function workspace(session, { signal } = {}) {
         if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
             throw new RangeError('terminal input wait timeout must be between 1 and 30000ms');
         }
+        if (signal?.aborted)
+            throw outputAbort(signal);
+        const scoped = signal ? api.withSignal(signal) : api;
         let changed;
         const observed = new Promise((resolve) => {
             changed = resolve;
         });
-        const stop = await api.watchPaneChanges((change) => {
+        const stop = await scoped.watchPaneChanges((change) => {
             if (change.slot === slot &&
                 (change.generation !== generation || change.revision !== revision))
                 changed(change);
         });
         let timer;
+        let abort;
         try {
-            const before = await api.terminal.read(slot, lines);
+            const before = await scoped.terminal.read(slot, lines);
             if (before.generation !== generation || before.revision !== revision) {
                 throw new Error('terminal screen cursor changed before input authority');
             }
-            await api.terminal.writeInput(slot, generation, revision, contents);
+            await scoped.terminal.writeInput(slot, generation, revision, contents);
             const change = await Promise.race([
                 observed,
                 new Promise((resolve) => {
                     timer = setTimeout(() => resolve(null), timeoutMs);
                 }),
+                new Promise((_, reject) => {
+                    abort = () => reject(outputAbort(signal));
+                    signal?.addEventListener('abort', abort, { once: true });
+                }),
             ]);
             if (change === null)
                 return { changed: false, before };
-            const after = await api.terminal.read(slot, lines);
+            const after = await scoped.terminal.read(slot, lines);
             if (after.generation === generation && after.revision === revision) {
                 throw new Error('pane change did not advance the terminal screen cursor');
             }
@@ -1678,8 +1686,19 @@ export function workspace(session, { signal } = {}) {
         }
         finally {
             clearTimeout(timer);
+            if (abort)
+                signal?.removeEventListener('abort', abort);
             await stop();
         }
+    };
+    api.terminal.writeObservedAndWait = (before, input, options) => {
+        if (!before ||
+            typeof before.slot !== 'string' ||
+            !Number.isSafeInteger(before.generation) ||
+            !Number.isSafeInteger(before.revision)) {
+            throw new TypeError('observed terminal input requires a snapshot with an exact cursor');
+        }
+        return api.terminal.writeAndWait(before.slot, before.generation, before.revision, input, options);
     };
     api.terminal.spawnAndWait = async (slot, generation, revision, command, { lines, timeoutMs = 30_000 } = {}) => {
         if (typeof slot !== 'string' || slot.length === 0)

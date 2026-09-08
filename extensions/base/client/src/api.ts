@@ -1167,7 +1167,15 @@ export interface WorkspaceApi {
       generation: number,
       revision: number,
       input: string | Iterable<number>,
-      options?: { lines?: number; timeoutMs?: number },
+      options?: { lines?: number; timeoutMs?: number; signal?: AbortSignal },
+    ): Promise<
+      { changed: true; before: PaneText; after: PaneText } | { changed: false; before: PaneText }
+    >;
+    /** Write against the exact bounded terminal snapshot already inspected by the caller. */
+    writeObservedAndWait(
+      before: PaneText,
+      input: string | Iterable<number>,
+      options?: { lines?: number; timeoutMs?: number; signal?: AbortSignal },
     ): Promise<
       { changed: true; before: PaneText; after: PaneText } | { changed: false; before: PaneText }
     >;

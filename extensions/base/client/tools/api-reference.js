@@ -64,14 +64,16 @@ for (const [wire, route] of Object.entries(protocolSurface.requests)) {
   assert(group, `no documentation group for ${wire}`);
   groups
     .get(group)
-    .push(wire === 'notification_publish'
-      ? '- `host.notifications.publish(...)` — queues a bounded, extension-attributed OS notification; the reply acknowledges host acceptance, not platform delivery; requires `notifications:publish`.'
-      : `- \`host.${route.api}(...)\` — \`${wire}\`, requires \`${requestCapability(wire)}\`.`);
+    .push(
+      wire === 'notification_publish'
+        ? '- `host.notifications.publish(...)` — queues a bounded, extension-attributed OS notification; the reply acknowledges host acceptance, not platform delivery; requires `notifications:publish`.'
+        : `- \`host.${route.api}(...)\` — \`${wire}\`, requires \`${requestCapability(wire)}\`.`,
+    );
 }
 groups
   .get('Terminal and panes')
   .push(
-    '- Process-lifetime layout operations are compound authority: opening or splitting a pane, closing a pane, and switching its occupant require both `terminals:layout-control` and `terminals:process-control`, even when the protocol table names the operation\'s primary capability.',
+    "- Process-lifetime layout operations are compound authority: opening or splitting a pane, closing a pane, and switching its occupant require both `terminals:layout-control` and `terminals:process-control`, even when the protocol table names the operation's primary capability.",
     '- `host.terminal.toText(...)` — discovers a pane and returns visible terminal screen text or bounded semantic XML; requires `panes:observe` and the corresponding `terminals:output` or `panes:semantic-read` grant.',
     '- `host.terminal.readAll(...)` — discovers panes once and converts each to terminal transcript or bounded semantic XML, reports incomplete discovery, and refuses cursor races; requires `panes:observe`, `terminals:output`, and `panes:semantic-read` for mixed workspaces.',
     '- `host.terminal.waitForText(...)` — arms pane-change observation, ignores the unchanged cursor, then returns a fresh bounded text projection; requires `panes:observe` and the corresponding read grant.',
@@ -82,6 +84,7 @@ groups
     '- `host.terminal.retitleAndWait(...)` — arms pane changes before a generation/revision-bound retitle and verifies the exact title at an advanced revision; requires `panes:observe` and `terminals:layout-control`.',
     '- `host.terminal.focusAndWait(...)` — arms pane changes before generation/revision-bound focus and verifies the same pane is focused at an advanced revision; requires `panes:observe` and `terminals:layout-control`.',
     '- `host.terminal.writeAndWait(...)` — arms and reads the exact terminal screen cursor before writing bounded bytes, then returns a later bounded screen revision; requires `panes:observe`, `terminals:output`, and `terminals:input`.',
+    '- `host.terminal.writeObservedAndWait(...)` — the snapshot-bound form of `writeAndWait`: it accepts a previously read `PaneText` directly, rejects stale authority, follows pane-generation replacement, and supports `AbortSignal` cancellation; requires `panes:observe`, `terminals:output`, and `terminals:input`.',
     '- `host.terminal.spawnAndWait(...)` — arms and reads the exact terminal screen cursor before a generation/revision-bound argv spawn, then returns a later bounded screen revision; requires `panes:observe`, `terminals:output`, and `terminals:process-control`.',
     '- `host.terminal.resizeGridAndWait(...)` — arms and reads the exact terminal screen cursor before a generation/revision-bound resize, then verifies the requested columns and rows on a later screen revision; requires `panes:observe`, `terminals:output`, and `terminals:layout-control`.',
     '- `host.terminal.ratioAndWait(...)` — arms pane observation before a generation/revision-bound ratio change, then verifies the advanced pane and resulting topology (allowing host pixel quantization); requires `panes:observe`, `terminals:read`, and `terminals:layout-control`.',
