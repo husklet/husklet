@@ -635,7 +635,7 @@ impl Execution {
     pub const fn translit(self, x86_64_guest: bool) -> bool {
         x86_64_guest
             && cfg!(all(target_os = "linux", target_arch = "x86_64"))
-            && matches!(self, Self::Auto | Self::Translit | Self::Translated { .. })
+            && matches!(self, Self::Translit | Self::Translated { .. })
     }
 }
 

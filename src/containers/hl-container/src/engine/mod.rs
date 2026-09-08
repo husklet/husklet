@@ -479,10 +479,10 @@ mod tests {
     }
 
     #[test]
-    fn execution_policy_selects_translation_only_for_auto_and_explicit_translit() {
+    fn execution_policy_leaves_auto_to_runtime_and_forces_explicit_backends() {
         let supported = cfg!(all(target_os = "linux", target_arch = "x86_64"));
         for (execution, selected) in [
-            (crate::Execution::Auto, supported),
+            (crate::Execution::Auto, false),
             (crate::Execution::Translit, supported),
             (crate::Execution::translated(false), supported),
             (crate::Execution::Interpreted, false),
@@ -495,6 +495,10 @@ mod tests {
             assert_eq!(spec.plan.options.get("HL_EXECUTION_BACKEND"), None);
             assert_eq!(spec.plan.options.get("HL_TRANSLIT"), selected.then_some("1"));
         }
+        let mut interpreted = launch();
+        interpreted.execution = crate::Execution::Interpreted;
+        let spec = Spec::try_from(&interpreted).unwrap();
+        assert_eq!(spec.plan.options.get("HL_NATIVE_SUPERVISED"), Some("off"));
         let launch = launch();
         let spec = Spec::try_from(&launch).unwrap();
         assert_eq!(spec.plan.options.get("HL_TRANSLIT"), None);

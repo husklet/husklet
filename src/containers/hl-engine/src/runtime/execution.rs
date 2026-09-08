@@ -674,6 +674,22 @@ fn native_selection(
     }
 }
 
+fn apply_auto_translation_fallback(
+    request: NativeSupervisedRequest,
+    isa: crate::activation::GuestIsa,
+    native_supervised: bool,
+    plan: &mut crate::launcher::plan::RuntimePlan,
+) -> Result<(), crate::options::OptionError> {
+    if request == NativeSupervisedRequest::Auto
+        && !native_supervised
+        && isa == crate::activation::GuestIsa::X86_64
+        && cfg!(all(target_os = "linux", target_arch = "x86_64"))
+    {
+        plan.options.set("HL_TRANSLIT", "1", true)?;
+    }
+    Ok(())
+}
+
 fn native_auto_eligibility(
     plan: &crate::launcher::plan::RuntimePlan,
     host: NativeHostCapabilities,
@@ -849,6 +865,47 @@ mod native_eligibility_tests {
         );
         assert_eq!(probes.get(), 0, "explicit OFF performed host/path preflight");
         assert_eq!(native_selection(NativeSupervisedRequest::Off, eligibility), Ok(false));
+
+        let mut fallback = plan();
+        apply_auto_translation_fallback(
+            NativeSupervisedRequest::Auto,
+            crate::activation::GuestIsa::X86_64,
+            false,
+            &mut fallback,
+        )
+        .unwrap();
+        assert_eq!(
+            fallback.options.get("HL_TRANSLIT"),
+            cfg!(all(target_os = "linux", target_arch = "x86_64")).then_some("1")
+        );
+        let mut selected = plan();
+        apply_auto_translation_fallback(
+            NativeSupervisedRequest::Auto,
+            crate::activation::GuestIsa::X86_64,
+            true,
+            &mut selected,
+        )
+        .unwrap();
+        assert_eq!(selected.options.get("HL_TRANSLIT"), None);
+        let mut forced_interpreter = plan();
+        apply_auto_translation_fallback(
+            NativeSupervisedRequest::Off,
+            crate::activation::GuestIsa::X86_64,
+            false,
+            &mut forced_interpreter,
+        )
+        .unwrap();
+        assert_eq!(forced_interpreter.options.get("HL_TRANSLIT"), None);
+        let mut forced_translator = plan();
+        forced_translator.options.set("HL_TRANSLIT", "1", true).unwrap();
+        apply_auto_translation_fallback(
+            NativeSupervisedRequest::Auto,
+            crate::activation::GuestIsa::X86_64,
+            false,
+            &mut forced_translator,
+        )
+        .unwrap();
+        assert_eq!(forced_translator.options.get("HL_TRANSLIT"), Some("1"));
     }
 
     #[test]
@@ -1271,6 +1328,9 @@ impl RuntimeFactory for ProductionFactory {
         // projection. AUTO cannot prove that future transaction without opening authority-bearing FDs,
         // so it conservatively stays translated; explicit ON retains the existing secure late validation.
         let native_supervised = native_selection(requested, eligibility)?;
+        let mut plan = request.plan.clone();
+        apply_auto_translation_fallback(requested, request.isa, native_supervised, &mut plan)
+            .map_err(|_| CompositionError::RuntimeConstruction)?;
         #[cfg(unix)]
         let terminal = request
             .services
@@ -1326,7 +1386,7 @@ impl RuntimeFactory for ProductionFactory {
         };
         Ok(ProductionMachine {
             isa: request.isa,
-            plan: request.plan.clone(),
+            plan,
             native_supervised,
             #[cfg(unix)]
             terminal,

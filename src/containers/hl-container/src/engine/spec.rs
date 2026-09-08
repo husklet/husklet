@@ -37,6 +37,9 @@ impl TryFrom<&ProcessConfig> for Spec {
             launch.execution.translit(matches!(launch.guest, crate::Guest::X86_64)),
         )?;
         Self::flag(&mut options, "HL_NATIVE_SUPERVISED", launch.execution.is_native())?;
+        if launch.execution == crate::Execution::Interpreted {
+            Self::set(&mut options, "HL_NATIVE_SUPERVISED", "off")?;
+        }
         #[cfg(feature = "native-test-hooks")]
         Self::flag(
             &mut options,
