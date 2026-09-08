@@ -243,33 +243,36 @@ export function Networks({
         <Text label={`Created network ${creation.name}.`} color="positive" wrap />
       ) : null}
       {removalNotice ? <Text label={removalNotice} color="positive" wrap /> : null}
-      <Column gap={1} width={RESOURCE_WIDTH}>
-        <Text label="Container attachment" />
-        <Text label="Required · complete immutable container ID" color="text-dim" />
-        <Entry
-          value={container}
-          placeholder="Complete container ID"
-          enabled={operation.state !== 'loading'}
-          onChange={(event) => {
-            setContainer(String(event.value ?? ''));
-            setOperation({ state: 'idle', request: null, error: null });
-            setDisconnectRequest(null);
-          }}
-        />
-        <Row gap={1} align="center">
-          <Text label="Optional aliases" color="text-dim" />
+      <Card grow={false} justify="start" width={RESOURCE_WIDTH} variant="outline">
+        <CardContent gap={1}>
+          <Text label="Container attachment" />
+          <Text label="Required · complete immutable container ID" color="text-dim" />
           <Entry
-            value={aliases}
-            placeholder="Endpoint aliases (comma-separated, optional)"
-            width={{ chars: 44 }}
+            value={container}
+            placeholder="Complete container ID"
+            width={{ chars: 58 }}
             enabled={operation.state !== 'loading'}
             onChange={(event) => {
-              setAliases(String(event.value ?? ''));
+              setContainer(String(event.value ?? ''));
               setOperation({ state: 'idle', request: null, error: null });
+              setDisconnectRequest(null);
             }}
           />
-        </Row>
-      </Column>
+          <Row gap={1} align="center" justify="start">
+            <Text label="Optional aliases" color="text-dim" />
+            <Entry
+              value={aliases}
+              placeholder="Endpoint aliases (comma-separated, optional)"
+              width={{ chars: 38 }}
+              enabled={operation.state !== 'loading'}
+              onChange={(event) => {
+                setAliases(String(event.value ?? ''));
+                setOperation({ state: 'idle', request: null, error: null });
+              }}
+            />
+          </Row>
+        </CardContent>
+      </Card>
       <OperationStatus operation={operation} onRetry={attach} />
       <ErrorText error={error} />
       <ResourceState

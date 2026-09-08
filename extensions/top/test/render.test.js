@@ -2719,6 +2719,8 @@ test('volume and network panels render bounded real inventories and controls', (
     'only the custom network offers removal',
   );
   const networkStage = stageFromFrame(networkFrame);
+  assert.ok(ancestorProperty(networkStage, 'Container attachment', 'Card', 'Width'));
+  assert.equal(ancestorProperty(networkStage, 'Container attachment', 'Card', 'Grow')?.Number, 0);
   assert.ok(ancestorProperty(networkStage, 'private', 'Card', 'Width'));
   assert.equal(ancestorProperty(networkStage, 'private', 'Card', 'Grow')?.Number, 0);
   assert.equal(ancestorProperty(networkStage, 'private', 'Card', 'Justify')?.Align, 'Start');
