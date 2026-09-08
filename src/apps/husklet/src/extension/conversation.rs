@@ -1968,7 +1968,7 @@ mod tests {
                 Grant::new([
                     Capability::ContainerRead,
                     Capability::TerminalOutput,
-                    Capability::TerminalControl,
+                    Capability::TerminalLayoutControl,
                 ]),
                 Vec::new(),
             );
@@ -4018,7 +4018,7 @@ mod tests {
         );
         assert!(matches!(
             codec::read_failure(&denied),
-            Ok(Failure::Denied { capability, .. }) if capability == Capability::TerminalControl.as_str()
+            Ok(Failure::Denied { capability, .. }) if capability == Capability::TerminalInput.as_str()
         ));
         assert!(!denied.payload.windows(secret.len()).any(|window| window == secret));
         assert!(ledger.reached().is_empty(), "denied input reached terminal inspection");

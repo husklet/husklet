@@ -1288,10 +1288,23 @@ impl Session {
         if let Request::TerminalReadPane { slot, lines } = request {
             return self.text(slot, *lines, services);
         }
-        let port = self
-            .peer
-            .authority()
-            .port(Capability::TerminalControl, services.terminal)?;
+        // Compound operations must pass every check before the host port is
+        // obtained: opening/closing changes layout and process lifetime, while
+        // occupant switching replaces what runs in an existing slot.
+        if matches!(
+            request,
+            Request::TerminalOpenTab { .. }
+                | Request::TerminalSplit { .. }
+                | Request::TerminalSplitObserved { .. }
+                | Request::TerminalClosePane { .. }
+                | Request::TerminalClosePaneObserved { .. }
+                | Request::TerminalSwitchOccupant { .. }
+                | Request::TerminalSwitchOccupantObserved { .. }
+        ) {
+            self.peer.authority().permit(Capability::TerminalLayoutControl)?;
+            self.peer.authority().permit(Capability::TerminalProcessControl)?;
+        }
+        let port = self.peer.authority().port(request.capability(), services.terminal)?;
         Self::command(request, port.port())
     }
 

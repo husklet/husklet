@@ -619,10 +619,11 @@ impl Installation {
 /// What an install prompt has to say about a grant.
 ///
 /// The execution line is the one that matters. An extension holding
-/// [`Capability::ContainerControl`] or [`Capability::TerminalControl`] can run
-/// programs of its choosing inside the workspace, and the isolation on offer is
-/// the workspace boundary, not a sandbox around the extension. A prompt that
-/// leaves that implicit is telling a person something untrue by omission.
+/// [`Capability::ContainerControl`], [`Capability::TerminalInput`], or
+/// [`Capability::TerminalProcessControl`] can run programs of its choosing
+/// inside the workspace, and the isolation on offer is the workspace boundary,
+/// not a sandbox around the extension. A prompt that leaves that implicit is
+/// telling a person something untrue by omission.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Summary {
     /// Whether the grant amounts to running code inside the workspace.
@@ -887,9 +888,11 @@ mod tests {
 
     #[test]
     fn the_summary_names_execution_plainly() {
-        let summary = Summary::of(&Grant::new([Capability::TerminalControl]));
-        assert!(summary.execution);
-        assert!(summary.to_string().contains(Summary::EXECUTION_NOTICE));
+        for capability in [Capability::TerminalInput, Capability::TerminalProcessControl] {
+            let summary = Summary::of(&Grant::new([capability]));
+            assert!(summary.execution);
+            assert!(summary.to_string().contains(Summary::EXECUTION_NOTICE));
+        }
 
         let reading = Summary::of(&Grant::new([Capability::ContainerRead]));
         assert!(!reading.execution);

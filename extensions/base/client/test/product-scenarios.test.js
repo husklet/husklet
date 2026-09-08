@@ -13,7 +13,9 @@ const reactExamples = path.resolve(examples, '../../react/examples');
 const capabilities = [
   'panes:observe',
   'terminals:output',
-  'terminals:control',
+  'terminals:input',
+  'terminals:layout-control',
+  'terminals:process-control',
   'filesystem:read',
   'filesystem:write',
   'state:read',

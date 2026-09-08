@@ -1064,7 +1064,7 @@ test('extension image entry submits from the keyboard and consent explains reque
   await settled();
   assert.deepEqual(calls, [['inspect', 'registry.example/assistant:1.2']]);
   assert.ok(labelled(stage, 'View containers and processes (containers:read)'));
-  assert.ok(labelled(stage, 'Read and write terminal text (terminals:output)'));
+  assert.ok(labelled(stage, 'Read terminal text (terminals:output)'));
   assert.ok(labelled(stage, 'Review decision · 0/2 selected'));
   assert.ok(labelled(stage, 'Exact grants · 0/2 selected'));
   expand(stage, 'Exact grants · 0/2 selected');

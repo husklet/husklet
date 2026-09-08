@@ -546,13 +546,12 @@ impl Request {
             | Self::NetworkDisconnect { .. } => Capability::NetworkWrite,
             Self::TerminalTabs | Self::TerminalTopology => Capability::TerminalRead,
             Self::PaneList => Capability::PaneObserve,
+            Self::TerminalWritePane { .. } => Capability::TerminalInput,
+            Self::TerminalSpawn { .. } | Self::TerminalSpawnObserved { .. } => Capability::TerminalProcessControl,
             Self::TerminalOpenTab { .. }
             | Self::TerminalPinTab { .. }
             | Self::TerminalSplit { .. }
             | Self::TerminalSplitObserved { .. }
-            | Self::TerminalSpawn { .. }
-            | Self::TerminalSpawnObserved { .. }
-            | Self::TerminalWritePane { .. }
             | Self::TerminalResizeGrid { .. }
             | Self::TerminalResizeGridObserved { .. }
             | Self::TerminalClosePane { .. }
@@ -562,9 +561,10 @@ impl Request {
             | Self::TerminalRetitlePane { .. }
             | Self::TerminalRetitlePaneObserved { .. }
             | Self::TerminalRatio { .. }
-            | Self::TerminalRatioObserved { .. }
-            | Self::TerminalSwitchOccupant { .. }
-            | Self::TerminalSwitchOccupantObserved { .. } => Capability::TerminalControl,
+            | Self::TerminalRatioObserved { .. } => Capability::TerminalLayoutControl,
+            Self::TerminalSwitchOccupant { .. } | Self::TerminalSwitchOccupantObserved { .. } => {
+                Capability::TerminalProcessControl
+            }
             // Reading what a shell printed is what `TerminalOutput` was separated
             // out for: listing panes says a pane exists, this says what was typed
             // into it and what came back.
@@ -921,7 +921,7 @@ mod tests {
                 ratio: 0.5,
             },
         ] {
-            assert_eq!(request.capability(), Capability::TerminalControl, "{request:?}");
+            assert_eq!(request.capability(), Capability::TerminalLayoutControl, "{request:?}");
         }
         assert_eq!(
             Request::InterfaceSplit {

@@ -1060,7 +1060,7 @@ test('real Unix occupant switch arms before CAS and verifies provider inventory'
         payload: {
           protocol: 1,
           peer: 'switch-wait',
-          granted: ['panes:observe', 'terminals:control'],
+          granted: ['panes:observe', 'terminals:layout-control', 'terminals:process-control'],
         },
       }),
     );
@@ -2670,7 +2670,7 @@ test('real Unix splitAndWait arms before CAS, verifies the returned slot, and di
         payload: {
           protocol: 1,
           peer: 'split-wait',
-          granted: ['panes:observe', 'terminals:control'],
+          granted: ['panes:observe', 'terminals:layout-control'],
         },
       }),
     );
@@ -2793,7 +2793,7 @@ test('real Unix closeAndWait requires complete absence and disposes success and 
         payload: {
           protocol: 1,
           peer: 'close-wait',
-          granted: ['panes:observe', 'terminals:control'],
+          granted: ['panes:observe', 'terminals:layout-control'],
         },
       }),
     );
@@ -2899,7 +2899,7 @@ test('real Unix retitleAndWait arms before CAS and verifies exact title and revi
         payload: {
           protocol: 1,
           peer: 'retitle-wait',
-          granted: ['panes:observe', 'terminals:control'],
+          granted: ['panes:observe', 'terminals:layout-control'],
         },
       }),
     );
@@ -3005,7 +3005,7 @@ test('real Unix focusAndWait arms before CAS and verifies exact focused pane ide
         payload: {
           protocol: 1,
           peer: 'focus-wait',
-          granted: ['panes:observe', 'terminals:control'],
+          granted: ['panes:observe', 'terminals:layout-control'],
         },
       }),
     );
@@ -3117,7 +3117,7 @@ test('real Unix writeAndWait subscribes and reads before bytes, then returns adv
         payload: {
           protocol: 1,
           peer: 'write-wait',
-          granted: ['panes:observe', 'terminals:output', 'terminals:control'],
+          granted: ['panes:observe', 'terminals:output', 'terminals:input'],
         },
       }),
     );
@@ -3469,7 +3469,7 @@ test('real Unix spawnAndWait subscribes and reads before CAS argv, then returns 
         payload: {
           protocol: 1,
           peer: 'spawn-wait',
-          granted: ['panes:observe', 'terminals:output', 'terminals:control'],
+          granted: ['panes:observe', 'terminals:output', 'terminals:process-control'],
         },
       }),
     );
@@ -3593,7 +3593,7 @@ test('real Unix openTabAndWait arms before creation and verifies returned tab id
         payload: {
           protocol: 1,
           peer: 'open-tab-wait',
-          granted: ['panes:observe', 'terminals:control'],
+          granted: ['panes:observe', 'terminals:layout-control'],
         },
       }),
     );
@@ -3692,7 +3692,7 @@ test('real Unix openTabAndWait retains the created tab when inventory verificati
         payload: {
           protocol: 1,
           peer: 'open-tab-recovery',
-          granted: ['panes:observe', 'terminals:control'],
+          granted: ['panes:observe', 'terminals:layout-control'],
         },
       }),
     );
