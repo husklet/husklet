@@ -644,6 +644,11 @@ export class Session {
             this.#eventDelivery = this.#eventDelivery
                 .then(async () => {
                 for (const listener of listeners) {
+                    // A queued event belongs to this connection generation, but its
+                    // consumer may not run until an earlier asynchronous delivery
+                    // settles. Closure and synchronous disposal revoke that work.
+                    if (this.#closed || !this.#events.has(listener))
+                        continue;
                     try {
                         await listener(payload, frame.channel);
                     }

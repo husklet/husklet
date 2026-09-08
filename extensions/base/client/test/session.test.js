@@ -2045,6 +2045,54 @@ test('real Unix event credit waits for slow async consumers and serializes deliv
   }
 });
 
+test('real Unix half-close revokes queued event work from the old session generation', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-stale-event-generation-'));
+  const socketPath = path.join(directory, 'host.sock');
+  let peer;
+  const server = net.createServer((socket) => {
+    peer = socket;
+    socket.write(
+      encode({
+        channel: CONTROL,
+        kind: KIND.open,
+        payload: { protocol: 1, peer: 'stale_generation', granted: [] },
+      }),
+    );
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  const session = await connect({ path: socketPath, timeout: 1_000 });
+  const entered = [];
+  let release;
+  let reportEntered;
+  const firstEntered = new Promise((resolve) => { reportEntered = resolve; });
+  const dispose = session.onEvent(async (event) => {
+    entered.push(event.slot);
+    reportEntered();
+    await new Promise((resolve) => { release = resolve; });
+  });
+  try {
+    peer.write(Buffer.concat([
+      encode({ channel: 23, kind: KIND.event, payload: { pane_provider: 'one', slot: 'pane-1' } }),
+      encode({ channel: 23, kind: KIND.event, payload: { pane_provider: 'two', slot: 'pane-2' } }),
+    ]));
+    await Promise.race([
+      firstEntered,
+      new Promise((_, reject) => setTimeout(() => reject(new Error('first event timed out')), 200)),
+    ]);
+
+    dispose();
+    peer.end();
+    await session.closed;
+    release();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(entered, ['pane-1']);
+  } finally {
+    peer?.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('a mixed cross-surface event cannot masquerade as a pane selection over Unix framing', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-pane-selection-'));
   const socketPath = path.join(directory, 'host.sock');
