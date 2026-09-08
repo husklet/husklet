@@ -71,20 +71,7 @@ impl ExtensionManagement {
 impl ExtensionStore for ExtensionManagement {
     fn catalogue(&self) -> Result<ExtensionCatalogue, HostError> {
         Ok(ExtensionCatalogue {
-            entries: vec![ExtensionCatalogueEntry {
-                id: "storybook".into(),
-                title: "Component playground".into(),
-                description: "Explore extension components, large tables, terminals, diffs, and metrics.".into(),
-                reference: concat!(
-                    "ghcr.io/husklet/husklet/extension-storybook:",
-                    env!("CARGO_PKG_VERSION")
-                )
-                .into(),
-                publisher: "Husklet".into(),
-                source: "husklet:first-party/storybook".into(),
-                protocol: hl_extension::PROTOCOL,
-                architectures: vec![self.workspace.arch.as_str().into()],
-            }],
+            entries: first_party_catalogue(option_env!("HL_STORYBOOK_IMAGE"), self.workspace.arch.as_str()),
             complete: true,
         })
     }
@@ -240,6 +227,22 @@ fn reviewed_name(snapshot: AcquisitionSnapshot, revision: u64, image_digest: &st
     }
 }
 
+fn first_party_catalogue(reference: Option<&str>, architecture: &str) -> Vec<ExtensionCatalogueEntry> {
+    reference
+        .map(|reference| ExtensionCatalogueEntry {
+            id: "storybook".into(),
+            title: "Component playground".into(),
+            description: "Explore extension components, large tables, terminals, diffs, and metrics.".into(),
+            reference: reference.into(),
+            publisher: "Husklet".into(),
+            source: "husklet:first-party/storybook".into(),
+            protocol: hl_extension::PROTOCOL,
+            architectures: vec![architecture.into()],
+        })
+        .into_iter()
+        .collect()
+}
+
 fn acquisition_status(job: String, snapshot: AcquisitionSnapshot) -> ExtensionAcquisitionStatus {
     let reference = snapshot.reference;
     let (state, progress, candidate, error) = match snapshot.state {
@@ -332,18 +335,21 @@ mod tests {
     }
 
     #[test]
-    fn catalogue_exposes_current_protocol_and_workspace_architecture() {
+    fn catalogue_advertises_only_a_release_proven_reference() {
         let root = tempfile::tempdir().unwrap();
         let catalogue = ExtensionManagement::new(&workspace(root.path())).catalogue().unwrap();
-        assert_eq!(catalogue.entries[0].protocol, hl_extension::PROTOCOL);
-        assert_eq!(catalogue.entries[0].architectures, ["amd64"]);
+        assert!(catalogue.complete);
         assert_eq!(
-            catalogue.entries[0].reference,
-            format!(
-                "ghcr.io/husklet/husklet/extension-storybook:{}",
-                env!("CARGO_PKG_VERSION")
-            )
+            catalogue.entries,
+            first_party_catalogue(option_env!("HL_STORYBOOK_IMAGE"), "amd64")
         );
+
+        let entries = first_party_catalogue(Some("registry.example/husklet/storybook:4"), "arm64");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].protocol, hl_extension::PROTOCOL);
+        assert_eq!(entries[0].architectures, ["arm64"]);
+        assert_eq!(entries[0].reference, "registry.example/husklet/storybook:4");
+        assert!(first_party_catalogue(None, "amd64").is_empty());
     }
 
     #[test]
