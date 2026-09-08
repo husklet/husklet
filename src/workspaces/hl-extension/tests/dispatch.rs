@@ -1469,6 +1469,7 @@ fn calls() -> Vec<(Request, Capability)> {
             },
             Capability::TerminalControl,
         ),
+        (Request::FilesystemInventory, Capability::FilesystemRead),
         (
             Request::FilesystemList { path: path("logs") },
             Capability::FilesystemRead,
