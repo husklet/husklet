@@ -12,7 +12,7 @@ import {
   validateSnapshot,
   validateUiEvent as validateCurrentUiEvent,
 } from './generated-protocol.js';
-import type { CallOptions, ConnectOptions, HostEvent } from './api.js';
+import type { CallOptions, ConnectOptions, HostEvent, RowRequest } from './api.js';
 
 /** The protocol this package speaks. The host refuses anything else. */
 export const PROTOCOL = PROTOCOL_VERSION;
@@ -177,6 +177,50 @@ function abortError(reason) {
   return error;
 }
 
+function safeUnsigned(value, label) {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new TypeError(`${label} must be a nonnegative safe integer`);
+  }
+  return value;
+}
+
+/** Validate the host-pushed request before extension code uses it for database paging. */
+export function validateRowRequest(value): RowRequest {
+  const request = requiredObject(value, 'row request');
+  const range = requiredObject(request.range, 'row request range');
+  safeUnsigned(request.id, 'row request id');
+  safeUnsigned(request.source, 'row request source');
+  safeUnsigned(request.version, 'row request version');
+  safeUnsigned(range.start, 'row request range start');
+  if (!Number.isSafeInteger(range.count) || range.count < 1 || range.count > 128) {
+    throw new RangeError('row request range count must be between 1 and 128');
+  }
+  if (
+    request.slot !== undefined &&
+    (typeof request.slot !== 'string' || request.slot.length === 0)
+  ) {
+    throw new TypeError('row request slot must be a nonempty string');
+  }
+  if (
+    request.filter !== null &&
+    request.filter !== undefined &&
+    typeof request.filter !== 'string'
+  ) {
+    throw new TypeError('row request filter must be a string or null');
+  }
+  if (request.sort !== null && request.sort !== undefined) {
+    const sort = requiredObject(request.sort, 'row request sort');
+    if (
+      typeof sort.column !== 'string' ||
+      sort.column.length === 0 ||
+      typeof sort.descending !== 'boolean'
+    ) {
+      throw new TypeError('row request sort must name a column and boolean direction');
+    }
+  }
+  return request as unknown as RowRequest;
+}
+
 /** GUI interaction frames are not protocol Snapshots and retain their own wire vocabulary. */
 export function validateUiEvent(value) {
   const event = requiredObject(value, 'UI event');
@@ -222,6 +266,8 @@ export class Session {
   #timeout;
   #closed = false;
   #closeReason;
+  #closedPromise;
+  #resolveClosed;
   #granted: readonly string[] = [];
   #greeted;
   #ready;
@@ -229,11 +275,18 @@ export class Session {
   #welcomed = false;
   #greetingTimer;
   #backpressured = false;
+  #deferredCredits = new Map<number, number>();
   #closing;
   #dataListener = (chunk) => this.#receive(chunk);
   #endListener = () => this.#ended();
   #drainListener = () => {
     this.#backpressured = false;
+    try {
+      this.#flushCredits();
+    } catch (error) {
+      this.#finish(error);
+      this.#socket.destroy();
+    }
   };
   #closeListener = () => {
     this.#finish(new Error('extension host connection closed'));
@@ -271,6 +324,9 @@ export class Session {
       this.#ready = resolve;
       this.#rejectReady = reject;
     });
+    this.#closedPromise = new Promise<Error>((resolve) => {
+      this.#resolveClosed = resolve;
+    });
     this.#onReply = onReply;
     this.#onRows = onRows;
     this.#onEventError = onEventError;
@@ -302,6 +358,11 @@ export class Session {
   /** Resolves when the handshake is complete and calls may be sent. */
   get ready() {
     return this.#greeted;
+  }
+
+  /** Resolves once with the reason this session ended. */
+  get closed() {
+    return this.#closedPromise;
   }
 
   /** Opens the socket the host provided. */
@@ -544,7 +605,7 @@ export class Session {
     if (frame.channel === CONTROL) return this.#greet(frame);
     // A row request is the one thing the host pushes rather than answers.
     if (frame.kind === KIND.event && frame.payload && frame.payload.range !== undefined) {
-      return this.#onRows(frame.payload, frame.channel);
+      return this.#onRows(validateRowRequest(frame.payload), frame.channel);
     }
     if (frame.kind === KIND.response && frame.channel === CALLS) {
       const pending = this.#pending[0];
@@ -598,7 +659,7 @@ export class Session {
       } finally {
         // Returning one credit after attempting every listener bounds a producer
         // without allowing one faulty observer to stall the whole event stream.
-        this.#write({ channel: frame.channel, kind: KIND.credit, payload: 1 });
+        this.#returnCredit(frame.channel);
       }
       return;
     }
@@ -609,6 +670,22 @@ export class Session {
     if (this.#closed && frame.kind !== KIND.close) throw new Error('extension session is closed');
     if (this.#backpressured) throw new Error('extension socket is applying write backpressure');
     if (!this.#socket.write(encode(frame))) this.#backpressured = true;
+  }
+
+  #returnCredit(channel: number) {
+    if (this.#backpressured) {
+      this.#deferredCredits.set(channel, (this.#deferredCredits.get(channel) ?? 0) + 1);
+      return;
+    }
+    this.#write({ channel, kind: KIND.credit, payload: 1 });
+  }
+
+  #flushCredits() {
+    for (const [channel, count] of this.#deferredCredits) {
+      this.#deferredCredits.delete(channel);
+      this.#write({ channel, kind: KIND.credit, payload: count });
+      if (this.#backpressured) return;
+    }
   }
 
   #detachDataListeners() {
@@ -636,6 +713,8 @@ export class Session {
     this.#events.clear();
     this.#topics.clear();
     this.#eventTopics.clear();
+    this.#deferredCredits.clear();
+    this.#resolveClosed(error);
     try {
       this.#onClose(error);
     } catch {
