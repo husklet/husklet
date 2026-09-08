@@ -642,11 +642,16 @@ static int hl_a64_x86_patch_known_chain(const struct hl_a64_x86_chain_site *site
     if (target->magic != HL_A64_X86_BLOCK_MAGIC || target->reserved > 1) return 0;
     intptr_t relative = entry - (uint8_t *)(site->target_displacement + 1);
     if (relative < INT32_MIN || relative > INT32_MAX) return 0;
+    uint32_t fallback = __atomic_load_n(site->entry_displacement, __ATOMIC_RELAXED);
     __atomic_store_n(site->target_displacement, (uint32_t)(int32_t)relative, __ATOMIC_RELAXED);
-    __atomic_store_n(site->entry_displacement, 0, __ATOMIC_RELEASE);
-    if (!jit_publish_code(site->target_displacement, sizeof(uint32_t)) ||
-        !jit_publish_code(site->entry_displacement, sizeof(uint32_t)))
+    if (!jit_publish_code(site->target_displacement, sizeof(uint32_t)))
         return 0;
+    __atomic_store_n(site->entry_displacement, 0, __ATOMIC_RELEASE);
+    if (!jit_publish_code(site->entry_displacement, sizeof(uint32_t))) {
+        __atomic_store_n(site->entry_displacement, fallback, __ATOMIC_RELEASE);
+        (void)jit_publish_code(site->entry_displacement, sizeof(uint32_t));
+        return 0;
+    }
     atomic_fetch_add_explicit(&g_x86_rel32_patched, 1, memory_order_relaxed);
     return 1;
 }

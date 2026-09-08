@@ -6,6 +6,13 @@ build:
   compiler: { arm64: aarch64-linux-gnu-gcc, amd64: x86_64-linux-gnu-gcc }
   flags: [-nostdlib, -static, -fno-pie, -no-pie, "-Wl,--build-id=none", "-Wl,-z,noexecstack", "-Wl,-e,_start"]
 cases:
+  - id: runtime/aarch64-dbt/conditional-chain-lifecycle
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/chain_lifecycle.c, output: conditional-chain-lifecycle, flags: [-static, -no-pie, -O2, -pthread] }
+    artifact: { destination: /opt/husklet/conditional-chain-lifecycle }
+    run: []
+    expect: { exit: 42, stdout_empty: true }
   - id: runtime/aarch64-dbt/address-branch
     status: active
     compat: { class: smoke }

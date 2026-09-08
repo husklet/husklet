@@ -325,6 +325,25 @@ fn aarch64_x86_unsupported_census_is_observation_gated_and_at_the_rejection_seam
 }
 
 #[test]
+fn aarch64_x86_conditional_links_keep_publication_and_lifecycle_guards() {
+    let dbt = include_str!("../src/native/translator/guest/aarch64/dbt_x86_64.c");
+    for contract in [
+        "__atomic_store_n(site->target_displacement",
+        "__atomic_store_n(site->entry_displacement, 0, __ATOMIC_RELEASE)",
+        "hl_a64_x86_emit_cpu_u64(assembler, OFF_PC, guest_target)",
+        "if (((const struct interp_block *)entry)->magic == INTERP_BLOCK_MAGIC) return 0;",
+        "if (target->magic != HL_A64_X86_BLOCK_MAGIC || target->reserved > 1) return 0;",
+        "if (hl_option_get(\"HL_A64_X86_JCC_LINK\") == NULL || g_pcache) return 1;",
+    ] {
+        assert!(dbt.contains(contract), "missing conditional-link contract {contract}");
+    }
+    let cache = include_str!("../src/native/translator/cache.c");
+    assert_eq!(cache.matches("G_PENDING_RESET();").count(), 3);
+    let dispatch = include_str!("../src/native/engine/dispatch.c");
+    assert_eq!(dispatch.matches("G_PENDING_RESET();").count(), 1);
+}
+
+#[test]
 fn aarch64_x86_stage_two_binds_alu_decode_nzcv_and_oracle_fixture() {
     let source = include_str!("../src/native/translator/guest/aarch64/dbt_x86_64.c");
     for contract in [
