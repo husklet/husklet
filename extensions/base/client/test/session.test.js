@@ -166,6 +166,88 @@ test('real Unix filesystem iterators page recursively, stream stable chunks, and
   }
 });
 
+test('real Unix filesystem walk rejects directory cycles and handles a very deep tree iteratively', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-filesystem-depth-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const connections = new Set();
+  let listCalls = 0;
+  const server = net.createServer((socket) => {
+    connections.add(socket);
+    socket.on('close', () => connections.delete(socket));
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.kind !== KIND.request || frame.payload.call !== 'filesystem_list_page') continue;
+        listCalls += 1;
+        const requested = frame.payload.with.path;
+        let entries;
+        if (requested === 'cycle') {
+          entries = [{ path: 'cycle', directory: true, size: 0 }];
+        } else if (requested === 'duplicate') {
+          entries = [
+            { path: 'duplicate/child', directory: true, size: 0 },
+            { path: 'duplicate/child', directory: true, size: 0 },
+          ];
+        } else if (requested === 'duplicate/child') {
+          entries = [];
+        } else {
+          const depth = requested.split('/').length - 1;
+          entries =
+            depth < 1_200 ? [{ path: `${requested}/d`, directory: true, size: 0 }] : [];
+        }
+        socket.write(
+          encode({
+            channel: frame.channel,
+            kind: KIND.response,
+            payload: {
+              reply: 'directory_page',
+              with: {
+                entries,
+                identity: `directory-${listCalls}`,
+                next: entries.at(-1)?.path ?? null,
+                more: false,
+              },
+            },
+          }),
+        );
+      }
+    });
+    socket.write(
+      encode({
+        channel: CONTROL,
+        kind: KIND.open,
+        payload: { protocol: 1, peer: 'fixture', granted: ['filesystem:read'] },
+      }),
+    );
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    const files = workspace(session).files;
+    await assert.rejects(
+      files.walk('cycle').next(),
+      /host returned an inconsistent filesystem directory page/,
+    );
+    const duplicate = files.walk('duplicate');
+    assert.equal((await duplicate.next()).value.path, 'duplicate/child');
+    await assert.rejects(
+      duplicate.next(),
+      /host returned repeated filesystem directory "duplicate\/child"/,
+    );
+    let depth = 0;
+    for await (const entry of files.walk('deep')) {
+      assert.equal(entry.directory, true);
+      depth += 1;
+    }
+    assert.equal(depth, 1_200);
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('real Unix output pages apply backpressure, cancel locally, and fail closed on a gap', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-output-pages-'));
   const socketPath = path.join(directory, 'host.sock');

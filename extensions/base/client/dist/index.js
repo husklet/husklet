@@ -114,6 +114,13 @@ function requireFilesystemActive(signal) {
     if (signal?.aborted)
         throw filesystemAbort(signal);
 }
+function isDirectFilesystemChild(parent, child) {
+    const parts = (value) => value.split(/[\\/]/).filter((part) => part.length > 0 && part !== '.');
+    const parentParts = parts(parent);
+    const childParts = parts(child);
+    return (childParts.length === parentParts.length + 1 &&
+        parentParts.every((part, index) => childParts[index] === part));
+}
 function exactContainerName(name) {
     if (typeof name === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(name))
         return name;
@@ -856,6 +863,7 @@ export function workspace(session, { signal } = {}) {
                     (page.more && !page.next) ||
                     (page.more && page.entries.length === 0) ||
                     (after !== null && page.next === after) ||
+                    page.entries.some((entry) => !isDirectFilesystemChild(path, entry.path)) ||
                     (page.entries.length > 0 && page.next !== page.entries.at(-1).path)) {
                     throw new TypeError('host returned an inconsistent filesystem directory page');
                 }
@@ -863,29 +871,50 @@ export function workspace(session, { signal } = {}) {
             },
             walk: async function* (path, { pageSize = 256, signal } = {}) {
                 exactFilesystemPageSize(pageSize);
-                async function* directory(directoryPath) {
-                    let after = null;
-                    let observed = null;
-                    for (;;) {
-                        requireFilesystemActive(signal);
-                        const page = await api.files.listPage(directoryPath, {
-                            after,
-                            observed,
-                            limit: pageSize,
-                        });
-                        requireFilesystemActive(signal);
-                        observed ??= page.identity;
-                        for (const entry of page.entries) {
-                            yield entry;
-                            if (entry.directory)
-                                yield* directory(entry.path);
+                const directories = new Set([path]);
+                const stack = [
+                    { path, after: null, observed: null, entries: [], index: 0, more: true },
+                ];
+                while (stack.length > 0) {
+                    const current = stack.at(-1);
+                    if (current.index < current.entries.length) {
+                        const entry = current.entries[current.index++];
+                        if (entry.directory) {
+                            if (directories.has(entry.path)) {
+                                throw new TypeError(`host returned repeated filesystem directory ${JSON.stringify(entry.path)}`);
+                            }
+                            directories.add(entry.path);
                         }
-                        if (!page.more)
-                            return;
-                        after = page.next;
+                        yield entry;
+                        if (entry.directory) {
+                            stack.push({
+                                path: entry.path,
+                                after: null,
+                                observed: null,
+                                entries: [],
+                                index: 0,
+                                more: true,
+                            });
+                        }
+                        continue;
                     }
+                    if (!current.more) {
+                        stack.pop();
+                        continue;
+                    }
+                    requireFilesystemActive(signal);
+                    const page = await api.files.listPage(current.path, {
+                        after: current.after,
+                        observed: current.observed,
+                        limit: pageSize,
+                    });
+                    requireFilesystemActive(signal);
+                    current.observed ??= page.identity;
+                    current.entries = page.entries;
+                    current.index = 0;
+                    current.more = page.more;
+                    current.after = page.next;
                 }
-                yield* directory(path);
             },
             read: async (path) => expect(await session.call('filesystem_read', { path }), 'contents'),
             readRange: async (path, offset = 0, limit = 65536, observed = null) => {
