@@ -147,6 +147,7 @@ impl Service {
                 translation_cache_observability: self.translation_cache_observability,
                 translation_symbols: self.translation_symbols.clone(),
                 direct_call_pre_spill: self.direct_call_pre_spill,
+                a64_x86_jcc_link: self.a64_x86_jcc_link,
                 checkpoint,
                 guest: container.spec.guest,
                 execution: container.spec.execution,

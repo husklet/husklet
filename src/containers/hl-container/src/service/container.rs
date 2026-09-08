@@ -75,6 +75,7 @@ pub(crate) struct Service {
     translation_cache_observability: bool,
     translation_symbols: Option<std::path::PathBuf>,
     direct_call_pre_spill: bool,
+    a64_x86_jcc_link: bool,
     events: std::sync::RwLock<Vec<Arc<dyn crate::LifecycleEvents>>>,
     event_history: std::sync::Mutex<Vec<crate::LifecycleEvent>>,
     checkpoints: Arc<dyn crate::CheckpointImages>,
@@ -99,6 +100,7 @@ pub(crate) struct Dependencies<S> {
     pub(crate) translation_cache_observability: bool,
     pub(crate) translation_symbols: Option<std::path::PathBuf>,
     pub(crate) direct_call_pre_spill: bool,
+    pub(crate) a64_x86_jcc_link: bool,
     pub(crate) checkpoints: Arc<dyn crate::CheckpointImages>,
 }
 
@@ -119,6 +121,7 @@ impl Service {
             translation_cache_observability,
             translation_symbols,
             direct_call_pre_spill,
+            a64_x86_jcc_link,
             checkpoints,
         } = dependencies;
         let operations = volumes.operation();
@@ -163,6 +166,7 @@ impl Service {
             translation_cache_observability,
             translation_symbols,
             direct_call_pre_spill,
+            a64_x86_jcc_link,
             events: std::sync::RwLock::new(Vec::new()),
             event_history: std::sync::Mutex::new(Vec::new()),
             checkpoints,
