@@ -224,6 +224,8 @@ export interface ContainerSummary {
     state: string;
     created: number;
     generation: number;
+    /** Bounded exposed and host-published ports observed for this container. */
+    ports?: ContainerPort[];
 }
 export interface ContainerInventory {
     containers: ContainerSummary[];

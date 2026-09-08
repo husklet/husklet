@@ -97,6 +97,7 @@ order; the JavaScript client's checks are never treated as a security boundary.
 - `host.containers.kill(...)` — `container_kill`, requires `containers:lifecycle`.
 - `host.containers.exec(...)` — `container_exec`, requires `containers:execute`.
 - `host.containers.attachTerminal(...)` — `container_attach_terminal`, requires `containers:attach`.
+- Container list, inspection, and inventory snapshots include a bounded `ports` view, preserving automatically assigned host ports for long-lived service extensions under the same container selector authority.
 
 ## Processes and executions
 

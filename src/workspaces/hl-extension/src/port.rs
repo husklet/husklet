@@ -43,6 +43,9 @@ pub struct ContainerSummary {
     pub created: i64,
     #[serde(default)]
     pub generation: u64,
+    /// Bounded exposed and host-published ports for this exact container.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ports: Vec<ContainerPort>,
 }
 
 /// The process table reported by a running container.

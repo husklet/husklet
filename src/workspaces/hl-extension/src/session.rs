@@ -462,6 +462,7 @@ impl Session {
                 state: String::new(),
                 created: 0,
                 generation: 0,
+                ports: Vec::new(),
             });
         }
         Err(Failure::Denied {

@@ -16,6 +16,43 @@ import {
 } from '../dist/index.js';
 import { CONTROL, KIND, Reader, encode } from '../dist/wire.js';
 
+test('real Unix container inventory preserves a published PostgreSQL port', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-postgres-port-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const connections = new Set();
+  const container = {
+    id: 'db-id', name: 'postgres', image: 'postgres:17', state: 'running', created: 1,
+    generation: 4, ports: [{ container: 5432, host: 15432, protocol: 'tcp' }],
+  };
+  const server = net.createServer((socket) => {
+    connections.add(socket);
+    socket.on('close', () => connections.delete(socket));
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.kind !== KIND.request) continue;
+        assert.deepEqual(frame.payload, { call: 'container_list' });
+        socket.write(encode({ channel: frame.channel, kind: KIND.response, payload: {
+          reply: 'containers', with: [container],
+        } }));
+      }
+    });
+    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: {
+      protocol: 1, peer: 'postgres-port', granted: ['containers:read'],
+    } }));
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    assert.deepEqual(await workspace(session).containers.list(), [container]);
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('real Unix filesystem watcher publishes filtered cursor-only progress for restart', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-filtered-cursor-'));
   const socketPath = path.join(directory, 'host.sock');

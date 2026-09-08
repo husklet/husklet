@@ -71,6 +71,11 @@ for (const [wire, route] of Object.entries(protocolSurface.requests)) {
     );
 }
 groups
+  .get('Containers')
+  .push(
+    '- Container list, inspection, and inventory snapshots include a bounded `ports` view, preserving automatically assigned host ports for long-lived service extensions under the same container selector authority.',
+  );
+groups
   .get('Terminal and panes')
   .push(
     "- Process-lifetime layout operations are compound authority: opening or splitting a pane, closing a pane, and switching its occupant require both `terminals:layout-control` and `terminals:process-control`, even when the protocol table names the operation's primary capability.",

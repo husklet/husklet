@@ -1,5 +1,5 @@
 // Generated from Rust hl-extension protocol/v1.json. Do not edit.
-// Protocol artifact fnv1a64:9595722c936b2b68
+// Protocol artifact fnv1a64:34de74cf2420c206
 export const PROTOCOL_SPECIFICATION_VERSION = 1;
 export const PROTOCOL_VERSION = 1;
 export const PROTOCOL_BOUNDS = Object.freeze({
@@ -1410,6 +1410,17 @@ const definitions = {
           "maximum": 9007199254740991,
           "minimum": 0,
           "signed": false
+        }
+      },
+      {
+        "name": "ports",
+        "optional": true,
+        "schema": {
+          "kind": "array",
+          "of": {
+            "kind": "ref",
+            "name": "ContainerPort"
+          }
         }
       }
     ],
