@@ -1178,6 +1178,30 @@ test('streaming execution applies callback backpressure and cancels callback fai
   stage.session.close(); stage.host.destroy(); stage.server.close();
 });
 
+test('pre-aborted streaming execution never starts a container command', async () => {
+  const stage = await pair();
+  await frames(stage.host)();
+  const api = workspace(stage.session);
+  const controller = new AbortController();
+  controller.abort(new Error('caller stopped'));
+  let starts = 0;
+  api.containers.exec = async () => {
+    starts += 1;
+    return 'e'.repeat(32);
+  };
+  await assert.rejects(
+    api.containers.execStreaming(
+      'c'.repeat(64),
+      7,
+      { command: ['psql'], signal: controller.signal },
+      () => {},
+    ),
+    (error) => error.name === 'AbortError' && error.cause === controller.signal.reason,
+  );
+  assert.equal(starts, 0);
+  stage.session.close(); stage.host.destroy(); stage.server.close();
+});
+
 test('image pull preserves host failure when best-effort cancellation also fails', async () => {
   const calls = [];
   const api = workspace({

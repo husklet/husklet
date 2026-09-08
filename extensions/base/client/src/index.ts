@@ -941,6 +941,7 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
       ) => {
         if (typeof onPage !== 'function')
           throw new TypeError('streaming execution requires an output callback');
+        requireOutputActive(signal);
         const executionId = await api.containers.exec(id, generation, {
           command,
           environment,
