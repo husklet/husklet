@@ -729,13 +729,13 @@ impl<'a> Tabs<'a> {
         name
     }
 
-    pub(crate) fn container_terminal(&self, container: &str, command: &[String]) -> String {
+    pub(crate) fn container_terminal(&self, container: &str, generation: u64, command: &[String]) -> String {
         let tw = self.window;
         let paneroot = gtk::Box::new(gtk::Orientation::Vertical, 0);
         paneroot.set_hexpand(true);
         paneroot.set_vexpand(true);
         let slot = Slots::new(tw).allocate();
-        let (term, pid) = make_container_terminal_ex(tw, &slot, container, command);
+        let (term, pid) = make_container_terminal_ex(tw, &slot, container, generation, command);
         paneroot.append(&PaneChrome::wrap(tw, &term));
         let title = format!("container {}", &container[..container.len().min(12)]);
         let name = self.add_with_persistence(&title, None, &paneroot, true, false, false);
@@ -1135,7 +1135,7 @@ mod focus_ownership_tests {
             let overview = gtk::Label::new(Some("overview"));
             Tabs::new(&tw).add("overview", None, &overview, false);
             let id = "a".repeat(64);
-            let tab = Tabs::new(&tw).container_terminal(&id, &["sh".into(), "-i".into()]);
+            let tab = Tabs::new(&tw).container_terminal(&id, 7, &["sh".into(), "-i".into()]);
             assert_eq!(tw.stack.visible_child_name().as_deref(), Some(tab.as_str()));
             let persisted = tw
                 .entries

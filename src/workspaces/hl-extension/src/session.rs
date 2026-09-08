@@ -577,24 +577,12 @@ impl Session {
             Request::ContainerAttachTerminal { id, command } => {
                 immutable_identity(id, &[32, 64], "container")?;
                 let target = self.resolve_mutation_container(id, services.containers)?;
-                let immutable_scope = self.containers.all()
-                    || self
-                        .containers
-                        .selectors
-                        .iter()
-                        .any(|selector| matches!(selector, ContainerSelector::Id { id: allowed } if allowed == id));
-                if !immutable_scope {
-                    return Err(Failure::Denied {
-                        capability: Capability::ContainerAttach.as_str().into(),
-                        detail: "name-scoped terminal attachment is unsupported until its worker handoff is generation-bound".into(),
-                    });
-                }
                 validate_terminal_command(command)?;
                 let port = self
                     .peer
                     .authority()
                     .port(Capability::ContainerAttach, services.terminal)?;
-                Ok(Reply::Identity(port.attach_container(&target.id, command)?))
+                Ok(Reply::Identity(port.attach_container(&target.id, target.generation, command)?))
             }
             Request::ContainerCreate { .. }
             | Request::ContainerStart { .. }

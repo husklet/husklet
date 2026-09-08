@@ -1223,7 +1223,7 @@ pub trait TerminalSurface {
     /// Opens a non-persisted terminal tab running `command` directly in the
     /// immutable container identity. The attachment owns the process and must
     /// kill it when the pane disconnects.
-    fn attach_container(&self, _id: &str, _command: &[String]) -> Result<String, HostError> {
+    fn attach_container(&self, _id: &str, _generation: u64, _command: &[String]) -> Result<String, HostError> {
         Err(HostError::Unsupported(
             "container terminal attachment is unavailable".into(),
         ))

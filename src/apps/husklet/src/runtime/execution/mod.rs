@@ -150,6 +150,7 @@ pub fn launch_live(
 pub fn launch_container(
     workspace: &WorkspaceConfig,
     container: &str,
+    generation: u64,
     command: &[String],
     columns: u16,
     rows: u16,
@@ -174,7 +175,11 @@ pub fn launch_container(
     let size = Size::new(rows.max(1), columns.max(1)).map_err(LauncherError::io)?;
     let config = container_terminal_config(command);
     let created = runtime
-        .block_on(client.executions().create(container, &config))
+        .block_on(
+            client
+                .executions()
+                .create_if_generation(container, container, generation, &config),
+        )
         .map_err(LauncherError::io)?;
     let start = ExecStart {
         tty: true,

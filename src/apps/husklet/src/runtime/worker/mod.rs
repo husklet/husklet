@@ -63,7 +63,7 @@ impl Diagnostics {
 }
 
 impl Worker {
-    pub fn attach_container(name: &str, container: &str, command: &[String]) -> ! {
+    pub fn attach_container(name: &str, container: &str, generation: u64, command: &[String]) -> ! {
         if let Err(error) = ControllingTerminal::claim() {
             eprintln!("container terminal unavailable: {error}");
             std::process::exit(Status::TERMINAL_UNAVAILABLE);
@@ -85,14 +85,15 @@ impl Worker {
         };
         let (columns, rows) = terminal::size().unwrap_or((80, 24));
         let interrupts = crate::ffi::InterruptMask::block();
-        let mut terminal =
-            match crate::runtime::execution::launch_container(&workspace, container, command, columns, rows) {
-                Ok(terminal) => terminal,
-                Err(error) => {
-                    eprintln!("container terminal launch failed: {error}");
-                    std::process::exit(Status::LAUNCH_FAILED);
-                }
-            };
+        let mut terminal = match crate::runtime::execution::launch_container(
+            &workspace, container, generation, command, columns, rows,
+        ) {
+            Ok(terminal) => terminal,
+            Err(error) => {
+                eprintln!("container terminal launch failed: {error}");
+                std::process::exit(Status::LAUNCH_FAILED);
+            }
+        };
         let status = TerminalSession::run(&mut *terminal, interrupts);
         std::process::exit(ProcessStatus::from_engine(status).0);
     }

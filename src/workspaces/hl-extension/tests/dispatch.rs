@@ -385,7 +385,8 @@ impl ImageStore for Host {
 }
 
 impl TerminalSurface for Host {
-    fn attach_container(&self, _id: &str, _command: &[String]) -> Result<String, HostError> {
+    fn attach_container(&self, _id: &str, generation: u64, _command: &[String]) -> Result<String, HostError> {
+        assert_eq!(generation, 0, "dispatch forwards the resolved immutable generation");
         self.ledger.note("terminal.attach_container");
         Ok("attached-pane".into())
     }

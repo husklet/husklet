@@ -74,9 +74,15 @@ impl Console {
     /// Carries out one errand and answers it.
     fn serve(window: &Rc<TermWin>, errand: Errand) {
         let answer = match errand.request() {
-            Request::AttachContainer { id, command } => {
-                Ok(Answer::Slot(Tabs::new(window).container_terminal(id, command)))
-            }
+            Request::AttachContainer {
+                id,
+                generation,
+                command,
+            } => Ok(Answer::Slot(Tabs::new(window).container_terminal(
+                id,
+                *generation,
+                command,
+            ))),
             Request::Tabs => Ok(Answer::Tabs(Self::tabs(window))),
             Request::Topology => Self::topology(window).map(Answer::Topology),
             Request::PaneList => Self::pane_inventory(window).map(Answer::Panes),
