@@ -4,7 +4,6 @@ import {
   Card,
   CardActionArea,
   CardContent,
-  CardHeader,
   Column,
   Heading,
   NavigationMenu,
@@ -148,7 +147,7 @@ export function Overview({
     <Scroll grow height="fill">
       <Column width="fill" pad={2} gap={2}>
         <Heading label="Workspace overview" scale="title" />
-        <Text label="Current inventory and reported runtime attention." color="text-dim" />
+        <Text label="Current inventory and reported runtime attention." color="text-dim" wrap />
         <Row gap={1} align="center">
           {refreshing ? <Spinner /> : null}
           <Button
@@ -215,12 +214,14 @@ function Summary({
   onOpen: () => void;
 }) {
   return (
-    <Card grow width={{ minimum: { chars: 18 } }} variant="outline">
-      <CardHeader label={label} />
-      <CardActionArea label={`Open ${label}`} tooltip={`Open ${label}`} onInvoke={onOpen}>
+    <Card grow={false} width={{ minimum: { chars: 18 } }} variant="outline">
+      <CardActionArea tooltip={`Open ${label}`} onInvoke={onOpen}>
         <CardContent gap={1} pad={1}>
-          <Heading label={value} scale="title" />
-          <Text label={detail} color="text-dim" wrap />
+          <Text label={label} color="text-dim" />
+          <Row gap={1} align="center" wrap>
+            <Heading label={value} scale="title" />
+            <Text label={detail} color="text-dim" wrap />
+          </Row>
         </CardContent>
       </CardActionArea>
     </Card>

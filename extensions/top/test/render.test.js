@@ -1620,6 +1620,12 @@ test('overview never presents stale inventory counts as current during loading o
   assert.ok(labelled(stage, 'Unavailable'));
   assert.ok(labelled(stage, 'running containers available to snapshot'));
   assert.ok(labelled(stage, '0 running'));
+  const patches = stage.frames.flatMap((frame) => frame.patches);
+  const actionNodes = new Set(
+    patches
+      .filter((patch) => patch.Create?.tag === 'CardActionArea')
+      .map((patch) => patch.Create.id),
+  );
   for (const resource of [
     'Containers',
     'Processes',
@@ -1631,7 +1637,12 @@ test('overview never presents stale inventory counts as current during loading o
     'Extensions',
   ]) {
     assert.ok(
-      labelled(stage, `Open ${resource}`),
+      patches.some(
+        (patch) =>
+          patch.SetProp?.prop === 'Tooltip' &&
+          patch.SetProp.value?.Text === `Open ${resource}` &&
+          actionNodes.has(patch.SetProp.id),
+      ),
       `${resource} has an unambiguous dashboard action`,
     );
   }
@@ -1653,16 +1664,27 @@ test('overview never presents stale inventory counts as current during loading o
     'the summary cards use the available page width',
   );
   assert.equal(
-    ancestorProperty(stage, 'Open Containers', 'Card', 'Grow')?.Number,
-    1,
-    'cards share spare row width instead of leaving a dead column',
+    ancestorProperty(stage, 'Containers', 'Card', 'Grow')?.Number,
+    0,
+    'cards expand across a line without stretching rows down the viewport',
   );
-  assert.deepEqual(
-    taggedProperty(stage, 'Open Containers', 'CardActionArea', 'Tooltip'),
-    { Text: 'Open Containers' },
-    'the card itself navigates without a generic button row',
+  const openContainers = patches
+    .filter(
+      (patch) =>
+        patch.SetProp?.prop === 'Tooltip' &&
+        patch.SetProp.value?.Text === 'Open Containers' &&
+        actionNodes.has(patch.SetProp.id),
+    )
+    .at(-1)?.SetProp.id;
+  assert.ok(openContainers, 'the card itself navigates without a generic button row');
+  assert.ok(
+    stage.surface.dispatch({
+      trigger: 'Invoke',
+      node: openContainers,
+      id: `${openContainers}:Invoke`,
+      value: null,
+    }),
   );
-  invoke(stage, 'Open Containers');
   assert.deepEqual(opened, ['containers'], 'the directly clickable card retains navigation');
 });
 
