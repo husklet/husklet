@@ -1263,7 +1263,7 @@ test('terminal management reads every pane as text and writes against the inspec
   };
   const stage = host();
   stage.render(h(Terminals, { api: { terminal }, resource }));
-  invoke(stage, 'View Pane 1');
+  invoke(stage, 'View pane 1');
   await settled();
   await settled();
   assert.deepEqual(calls, [['read', 'pane-1']]);
@@ -1275,7 +1275,7 @@ test('terminal management reads every pane as text and writes against the inspec
   assert.deepEqual(calls[1], ['write', 'pane-1', 7, 11, 'printf hello\n', { lines: 200 }]);
   assert.equal(latestPropertyForTag(stage, 'LogView', 'Value')?.Text, '$ ready\nhello');
   assert.equal(fieldValue(stage, 'Send a line to this terminal'), '');
-  invoke(stage, 'View Pane 2');
+  invoke(stage, 'View pane 2');
   await settled();
   await settled();
   assert.equal(
@@ -1323,7 +1323,7 @@ test('terminal input stays unavailable without a host-issued revision cursor', a
       resource,
     }),
   );
-  invoke(stage, 'View Pane 1');
+  invoke(stage, 'View pane 1');
   await settled();
   await settled();
   assert.ok(
@@ -1388,7 +1388,7 @@ test('terminal pane layout mutations use the inspected generation and revision',
   };
   const stage = host();
   stage.render(h(Terminals, { api: { terminal }, resource }));
-  invoke(stage, 'View Pane 1');
+  invoke(stage, 'View pane 1');
   await settled();
   await settled();
   invoke(stage, 'Split beside');
@@ -1468,7 +1468,7 @@ test('an unobserved terminal mutation keeps the inspected pane and reports uncer
   };
   const stage = host();
   stage.render(h(Terminals, { api: { terminal }, resource }));
-  invoke(stage, 'View Pane 1');
+  invoke(stage, 'View pane 1');
   await settled();
   await settled();
   invoke(stage, 'Close pane');
@@ -1554,7 +1554,7 @@ test('terminal management opens tabs and spawns exact argv through observed oper
   invoke(stage, 'Create terminal tab');
   await settled();
   await settled();
-  invoke(stage, 'View Pane 1');
+  invoke(stage, 'View pane 1');
   await settled();
   await settled();
   change(stage, 'Command argv, e.g. ["sh","-lc","make test"]', '["make","test"]');
@@ -1609,7 +1609,7 @@ test('terminal command validation cannot send shell-like text as ambiguous argv'
   };
   const stage = host();
   stage.render(h(Terminals, { api: { terminal }, resource }));
-  invoke(stage, 'View Pane 1');
+  invoke(stage, 'View pane 1');
   await settled();
   await settled();
   change(stage, 'Command argv, e.g. ["sh","-lc","make test"]', 'rm -rf build');
@@ -1677,7 +1677,7 @@ test('terminal management switches an inspected pane to an enabled exact provide
   const stage = host();
   stage.render(h(Terminals, { api: controlled, resource }));
   await settled();
-  invoke(stage, 'View Pane 1');
+  invoke(stage, 'View pane 1');
   await settled();
   await settled();
   const select = stage.frames
@@ -1757,7 +1757,7 @@ test('terminal management re-inspects semantic authority and confirms destructiv
   };
   const stage = host();
   stage.render(h(Terminals, { api: { terminal }, resource }));
-  invoke(stage, 'View Pane 1');
+  invoke(stage, 'View pane 1');
   await settled();
   await settled();
   change(stage, 'Semantic node ID', '42');

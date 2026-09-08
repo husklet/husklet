@@ -208,6 +208,10 @@ fn configure_application(application: &gtk::Application) {
     if let Some(display) = gdk::Display::default() {
         gtk::style_context_add_provider_for_display(&display, &provider, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
     }
+    // Extension surfaces use hl-gui's semantic style classes. GTK owns a
+    // display at startup, so install their default theme here rather than
+    // relying on a later optional theme update from an extension.
+    hl_gui_gtk::style::install(&hl_gui::Theme::dark());
 
     let quit = gio::SimpleAction::new("quit", None);
     let app = application.clone();

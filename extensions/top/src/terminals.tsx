@@ -487,7 +487,7 @@ export function Terminals({
                     color="text-dim"
                   />
                   <Button
-                    label={`${selected === pane.slot ? 'Refresh' : 'View'} Pane ${paneIndex + 1}`}
+                    label={`${selected === pane.slot ? 'Refresh' : 'View'} pane ${paneIndex + 1}`}
                     enabled={busy === ''}
                     variant="ghost"
                     onInvoke={() => {
