@@ -491,6 +491,12 @@ test('Top owns workspace settings and extension management in the same tab', asy
     'discovery names the exact OCI input that review will inspect',
   );
   assert.ok(labelled(stage, 'Install from an OCI image'));
+  assert.ok(
+    labelled(
+      stage,
+      'Paste an OCI image reference. You’ll review compatibility and requested access before installation.',
+    ),
+  );
   assert.ok(labelled(stage, 'No extensions installed'));
   assert.equal(labelled(stage, 'Workspace control'), undefined);
   assert.deepEqual(ancestorTags(stage, 'Browse extensions').slice(0, 2), ['Column', 'Column']);

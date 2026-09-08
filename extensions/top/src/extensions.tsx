@@ -811,7 +811,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                       />
                     </Row>
                     <Text
-                      label="Paste a full image reference · Enter to inspect. The acquired manifest is authoritative for compatibility and permissions."
+                      label="Paste an OCI image reference. You’ll review compatibility and requested access before installation."
                       color="text-dim"
                       wrap
                     />
