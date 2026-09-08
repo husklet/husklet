@@ -140,6 +140,10 @@ export function Overview({
     terminals,
     (records) => `${records.filter((tab) => tab.pinned).length} pinned`,
   );
+  const extensionsSummary = resourceSummary(
+    extensions,
+    (records) => `${records.filter((extension) => extension.enabled).length} enabled`,
+  );
   const runningContainers = containers.data?.filter((item) => item.state === 'running').length ?? 0;
   return (
     <Scroll grow width="fill" height="fill">
@@ -173,6 +177,7 @@ export function Overview({
           <Summary title="Volumes" {...volumesSummary} onOpen={() => onOpen('volumes')} />
           <Summary title="Networks" {...networksSummary} onOpen={() => onOpen('networks')} />
           <Summary title="Terminal tabs" {...terminalsSummary} onOpen={() => onOpen('terminals')} />
+          <Summary title="Extensions" {...extensionsSummary} onOpen={() => onOpen('extensions')} />
         </Row>
         <ErrorText
           error={

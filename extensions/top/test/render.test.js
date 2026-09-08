@@ -143,7 +143,14 @@ test('Top presents workspace, extensions, and every resource navigation choice',
   const frame = host().render(
     h(Top, {
       api,
-      initial: { containers: [], executions: [], images: [], volumes: [], networks: [] },
+      initial: {
+        containers: [],
+        executions: [],
+        images: [],
+        volumes: [],
+        networks: [],
+        extensions: [],
+      },
     }),
   );
   const labels = frame.patches
@@ -196,6 +203,10 @@ test('Top presents workspace, extensions, and every resource navigation choice',
   assert.equal(new Set(icons).size, 10, 'every destination has a distinguishable icon');
   for (const group of ['WORKSPACE', 'RUNTIME', 'RESOURCES', 'INTERFACE'])
     assert.ok(labels.includes(group), group);
+  assert.ok(
+    labels.includes('0 enabled'),
+    'the overview exposes extension inventory alongside the other workspace resources',
+  );
 });
 
 test('Top network attachment selects a named container while retaining immutable authority', async () => {
