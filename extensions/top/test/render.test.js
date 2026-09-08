@@ -1354,6 +1354,12 @@ test('every empty operational page explains what is absent and how to proceed', 
     assert.ok(labelled(stage, message), `${section} has a semantic empty state`);
     if (section === 'Containers') {
       assert.ok(labelled(stage, 'Create first container'));
+      assert.ok(labelled(stage, 'Create a container to start a service or open a shell.'));
+      assert.equal(
+        ancestorTags(stage, 'Create first container').includes('Column'),
+        true,
+        'the first-container action stays with the empty-state explanation',
+      );
       invoke(stage, 'Create first container');
       assert.ok(labelled(stage, 'Container setup'), 'the primary action reveals container setup');
     }
