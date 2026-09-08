@@ -64,6 +64,36 @@ test('idle readers stay small when Unix closes after a fragmented near-limit fra
   }
 });
 
+test('real Unix half-close releases a partial near-limit payload allocation', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-partial-large-frame-'));
+  const socketPath = path.join(directory, 'wire.sock');
+  const header = Buffer.alloc(HEADER);
+  header.writeUInt32LE(PAYLOAD_LIMIT, 0);
+  header.writeUInt8(KIND.event, 8);
+  header.writeUInt8(FLAG_END, 9);
+  const partial = Buffer.alloc(PAYLOAD_LIMIT - 1, 0x61);
+  const server = net.createServer(async (socket) => {
+    if (!socket.write(header)) await once(socket, 'drain');
+    if (!socket.write(partial)) await once(socket, 'drain');
+    socket.end();
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  const reader = new Reader();
+  try {
+    const socket = net.createConnection(socketPath);
+    socket.on('data', (chunk) => reader.take(chunk));
+    await once(socket, 'end');
+    assert.equal(reader.buffered, HEADER + PAYLOAD_LIMIT - 1);
+    assert(reader.capacity > HEADER, 'the partial peer forced framing storage to grow');
+    assert.throws(() => reader.finish(), /unfinished frame/);
+    assert.equal(reader.buffered, 0);
+    assert.equal(reader.capacity, HEADER, 'EOF releases the incomplete payload allocation');
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('frames split across chunks are reassembled', () => {
   const bytes = encode({
     channel: CONTROL,
