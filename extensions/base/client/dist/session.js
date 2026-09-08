@@ -474,8 +474,13 @@ export class Session {
         const key = token.toString('hex');
         return new Promise((resolve, reject) => {
             const timer = setTimeout(() => {
-                this.#pings.delete(key);
-                reject(new Error(`extension ping timed out after ${this.#timeout}ms`));
+                const error = new Error(`extension ping timed out after ${this.#timeout}ms`);
+                // A timed-out heartbeat means the peer can still return this token at
+                // any later point. Keeping the connection apparently usable would let
+                // that late control frame tear down unrelated newer work. Establish a
+                // single, deterministic failure boundary now and release every ledger.
+                this.#finish(error);
+                this.#socket.destroy();
             }, this.#timeout);
             this.#pings.set(key, { resolve, reject, timer });
             try {
