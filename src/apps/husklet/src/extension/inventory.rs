@@ -248,9 +248,13 @@ fn summary(container: &Container) -> ContainerSummary {
         created: container.created,
         generation: container.metadata.generation,
         ports: container.ports.iter()
-            .filter(|port| matches!(port.kind.as_str(), "tcp" | "udp"))
+            .filter(|port| matches!(port.protocol.as_str(), "tcp" | "udp"))
             .take(64)
-            .map(|port| ContainerPort { container: port.private_port, host: port.public_port, protocol: port.kind.clone() })
+            .map(|port| ContainerPort {
+                container: port.private_port,
+                host: port.public_port,
+                protocol: port.protocol.clone(),
+            })
             .collect(),
     }
 }
