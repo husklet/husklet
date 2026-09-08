@@ -115,6 +115,9 @@ struct LaunchArguments {
     /// Run supported x86-64 guest blocks through the experimental translation backend.
     #[arg(long)]
     translit: bool,
+    /// Link published AArch64-to-x86 conditional edges directly (experimental).
+    #[arg(long, requires = "translit", hide = true)]
+    a64_x86_jcc_link: bool,
     /// Admit normal and SSE instructions into one bounded same-ISA descriptor.
     #[arg(long, value_enum, value_name = "on|off")]
     translit_mixed_sse: Option<MixedSseControl>,
@@ -391,6 +394,11 @@ fn execute(guest: Guest, launch: &LaunchArguments) -> Result<hl_engine::engine::
     if launch.translit_mixed_sse.is_some() && !launch.translit {
         return Err(Failure::Request("--translit-mixed-sse requires --translit".to_owned()));
     }
+    if launch.a64_x86_jcc_link && guest != Guest::Aarch64 {
+        return Err(Failure::Request(
+            "--a64-x86-jcc-link is available only in the AArch64 worker".to_owned(),
+        ));
+    }
     if launch.translit_mixed_sse.is_some() && guest != Guest::X86_64 {
         return Err(Failure::Request(
             "--translit-mixed-sse is available only in the x86-64 worker".to_owned(),
@@ -535,6 +543,7 @@ fn rootfs_plan(
     for (enabled, name) in [
         (launch.diagnostics, "HL_C_DIAGNOSTICS"),
         (launch.translit, "HL_TRANSLIT"),
+        (launch.a64_x86_jcc_link, "HL_A64_X86_JCC_LINK"),
     ] {
         if enabled {
             options

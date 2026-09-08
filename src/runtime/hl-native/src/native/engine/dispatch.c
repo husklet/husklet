@@ -421,6 +421,9 @@ static void run_guest(struct cpu *c) {
                        old generation slots live and publishes zeroed translation records. */
                     map_clear();
                     pend_reset();
+#ifdef G_PENDING_RESET
+                    G_PENDING_RESET();
+#endif
                     // IBTC bodies point into the cache we just dropped
                     memset(g_ibtc, 0, sizeof g_ibtc);
                     // §B: shadow host_rets point into the dropped cache too -> clear (frontend hook)

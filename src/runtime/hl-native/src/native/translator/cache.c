@@ -3377,6 +3377,9 @@ static int jit_flush_to_fresh(int retain_map_generations) {
     if (!retain_generations) map_clear();
     if (!retain_generations) memset(g_ibtc, 0, sizeof g_ibtc);
     pend_reset();
+#ifdef G_PENDING_RESET
+    G_PENDING_RESET();
+#endif
     return 1;
 }
 
@@ -3434,6 +3437,9 @@ static void smc_inplace_drop(void) {
     map_clear();
     memset(g_ibtc, 0, sizeof g_ibtc);
     pend_reset();
+#ifdef G_PENDING_RESET
+    G_PENDING_RESET();
+#endif
     txpg_clear();
 }
 
@@ -3676,6 +3682,9 @@ static int jit_after_fork(void) {
            parent's pages.  Fall back to the memset if the advice is rejected. */
         ibtc_clear_lazy();
         pend_reset();
+#ifdef G_PENDING_RESET
+        G_PENDING_RESET();
+#endif
     }
     HL_LOGF(&g_jit_log, HL_LOG_TAG_PROCESS, "fork cache preserve=%d rw=%p rx=%p", preserve, (void *)g_cache,
             J_RX(g_cache));

@@ -193,6 +193,11 @@ const DEFINITIONS: &[Definition] = &[
         Flag
     ),
     launch!(
+        "HL_A64_X86_JCC_LINK",
+        "enable experimental direct conditional edges for AArch64 guests on x86-64",
+        Flag
+    ),
+    launch!(
         "HL_TRANSLIT_DIRECT_JMP_IBTC_DISABLE",
         "disable direct-JMP late linking through the same-ISA IBTC",
         Flag
