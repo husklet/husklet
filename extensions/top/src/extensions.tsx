@@ -659,7 +659,11 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                 )}
                 {catalogueState === 'ready' && availableCatalogue.length === 0 && (
                   <InlineMessage
-                    label="No additional extensions are available in the built-in catalogue."
+                    label={
+                      catalogue && catalogue.entries.length > 0
+                        ? 'Everything in the built-in catalogue is installed. Available updates appear below.'
+                        : 'The built-in extension catalogue is currently empty.'
+                    }
                     tone="neutral"
                   />
                 )}

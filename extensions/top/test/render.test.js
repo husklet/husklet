@@ -629,6 +629,12 @@ test('an installed catalogue extension exposes its update review without retypin
     undefined,
     'installed catalogue entries do not also appear as new installations',
   );
+  assert.ok(
+    labelled(
+      stage,
+      'Everything in the built-in catalogue is installed. Available updates appear below.',
+    ),
+  );
 
   invoke(stage, 'Review update');
   await settled();
@@ -798,14 +804,11 @@ test('extension discovery distinguishes catalogue loading from a complete empty 
   );
   await settled();
   assert.ok(labelled(stage, 'Loading extension catalogue…'));
-  assert.equal(
-    labelled(stage, 'No additional extensions are available in the built-in catalogue.'),
-    undefined,
-  );
+  assert.equal(labelled(stage, 'The built-in extension catalogue is currently empty.'), undefined);
 
   resolveCatalogue({ entries: [], complete: true });
   await settled();
-  assert.ok(labelled(stage, 'No additional extensions are available in the built-in catalogue.'));
+  assert.ok(labelled(stage, 'The built-in extension catalogue is currently empty.'));
 });
 
 test('extension discovery can retry a failed catalogue without leaving the page', async () => {
