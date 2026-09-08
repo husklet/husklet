@@ -68,36 +68,7 @@ impl ImageStore for ImageLibrary {
             .to_string();
         let (job, cancel) = {
             let mut pulls = self.pulls.lock().unwrap();
-            if active_pulls(&pulls, owner) >= 4 {
-                return Err(HostError::Conflict("four image pulls are already active".into()));
-            }
-            let globally_active = pulls
-                .jobs
-                .values()
-                .filter(|entry| !matches!(entry.status.state.as_str(), "complete" | "failed" | "cancelled"))
-                .count();
-            if globally_active >= 16 {
-                return Err(HostError::Conflict(
-                    "sixteen image pulls are already active globally".into(),
-                ));
-            }
-            while pulls.jobs.values().filter(|entry| entry.owner == owner).count() >= 32 {
-                let Some(id) = oldest_terminal_job(&pulls, Some(owner)) else {
-                    return Err(HostError::Conflict(
-                        "this extension's image pull history is full".into(),
-                    ));
-                };
-                pulls.jobs.remove(&id);
-                pulls.changed.remove(&id);
-            }
-            while pulls.jobs.len() >= 128 {
-                let Some(id) = oldest_terminal_job(&pulls, Some(owner)).or_else(|| oldest_terminal_job(&pulls, None))
-                else {
-                    return Err(HostError::Conflict("global image pull history is full".into()));
-                };
-                pulls.jobs.remove(&id);
-                pulls.changed.remove(&id);
-            }
+            admit_pull(&mut pulls, owner)?;
             let id = uuid::Uuid::new_v4().simple().to_string();
             let cancel = Arc::new(PullCancellation {
                 cancelled: AtomicBool::new(false),
@@ -301,6 +272,39 @@ fn oldest_terminal_job(pulls: &Pulls, preferred_owner: Option<&str>) -> Option<S
         .filter(|(_, entry)| matches!(entry.status.state.as_str(), "complete" | "failed" | "cancelled"))
         .min_by_key(|(id, _)| pulls.changed.get(*id).map_or(u64::MAX, |change| change.0))
         .map(|(id, _)| id.clone())
+}
+
+fn admit_pull(pulls: &mut Pulls, owner: &str) -> Result<(), HostError> {
+    if active_pulls(pulls, owner) >= 4 {
+        return Err(HostError::Conflict("four image pulls are already active".into()));
+    }
+    let globally_active = pulls
+        .jobs
+        .values()
+        .filter(|entry| !matches!(entry.status.state.as_str(), "complete" | "failed" | "cancelled"))
+        .count();
+    if globally_active >= 16 {
+        return Err(HostError::Conflict(
+            "sixteen image pulls are already active globally".into(),
+        ));
+    }
+    while pulls.jobs.values().filter(|entry| entry.owner == owner).count() >= 32 {
+        let Some(id) = oldest_terminal_job(pulls, Some(owner)) else {
+            return Err(HostError::Conflict(
+                "this extension's image pull history is full".into(),
+            ));
+        };
+        pulls.jobs.remove(&id);
+        pulls.changed.remove(&id);
+    }
+    while pulls.jobs.len() >= 128 {
+        let Some(id) = oldest_terminal_job(pulls, Some(owner)).or_else(|| oldest_terminal_job(pulls, None)) else {
+            return Err(HostError::Conflict("global image pull history is full".into()));
+        };
+        pulls.jobs.remove(&id);
+        pulls.changed.remove(&id);
+    }
+    Ok(())
 }
 
 async fn pull_job(
@@ -536,6 +540,48 @@ mod tests {
         }
         assert_eq!(active_pulls(&pulls, "test"), 4);
         assert_eq!(active_pulls(&pulls, "other"), 0);
+    }
+
+    #[test]
+    fn full_global_history_evicts_oldest_terminal_entry_but_never_an_active_job() {
+        let registry = registry();
+        let mut pulls = registry.lock().unwrap();
+        pulls.jobs.clear();
+        pulls.changed.clear();
+        for number in 0_u64..128 {
+            let job = format!("{number:032x}");
+            let active = number == 127;
+            pulls.jobs.insert(
+                job.clone(),
+                PullEntry {
+                    owner: format!("owner-{}", number % 5),
+                    status: ImagePullStatus {
+                        job: job.clone(),
+                        reference: "docker.io/library/alpine:latest".into(),
+                        revision: 1,
+                        state: if active { "pulling" } else { "complete" }.into(),
+                        status: None,
+                        layer: None,
+                        current: None,
+                        total: None,
+                        image: None,
+                        error: None,
+                    },
+                    cancel: Arc::new(PullCancellation {
+                        cancelled: AtomicBool::new(false),
+                        wake: tokio::sync::Notify::new(),
+                    }),
+                },
+            );
+            pulls.changed.insert(job, (number + 1, 1));
+        }
+
+        admit_pull(&mut pulls, "new-owner").unwrap();
+
+        assert_eq!(pulls.jobs.len(), 127);
+        assert!(!pulls.jobs.contains_key("00000000000000000000000000000000"));
+        assert!(pulls.jobs.contains_key("0000000000000000000000000000007f"));
+        assert_eq!(active_pulls(&pulls, "owner-2"), 1);
     }
 
     #[test]

@@ -1099,6 +1099,60 @@ test('image pull rejects invalid bounds and pre-aborted signals before host acce
   assert.equal(calls, 0);
 });
 
+test('image pull completes through start and status without cancelling', async () => {
+  const calls = [];
+  const image = { id: `sha256:${'a'.repeat(64)}`, reference: 'docker.io/library/alpine:3.20', references: ['docker.io/library/alpine:3.20'], size: 1, created: 1 };
+  const api = workspace({
+    async call(name) {
+      calls.push(name);
+      if (name === 'image_pull_start') return { reply: 'image_pull_job', with: { job: 'job' } };
+      return { reply: 'image_pull', with: { job: 'job', reference: image.reference, revision: 2, state: 'complete', image } };
+    },
+    onEvent() { return () => {}; },
+  });
+  assert.deepEqual(await api.images.pull('alpine:3.20'), image);
+  assert.deepEqual(calls, ['image_pull_start', 'image_pull_status']);
+});
+
+test('image pull preserves host failure when best-effort cancellation also fails', async () => {
+  const calls = [];
+  const api = workspace({
+    async call(name) {
+      calls.push(name);
+      if (name === 'image_pull_start') return { reply: 'image_pull_job', with: { job: 'job' } };
+      if (name === 'image_pull_status') return { reply: 'image_pull', with: { job: 'job', reference: 'alpine:3.20', revision: 2, state: 'failed', error: 'registry refused credentials' } };
+      throw new Error('cancel transport failed');
+    },
+    onEvent() { return () => {}; },
+  });
+  await assert.rejects(api.images.pull('alpine:3.20'), /registry refused credentials/);
+  assert.deepEqual(calls, ['image_pull_start', 'image_pull_status', 'image_pull_cancel']);
+});
+
+test('image pull timeout and AbortSignal cancel the owned host job and preserve the primary error', async () => {
+  for (const mode of ['timeout', 'abort']) {
+    const calls = [];
+    const controller = new AbortController();
+    const api = workspace({
+      async call(name) {
+        calls.push(name);
+        if (name === 'image_pull_start') return { reply: 'image_pull_job', with: { job: 'job' } };
+        if (name === 'image_pull_status') {
+          if (mode === 'abort') controller.abort(new Error('caller stopped pull'));
+          return { reply: 'image_pull', with: { job: 'job', reference: 'alpine:3.20', revision: 1, state: 'pulling' } };
+        }
+        throw new Error('cancel failed too');
+      },
+      onEvent() { return () => {}; },
+    });
+    const operation = api.images.pull('alpine:3.20', mode === 'timeout'
+      ? { timeoutMs: 1 }
+      : { timeoutMs: 1_000, signal: controller.signal });
+    await assert.rejects(operation, mode === 'timeout' ? /timed out/ : /caller stopped pull|abort/i);
+    assert.equal(calls.at(-1), 'image_pull_cancel');
+  }
+});
+
 test('extension acquisition preserves job revision and explicit grant identity', async () => {
   const stage = await pair(); const next = frames(stage.host); await next();
   const api = workspace(stage.session);
