@@ -3002,7 +3002,7 @@ test('container creation groups its compact form and uses a human label editor',
     'Process',
     'Resources and connectivity',
     'Labels use one name=value pair per line, for example role=worker.',
-    'Mounts and ports use JSON object arrays; host filesystem paths and host addresses are not accepted.',
+    'Mounts accept named volumes only. Published host ports may be left automatic.',
   ])
     assert.ok(labelled(stage, label), `${label} is available in the semantic tree`);
   const placeholders = frame.patches
@@ -3132,6 +3132,13 @@ test('native process editors preserve ordered argv and environment wire types', 
   change(stage, 'Variable name', 'MODE');
   change(stage, 'Variable value', 'test');
   invoke(stage, 'Add variable');
+  change(stage, 'Mount volume', 'cache');
+  change(stage, 'Container path', '/cache');
+  toggleLatestSwitch(stage, true);
+  invoke(stage, 'Add mount');
+  change(stage, 'Container port', '8080');
+  change(stage, 'Host port (automatic if empty)', '18080');
+  invoke(stage, 'Publish port');
   invoke(stage, 'Create and start');
   await settled();
   await settled();
@@ -3141,6 +3148,8 @@ test('native process editors preserve ordered argv and environment wire types', 
       name: 'native',
       command: ['sh', '-lc', 'printf ready'],
       environment: [['MODE', 'test']],
+      mounts: [{ volume: 'cache', target: '/cache', read_only: true }],
+      ports: [{ container: 8080, host: 18080, protocol: 'tcp' }],
     },
   ]);
 });

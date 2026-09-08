@@ -12,7 +12,9 @@ import {
   FormLabel,
   Heading,
   Row,
+  Select,
   Spinner,
+  Switch,
   TagInput,
   Text,
   TextArea,
@@ -246,6 +248,149 @@ function isValidPublishedPort(value: unknown, allowed: Set<string>): value is Pu
     isPortNumber(container) &&
     (host === undefined || host === null || isPortNumber(host)) &&
     (protocol === 'tcp' || protocol === 'udp')
+  );
+}
+
+function objectArray(value: string): Record<string, unknown>[] {
+  if (!value) return [];
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.filter(isObject) : [];
+  } catch {
+    return [];
+  }
+}
+
+function MountEditor({
+  value,
+  enabled,
+  onChange,
+}: {
+  value: string;
+  enabled: boolean;
+  onChange: (value: string) => void;
+}) {
+  const [volume, setVolume] = useState('');
+  const [target, setTarget] = useState('');
+  const [readOnly, setReadOnly] = useState(false);
+  const entries = objectArray(value);
+  const add = () => {
+    if (!volume || !target || entries.length >= 64) return;
+    onChange(JSON.stringify([...entries, { volume, target, read_only: readOnly }]));
+    setVolume('');
+    setTarget('');
+    setReadOnly(false);
+  };
+  return (
+    <FormControl gap={1}>
+      <FormLabel label="Volume mounts" />
+      <Row gap={1} wrap>
+        <Entry
+          value={volume}
+          placeholder="Mount volume"
+          enabled={enabled}
+          onChange={(event) => setVolume(String(event.value ?? ''))}
+        />
+        <Entry
+          value={target}
+          placeholder="Container path"
+          enabled={enabled}
+          onChange={(event) => setTarget(String(event.value ?? ''))}
+        />
+        <FormControl gap={1}>
+          <FormLabel label="Read only" />
+          <Switch
+            checked={readOnly}
+            enabled={enabled}
+            onToggle={(event) => setReadOnly(Boolean(event.value))}
+          />
+        </FormControl>
+        <Button
+          label="Add mount"
+          enabled={enabled && Boolean(volume) && Boolean(target)}
+          onInvoke={add}
+        />
+      </Row>
+      <Row gap={1} wrap>
+        {entries.map((entry, index) => (
+          <Button
+            key={`${String(entry.volume)}:${index}`}
+            label={`${String(entry.volume)} → ${String(entry.target)}${entry.read_only ? ' · read only' : ''}`}
+            tooltip={`Remove mount ${index + 1}`}
+            variant="ghost"
+            enabled={enabled}
+            onInvoke={() => onChange(JSON.stringify(entries.filter((_, held) => held !== index)))}
+          />
+        ))}
+      </Row>
+    </FormControl>
+  );
+}
+
+function PortEditor({
+  value,
+  enabled,
+  onChange,
+}: {
+  value: string;
+  enabled: boolean;
+  onChange: (value: string) => void;
+}) {
+  const [containerPort, setContainerPort] = useState('');
+  const [hostPort, setHostPort] = useState('');
+  const [protocol, setProtocol] = useState('tcp');
+  const entries = objectArray(value);
+  const add = () => {
+    const container = Number(containerPort);
+    const host = hostPort ? Number(hostPort) : null;
+    if (!isPortNumber(container) || (host !== null && !isPortNumber(host)) || entries.length >= 64)
+      return;
+    onChange(JSON.stringify([...entries, { container, host, protocol }]));
+    setContainerPort('');
+    setHostPort('');
+  };
+  const validDraft =
+    isPortNumber(Number(containerPort)) && (!hostPort || isPortNumber(Number(hostPort)));
+  return (
+    <FormControl gap={1}>
+      <FormLabel label="Published ports" />
+      <Row gap={1} wrap>
+        <Entry
+          value={containerPort}
+          placeholder="Container port"
+          enabled={enabled}
+          onChange={(event) => setContainerPort(String(event.value ?? ''))}
+        />
+        <Entry
+          value={hostPort}
+          placeholder="Host port (automatic if empty)"
+          enabled={enabled}
+          onChange={(event) => setHostPort(String(event.value ?? ''))}
+        />
+        <Select
+          value={protocol}
+          choices={[
+            { value: 'tcp', label: 'TCP' },
+            { value: 'udp', label: 'UDP' },
+          ]}
+          enabled={enabled}
+          onChange={(event) => setProtocol(String(event.value ?? 'tcp'))}
+        />
+        <Button label="Publish port" enabled={enabled && validDraft} onInvoke={add} />
+      </Row>
+      <Row gap={1} wrap>
+        {entries.map((entry, index) => (
+          <Button
+            key={`${String(entry.container)}:${String(entry.protocol)}:${index}`}
+            label={`${String(entry.host ?? 'auto')} → ${String(entry.container)}/${String(entry.protocol)}`}
+            tooltip={`Remove published port ${index + 1}`}
+            variant="ghost"
+            enabled={enabled}
+            onInvoke={() => onChange(JSON.stringify(entries.filter((_, held) => held !== index)))}
+          />
+        ))}
+      </Row>
+    </FormControl>
   );
 }
 
@@ -669,25 +814,35 @@ export function ContainerCreate({
                     enabled={editable}
                     onChange={(event) => update('network', event.value)}
                   />
+                  <MountEditor
+                    value={draft.mounts}
+                    enabled={editable}
+                    onChange={(value) => update('mounts', value)}
+                  />
+                  <PortEditor
+                    value={draft.ports}
+                    enabled={editable}
+                    onChange={(value) => update('ports', value)}
+                  />
                   <Entry
                     value={draft.mounts}
                     placeholder={'Named volume mounts JSON (optional)'}
+                    visible={false}
                     enabled={editable}
                     onChange={(event) => update('mounts', event.value)}
                   />
                   <Entry
                     value={draft.ports}
                     placeholder={'Published ports JSON (optional)'}
+                    visible={false}
                     enabled={editable}
                     onChange={(event) => update('ports', event.value)}
                   />
                 </Row>
                 <Text
-                  label={
-                    'Mounts and ports use JSON object arrays; host filesystem paths and host addresses are not accepted.'
-                  }
-                  color={'text-dim'}
-                  wrap={true}
+                  label="Mounts accept named volumes only. Published host ports may be left automatic."
+                  color="text-dim"
+                  wrap
                 />
               </Column>
             </Expander>
