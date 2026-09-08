@@ -11,8 +11,8 @@ use hl_extension::port::{
     ContainerControl, ContainerInventory, ContainerOutput, ContainerSummary, DirectoryPage, Division, Entry,
     ExecutionSummary, ExtensionAcquisitionJob, ExtensionAcquisitionStatus, ExtensionStore, ExtensionSummary,
     FileInventory, FileRange, GridSize, HostError, ImageDetails, ImagePruneResult, ImageStore, ImageSummary, Occupant,
-    PaneSemanticAction, PaneSemanticTree, PaneSummary, PaneText, ProcessList, SemanticActionKind, SemanticNode,
-    TabSummary, TerminalSurface, TerminalTopology, WorkspaceFiles, WorkspaceInventory, WorkspaceState,
+    PaneSemanticAction, PaneSemanticTree, PaneSummary, PaneText, PreferenceValue, ProcessList, SemanticActionKind,
+    SemanticNode, TabSummary, TerminalSurface, TerminalTopology, WorkspaceFiles, WorkspaceInventory, WorkspaceState,
 };
 use hl_extension::{
     Authority, Capability, ExtensionName, Failure, Grant, RelativePath, Reply, Request, Services, Session, Topic,
@@ -1610,6 +1610,10 @@ fn calls() -> Vec<(Request, Capability)> {
 fn all_calls() -> Vec<(Request, Capability)> {
     let mut requests = calls();
     requests.extend([
+        (
+            Request::FilesystemChanges { after: 0, limit: 1 },
+            Capability::FilesystemRead,
+        ),
         (Request::StateRead, Capability::StateRead),
         (
             Request::StateWrite {
@@ -1623,6 +1627,22 @@ fn all_calls() -> Vec<(Request, Capability)> {
                 observed: "absent".into(),
             },
             Capability::StateWrite,
+        ),
+        (Request::PreferenceRead, Capability::PreferenceRead),
+        (
+            Request::PreferenceSet {
+                observed: 0,
+                key: "sidebar-width".into(),
+                value: PreferenceValue::Number(240),
+            },
+            Capability::PreferenceWrite,
+        ),
+        (
+            Request::PreferenceRemove {
+                observed: 0,
+                key: "sidebar-width".into(),
+            },
+            Capability::PreferenceWrite,
         ),
     ]);
     requests.extend([
