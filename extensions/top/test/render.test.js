@@ -720,7 +720,8 @@ for (const updating of [false, true]) {
       'Rename or move entries folder · migrations/ and everything inside',
     ])
       assert.ok(labelled(stage, label), label);
-    assert.ok(labelled(stage, '0/10 permissions allowed'));
+    assert.ok(labelled(stage, '0/10 selected'));
+    assert.ok(labelled(stage, 'Permission choices continue below · scroll to review all'));
     assert.ok(labelled(stage, 'Container access · 0/4'));
     assert.ok(labelled(stage, '0/6 workspace paths allowed'));
     assert.deepEqual(latestSwitchValues(stage), Array(10).fill(false));
@@ -733,7 +734,19 @@ for (const updating of [false, true]) {
     toggleSwitch(stage, 7, true);
     toggleSwitch(stage, 9, true);
     assert.ok(labelled(stage, '3/6 workspace paths allowed'));
-    assert.ok(labelled(stage, '3/10 permissions allowed'));
+    assert.ok(labelled(stage, '3/10 selected'));
+    assert.ok(
+      ancestorTags(stage, 'View contents file · README.md').filter((tag) => tag === 'Scroll')
+        .length === 1,
+      'permission choices remain inside the scrolling review region',
+    );
+    assert.ok(
+      ancestorTags(
+        stage,
+        updating ? 'Update with selected access' : 'Install with selected access',
+      ).filter((tag) => tag === 'Scroll').length === 0,
+      'the review decision remains outside the scrolling permission region',
+    );
     invoke(stage, updating ? 'Update with selected access' : 'Install with selected access');
     await settled();
     await settled();
@@ -801,8 +814,8 @@ test('extension image entry submits from the keyboard and consent explains reque
   assert.deepEqual(calls, [['inspect', 'registry.example/assistant:1.2']]);
   assert.ok(labelled(stage, 'View containers and processes (containers:read)'));
   assert.ok(labelled(stage, 'Read and write terminal text (terminals:output)'));
-  assert.ok(labelled(stage, '0/2 permissions allowed'));
-  assert.ok(labelled(stage, 'Husklet access · 0/2'));
+  assert.ok(labelled(stage, '0/2 selected'));
+  assert.ok(labelled(stage, 'Product access · 0/2'));
   assert.equal(
     labelled(stage, 'Workspace files'),
     undefined,
@@ -820,9 +833,9 @@ test('extension image entry submits from the keyboard and consent explains reque
 
   toggleSwitch(stage, 0, true);
   toggleSwitch(stage, 1, true);
-  assert.ok(labelled(stage, '2/2 permissions allowed'));
-  assert.ok(labelled(stage, 'Husklet access · 2/2'));
-  assert.ok(labelled(stage, 'Clear Husklet access'));
+  assert.ok(labelled(stage, '2/2 selected'));
+  assert.ok(labelled(stage, 'Product access · 2/2'));
+  assert.ok(labelled(stage, 'Clear product access'));
   invoke(stage, 'Install with selected access');
   await settled();
   await settled();
