@@ -86,6 +86,7 @@ pub struct Entry {
     /// Exactly what the person agreed to.
     pub granted: Grant,
     pub containers: hl_extension::ContainerGrant,
+    pub images: hl_extension::ImageGrant,
     pub networks: hl_extension::NetworkGrant,
     pub volumes: hl_extension::VolumeGrant,
     pub filesystem: hl_extension::FilesystemGrant,
@@ -164,6 +165,7 @@ impl<S: Storage> Roster<S> {
                 version: record.version.clone(),
                 granted: record.granted.clone(),
                 containers: record.containers.clone(),
+                images: record.images.clone(),
                 networks: record.networks.clone(),
                 volumes: record.volumes.clone(),
                 filesystem: record.filesystem.clone(),
@@ -212,6 +214,7 @@ impl<S: Storage> Roster<S> {
             digest,
             consented,
             containers,
+            &hl_extension::ImageGrant::default(),
             &hl_extension::NetworkGrant::default(),
             &hl_extension::VolumeGrant::default(),
             &hl_extension::FilesystemGrant::default(),
@@ -226,6 +229,7 @@ impl<S: Storage> Roster<S> {
         digest: &str,
         consented: &Grant,
         containers: &hl_extension::ContainerGrant,
+        images: &hl_extension::ImageGrant,
         networks: &hl_extension::NetworkGrant,
         volumes: &hl_extension::VolumeGrant,
         filesystem: &hl_extension::FilesystemGrant,
@@ -240,6 +244,7 @@ impl<S: Storage> Roster<S> {
                 digest,
                 consented,
                 containers,
+                images,
                 networks,
                 volumes,
                 filesystem,
@@ -291,6 +296,7 @@ impl<S: Storage> Roster<S> {
             update,
             consented,
             containers,
+            &hl_extension::ImageGrant::default(),
             &hl_extension::NetworkGrant::default(),
             &hl_extension::VolumeGrant::default(),
             &hl_extension::FilesystemGrant::default(),
@@ -304,6 +310,7 @@ impl<S: Storage> Roster<S> {
         update: Update,
         consented: &Grant,
         containers: &hl_extension::ContainerGrant,
+        images: &hl_extension::ImageGrant,
         networks: &hl_extension::NetworkGrant,
         volumes: &hl_extension::VolumeGrant,
         filesystem: &hl_extension::FilesystemGrant,
@@ -316,6 +323,7 @@ impl<S: Storage> Roster<S> {
                 update,
                 consented,
                 containers,
+                images,
                 networks,
                 volumes,
                 filesystem,
@@ -469,6 +477,7 @@ impl<S> std::fmt::Debug for Roster<S> {
 pub fn described(record: &Record) -> Manifest {
     let mut manifest = record.declaration.clone().unwrap_or_else(|| Manifest {
         containers: hl_extension::ContainerGrant::default(),
+        images: hl_extension::ImageGrant::default(),
         networks: hl_extension::NetworkGrant::default(),
         volumes: hl_extension::VolumeGrant::default(),
         name: record.name.clone(),
@@ -491,6 +500,7 @@ pub fn described(record: &Record) -> Manifest {
     manifest.protocol = hl_extension::PROTOCOL;
     manifest.capabilities.clone_from(&record.granted);
     manifest.containers.clone_from(&record.containers);
+    manifest.images.clone_from(&record.images);
     manifest.networks.clone_from(&record.networks);
     manifest.volumes.clone_from(&record.volumes);
     manifest.filesystem.clone_from(&record.filesystem);
@@ -506,6 +516,7 @@ fn enrol(installation: &mut Installation, record: &Record) -> Result<(), Objecti
         &record.image_digest,
         &record.granted,
         &record.containers,
+        &record.images,
         &record.networks,
         &record.volumes,
         &record.filesystem,
@@ -568,6 +579,7 @@ mod tests {
     fn manifest(name: &str, capabilities: &[Capability]) -> Manifest {
         Manifest {
             containers: hl_extension::ContainerGrant::default(),
+            images: hl_extension::ImageGrant::default(),
             networks: hl_extension::NetworkGrant::default(),
             volumes: hl_extension::VolumeGrant::default(),
             name: ExtensionName::new(name).expect("name"),
@@ -630,6 +642,7 @@ mod tests {
                 "sha256:exact",
                 &asked.capabilities,
                 &asked.containers,
+                &asked.images,
                 &asked.networks,
                 &asked.volumes,
                 &asked.filesystem,

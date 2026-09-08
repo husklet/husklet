@@ -48,7 +48,9 @@ test(
               'containers:control',
               'containers:attach',
               'images:read',
-              'images:write',
+              'images:pull',
+              'images:remove',
+              'images:prune',
               'volumes:read',
               'volumes:write',
               'networks:read',
@@ -471,7 +473,7 @@ test(
           kind: KIND.event,
           payload: {
             snapshot: 'image_pulls',
-            of: { job: 'p1', revision: 2, state: 'pulling', coalesced: 0 },
+            of: { job: 'p1', revision: 2, sequence: 1, state: 'pulling', coalesced: 0 },
           },
         }),
       );

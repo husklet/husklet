@@ -1400,6 +1400,7 @@ name = "hl-extension"
 version = "0.1.0"
 dependencies = [
  "hl-gui",
+ "hl-image-reference",
  "hl-rpc",
  "serde",
  "serde_json",
@@ -1598,6 +1599,7 @@ dependencies = [
  "hl-fs",
  "hl-gui",
  "hl-gui-gtk",
+ "hl-image-reference",
  "hl-images",
  "hl-log",
  "hl-ws",

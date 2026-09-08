@@ -879,14 +879,21 @@ for (const updating of [false, true]) {
       create: true,
     });
     assert.deepEqual(calls[0][4], {
-      selectors: [],
-      create: false,
+      read: [],
+      use: [],
+      pull: [],
+      remove: [],
+      prune_all_unused: false,
     });
     assert.deepEqual(calls[0][5], {
       selectors: [],
       create: false,
     });
     assert.deepEqual(calls[0][6], {
+      selectors: [],
+      create: false,
+    });
+    assert.deepEqual(calls[0][7], {
       read: [{ exact: 'README.md' }],
       write: [],
       create: [{ subtree: 'generated' }],
@@ -952,8 +959,8 @@ test('extension review grants one exact network without workspace-wide network a
   invoke(stage, 'Install with selected access');
   await settled();
   await settled();
-  assert.deepEqual(calls[0][4], { selectors: [{ name: 'database' }], create: false });
-  assert.deepEqual(calls[0][5], { selectors: [{ name: 'data' }], create: false });
+  assert.deepEqual(calls[0][5], { selectors: [{ name: 'database' }], create: false });
+  assert.deepEqual(calls[0][6], { selectors: [{ name: 'data' }], create: false });
 });
 
 test('extension image entry submits from the keyboard and consent explains requested authority', async () => {

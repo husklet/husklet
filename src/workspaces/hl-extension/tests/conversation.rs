@@ -155,15 +155,6 @@ impl ImageStore for Host {
     fn list(&self) -> Result<Vec<ImageSummary>, HostError> {
         Ok(Vec::new())
     }
-
-    fn pull(&self, reference: &str) -> Result<ImageSummary, HostError> {
-        Ok(ImageSummary {
-            id: "i1".into(),
-            reference: reference.into(),
-            size: 1,
-            created: 0,
-        })
-    }
 }
 
 impl TerminalSurface for Host {
@@ -1014,6 +1005,12 @@ fn container_name_boundaries_cross_the_real_socket_before_dispatch() {
         selectors: Vec::new(),
         create: true,
     })
+    .with_images(hl_extension::ImageGrant {
+        r#use: vec![hl_extension::ImageSelector::Reference {
+            reference: "docker.io/library/alpine:3.20".into(),
+        }],
+        ..hl_extension::ImageGrant::default()
+    })
     .with_volumes(hl_extension::VolumeGrant {
         selectors: vec![hl_extension::VolumeSelector::Name { name: "v".repeat(255) }],
         create: false,
@@ -1026,7 +1023,7 @@ fn container_name_boundaries_cross_the_real_socket_before_dispatch() {
     let mut receiver = hl_extension::Wire::new(host_end);
     let request = Request::ContainerCreate {
         spec: ContainerCreateSpec {
-            image: "alpine:3.20".into(),
+            image: "docker.io/library/alpine:3.20".into(),
             name: "worker".into(),
             hostname: Some("h".repeat(253)),
             entrypoint: None,

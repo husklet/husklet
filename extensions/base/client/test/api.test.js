@@ -1084,12 +1084,28 @@ test('image pull jobs and progress watcher preserve exact typed wire shapes', as
   stage.session.close(); stage.host.destroy(); stage.server.close();
 });
 
+test('image pull rejects invalid bounds and pre-aborted signals before host access', async () => {
+  let calls = 0;
+  const api = workspace({
+    async call() { calls += 1; throw new Error('unexpected host access'); },
+    onEvent() { return () => {}; },
+  });
+  for (const timeoutMs of [0, -1, NaN, Infinity, 1.5, 86_400_001]) {
+    await assert.rejects(api.images.pull('alpine:3.20', { timeoutMs }), RangeError);
+  }
+  const controller = new AbortController();
+  controller.abort(new Error('stop'));
+  await assert.rejects(api.images.pull('alpine:3.20', { signal: controller.signal }), /stop|abort/i);
+  assert.equal(calls, 0);
+});
+
 test('extension acquisition preserves job revision and explicit grant identity', async () => {
   const stage = await pair(); const next = frames(stage.host); await next();
   const api = workspace(stage.session);
   const digest = `sha256:${'a'.repeat(64)}`;
+  const imageGrant = { read: [], use: [], pull: [], remove: [], prune_all_unused: false };
   const operations = [api.extensions.startAcquisition('registry/example:1'), api.extensions.acquisition('job-1'),
-    api.extensions.cancelAcquisition('job-1', 7), api.extensions.install('job-1', 7, digest, ['interface:render', 'containers:attach'], { selectors: [{ name: 'database' }], create: false }, { selectors: [{ name: 'database' }], create: false }, { selectors: [{ name: 'data' }], create: false }, { read: [{ subtree: 'src' }], write: [{ exact: 'settings.json' }], create: [], delete: [], rename: [] }, { read: [{ workspace: 'dev', name: 'PGPASSWORD' }], write: [] }),
+    api.extensions.cancelAcquisition('job-1', 7), api.extensions.install('job-1', 7, digest, ['interface:render', 'containers:attach'], { selectors: [{ name: 'database' }], create: false }, imageGrant, { selectors: [{ name: 'database' }], create: false }, { selectors: [{ name: 'data' }], create: false }, { read: [{ subtree: 'src' }], write: [{ exact: 'settings.json' }], create: [], delete: [], rename: [] }, { read: [{ workspace: 'dev', name: 'PGPASSWORD' }], write: [] }),
     api.extensions.update('job-2', 8, digest, ['containers:read'], { selectors: [{ all: true }], create: true })];
   const calls = [];
   for (let index = 0; index < operations.length; index += 1) calls.push((await next()).payload);
@@ -1097,8 +1113,8 @@ test('extension acquisition preserves job revision and explicit grant identity',
     { call: 'extension_acquisition_start', with: { reference: 'registry/example:1' } },
     { call: 'extension_acquisition_status', with: { job: 'job-1' } },
     { call: 'extension_acquisition_cancel', with: { job: 'job-1', revision: 7 } },
-    { call: 'extension_install', with: { job: 'job-1', revision: 7, image_digest: digest, granted: ['interface:render', 'containers:attach'], containers: { selectors: [{ name: 'database' }], create: false }, networks: { selectors: [{ name: 'database' }], create: false }, volumes: { selectors: [{ name: 'data' }], create: false }, filesystem: { read: [{ subtree: 'src' }], write: [{ exact: 'settings.json' }], create: [], delete: [], rename: [] }, workspace_environment: { read: [{ workspace: 'dev', name: 'PGPASSWORD' }], write: [] } } },
-    { call: 'extension_update', with: { job: 'job-2', revision: 8, image_digest: digest, granted: ['containers:read'], containers: { selectors: [{ all: true }], create: true }, networks: { selectors: [], create: false }, volumes: { selectors: [], create: false }, filesystem: { read: [], write: [], create: [], delete: [], rename: [] }, workspace_environment: { read: [], write: [] } } },
+    { call: 'extension_install', with: { job: 'job-1', revision: 7, image_digest: digest, granted: ['interface:render', 'containers:attach'], containers: { selectors: [{ name: 'database' }], create: false }, images: imageGrant, networks: { selectors: [{ name: 'database' }], create: false }, volumes: { selectors: [{ name: 'data' }], create: false }, filesystem: { read: [{ subtree: 'src' }], write: [{ exact: 'settings.json' }], create: [], delete: [], rename: [] }, workspace_environment: { read: [{ workspace: 'dev', name: 'PGPASSWORD' }], write: [] } } },
+    { call: 'extension_update', with: { job: 'job-2', revision: 8, image_digest: digest, granted: ['containers:read'], containers: { selectors: [{ all: true }], create: true }, images: imageGrant, networks: { selectors: [], create: false }, volumes: { selectors: [], create: false }, filesystem: { read: [], write: [], create: [], delete: [], rename: [] }, workspace_environment: { read: [], write: [] } } },
   ]);
   const summary = { name: 'example', image_digest: 'sha256:abc', status: 'standby' };
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'extension_acquisition_job', with: { job: 'job-1' } } }));

@@ -146,6 +146,7 @@ impl ExtensionStore for ExtensionManagement {
         image_digest: &str,
         granted: &Grant,
         containers: &hl_extension::ContainerGrant,
+        images: &hl_extension::ImageGrant,
         networks: &hl_extension::NetworkGrant,
         volumes: &hl_extension::VolumeGrant,
         filesystem: &hl_extension::FilesystemGrant,
@@ -158,6 +159,7 @@ impl ExtensionStore for ExtensionManagement {
             revision,
             granted,
             containers,
+            images,
             networks,
             volumes,
             filesystem,
@@ -178,6 +180,7 @@ impl ExtensionStore for ExtensionManagement {
         image_digest: &str,
         granted: &Grant,
         containers: &hl_extension::ContainerGrant,
+        images: &hl_extension::ImageGrant,
         networks: &hl_extension::NetworkGrant,
         volumes: &hl_extension::VolumeGrant,
         filesystem: &hl_extension::FilesystemGrant,
@@ -190,6 +193,7 @@ impl ExtensionStore for ExtensionManagement {
             revision,
             granted,
             containers,
+            images,
             networks,
             volumes,
             filesystem,
@@ -270,6 +274,7 @@ fn acquisition_status(job: String, snapshot: AcquisitionSnapshot) -> ExtensionAc
                 version: candidate.version,
                 image_digest: candidate.digest,
                 requested: candidate.requested,
+                requested_images: candidate.requested_images,
                 requested_containers: candidate.requested_containers,
                 requested_networks: candidate.requested_networks,
                 requested_volumes: candidate.requested_volumes,
@@ -305,6 +310,7 @@ fn summary(entry: super::roster::Entry) -> ExtensionSummary {
         enabled,
         pane_providers: entry.pane_providers,
         granted: entry.granted,
+        images: entry.images,
         containers: entry.containers,
         networks: entry.networks,
         volumes: entry.volumes,
@@ -386,6 +392,7 @@ mod tests {
                 reference: "registry.example/team/tool:2".into(),
                 revision: 7,
                 state: AcquisitionState::Ready(crate::extension::acquisition::AcquisitionCandidate {
+                    requested_images: hl_extension::ImageGrant::default(),
                     requested_containers: hl_extension::ContainerGrant::default(),
                     requested_networks: hl_extension::NetworkGrant::default(),
                     requested_volumes: hl_extension::VolumeGrant::default(),
@@ -413,6 +420,7 @@ mod tests {
             reference: "registry.example/team/tool:latest".into(),
             revision: 7,
             state: AcquisitionState::Ready(crate::extension::acquisition::AcquisitionCandidate {
+                requested_images: hl_extension::ImageGrant::default(),
                 requested_containers: hl_extension::ContainerGrant::default(),
                 requested_networks: hl_extension::NetworkGrant::default(),
                 requested_volumes: hl_extension::VolumeGrant::default(),
@@ -470,6 +478,7 @@ mod tests {
         let digest = format!("sha256:{}", "a".repeat(64));
         let manifest = hl_extension::Manifest {
             containers: hl_extension::ContainerGrant::default(),
+            images: hl_extension::ImageGrant::default(),
             networks: hl_extension::NetworkGrant::default(),
             volumes: hl_extension::VolumeGrant::default(),
             name: name.clone(),
@@ -524,6 +533,7 @@ mod tests {
             image_digest: format!("sha256:{}", "d".repeat(64)),
             version: "2.1.0".into(),
             granted: Grant::new([hl_extension::Capability::Interface]),
+            images: hl_extension::ImageGrant::default(),
             containers: hl_extension::ContainerGrant {
                 selectors: vec![hl_extension::ContainerSelector::Name {
                     name: "database".into(),

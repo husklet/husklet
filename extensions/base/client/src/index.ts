@@ -445,8 +445,8 @@ function immutableDigest(value, noun) {
   return value;
 }
 
-export async function connect(options: ConnectOptions = {}) {
-  return Session.connect(options.path, options);
+export async function connect(options: ConnectOptions = {}): Promise<ClientSession> {
+  return Session.connect(options.path, options) as Promise<ClientSession>;
 }
 
 /**
@@ -681,6 +681,7 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
         imageDigest,
         granted,
         containers = { selectors: [], create: false },
+        images = { read: [], use: [], pull: [], remove: [], prune_all_unused: false },
         networks = { selectors: [], create: false },
         volumes = { selectors: [], create: false },
         filesystem = { read: [], write: [], create: [], delete: [], rename: [] },
@@ -693,6 +694,7 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
             image_digest: immutableDigest(imageDigest, 'extension candidate image'),
             granted,
             containers,
+            images,
             networks,
             volumes,
             filesystem,
@@ -706,6 +708,7 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
         imageDigest,
         granted,
         containers = { selectors: [], create: false },
+        images = { read: [], use: [], pull: [], remove: [], prune_all_unused: false },
         networks = { selectors: [], create: false },
         volumes = { selectors: [], create: false },
         filesystem = { read: [], write: [], create: [], delete: [], rename: [] },
@@ -718,6 +721,7 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
             image_digest: immutableDigest(imageDigest, 'extension candidate image'),
             granted,
             containers,
+            images,
             networks,
             volumes,
             filesystem,
@@ -931,7 +935,39 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
       list: async () => (await api.images.inventory()).images,
       inspect: async (reference) =>
         expect(await session.call('image_inspect', { reference }), 'image_details'),
-      pull: async (reference) => expect(await session.call('image_pull', { reference }), 'image'),
+      pull: async (
+        reference,
+        { timeoutMs = 120_000, signal }: { timeoutMs?: number; signal?: AbortSignal } = {},
+      ) => {
+        if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 86_400_000) {
+          throw new RangeError('image pull timeoutMs must be an integer from 1 to 86400000');
+        }
+        requireOutputActive(signal);
+        const { job } = expect(
+          await session.call('image_pull_start', { reference }),
+          'image_pull_job',
+        );
+        const deadline = Date.now() + timeoutMs;
+        try {
+          for (;;) {
+            requireOutputActive(signal);
+            if (Date.now() >= deadline)
+              throw new Error(`image pull timed out after ${timeoutMs}ms`);
+            const status = expect(await session.call('image_pull_status', { job }), 'image_pull');
+            if (status.state === 'complete' && status.image) return status.image;
+            if (status.state === 'failed') throw new Error(status.error ?? 'image pull failed');
+            if (status.state === 'cancelled') throw new Error('image pull was cancelled');
+            await outputPoll(Math.min(100, Math.max(1, deadline - Date.now())), signal);
+          }
+        } catch (error) {
+          try {
+            await done('image_pull_cancel', { job });
+          } catch {
+            /* Preserve the primary error. */
+          }
+          throw error;
+        }
+      },
       startPull: async (reference) =>
         expect(await session.call('image_pull_start', { reference }), 'image_pull_job'),
       pullStatus: async (job) =>
@@ -3000,6 +3036,7 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
     revision,
     granted,
     containers = { selectors: [], create: false },
+    images = { read: [], use: [], pull: [], remove: [], prune_all_unused: false },
     networks = { selectors: [], create: false },
     volumes = { selectors: [], create: false },
     filesystem = { read: [], write: [], create: [], delete: [], rename: [] },
@@ -3053,6 +3090,7 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
         digest,
         granted,
         containers,
+        images,
         networks,
         volumes,
         filesystem,
@@ -3082,6 +3120,7 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
     revision,
     granted,
     containers,
+    images,
     networks,
     volumes,
     filesystem,
@@ -3093,6 +3132,7 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
       revision,
       granted,
       containers,
+      images,
       networks,
       volumes,
       filesystem,
@@ -3103,6 +3143,7 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
     revision,
     granted,
     containers,
+    images,
     networks,
     volumes,
     filesystem,
@@ -3114,6 +3155,7 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
       revision,
       granted,
       containers,
+      images,
       networks,
       volumes,
       filesystem,

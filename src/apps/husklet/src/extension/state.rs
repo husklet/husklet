@@ -191,6 +191,7 @@ mod tests {
     fn manifest(capabilities: &[Capability]) -> Manifest {
         Manifest {
             containers: hl_extension::ContainerGrant::default(),
+            images: hl_extension::ImageGrant::default(),
             networks: hl_extension::NetworkGrant::default(),
             volumes: hl_extension::VolumeGrant::default(),
             name: ExtensionName::new("sample").expect("name"),
@@ -218,6 +219,7 @@ mod tests {
         let records = records(temporary.path());
         let record = Record {
             containers: hl_extension::ContainerGrant::default(),
+            images: hl_extension::ImageGrant::default(),
             networks: hl_extension::NetworkGrant::default(),
             volumes: hl_extension::VolumeGrant::default(),
             filesystem: hl_extension::FilesystemGrant::default(),
@@ -245,6 +247,7 @@ mod tests {
         records
             .save(&Record {
                 containers: hl_extension::ContainerGrant::default(),
+                images: hl_extension::ImageGrant::default(),
                 networks: hl_extension::NetworkGrant::default(),
                 volumes: hl_extension::VolumeGrant::default(),
                 filesystem: hl_extension::FilesystemGrant::default(),

@@ -27,6 +27,8 @@ import {
   type ExtensionSummary,
   type ContainerGrant,
   type ContainerSelector,
+  type ImageGrant,
+  type ImageSelector,
   type NetworkGrant,
   type NetworkSelector,
   type VolumeGrant,
@@ -40,6 +42,13 @@ import {
 type Change = { value?: unknown };
 type LifecycleAction = 'enable' | 'disable' | 'retry' | 'remove';
 type LifecycleState = { action: LifecycleAction; name: string };
+type ImageVerb = 'read' | 'use' | 'pull' | 'remove';
+const IMAGE_VERBS: { key: ImageVerb; label: string }[] = [
+  { key: 'read', label: 'View image' },
+  { key: 'use', label: 'Use image for new containers' },
+  { key: 'pull', label: 'Pull image' },
+  { key: 'remove', label: 'Remove image' },
+];
 
 const CONTENT_WIDTH = { minimum: { chars: 32 }, maximum: { chars: 72 } } as const;
 const FILESYSTEM_VERBS = [
@@ -277,6 +286,13 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
     selectors: [],
     create: false,
   });
+  const [grantedImages, setGrantedImages] = React.useState<ImageGrant>({
+    read: [],
+    use: [],
+    pull: [],
+    remove: [],
+    prune_all_unused: false,
+  });
   const [grantedNetworks, setGrantedNetworks] = React.useState<NetworkGrant>({
     selectors: [],
     create: false,
@@ -397,6 +413,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
             // including during an update where a manifest may have widened.
             setGranted([]);
             setGrantedContainers({ selectors: [], create: false });
+            setGrantedImages({ read: [], use: [], pull: [], remove: [], prune_all_unused: false });
             setGrantedNetworks({ selectors: [], create: false });
             setGrantedVolumes({ selectors: [], create: false });
             setGrantedFilesystem(emptyFilesystemGrant());
@@ -456,6 +473,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
         acquisition.revision,
         granted,
         grantedContainers,
+        grantedImages,
         grantedNetworks,
         grantedVolumes,
         grantedFilesystem,
@@ -485,6 +503,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
     setAcquisition(null);
     setGranted([]);
     setGrantedContainers({ selectors: [], create: false });
+    setGrantedImages({ read: [], use: [], pull: [], remove: [], prune_all_unused: false });
     setGrantedNetworks({ selectors: [], create: false });
     setGrantedVolumes({ selectors: [], create: false });
     setGrantedFilesystem(emptyFilesystemGrant());
@@ -550,6 +569,13 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
     selectors: [],
     create: false,
   };
+  const requestedImages = acquisition?.candidate?.requested_images ?? {
+    read: [],
+    use: [],
+    pull: [],
+    remove: [],
+    prune_all_unused: false,
+  };
   const requestedNetworks = acquisition?.candidate?.requested_networks ?? {
     selectors: [],
     create: false,
@@ -573,6 +599,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
     ? acquisition.candidate.requested.length +
       requestedContainers.selectors.length +
       Number(requestedContainers.create) +
+      imageGrantCount(requestedImages) +
       requestedNetworks.selectors.length +
       Number(requestedNetworks.create) +
       requestedVolumes.selectors.length +
@@ -585,6 +612,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
     granted.length +
     grantedContainers.selectors.length +
     Number(grantedContainers.create) +
+    imageGrantCount(grantedImages) +
     grantedNetworks.selectors.length +
     Number(grantedNetworks.create) +
     grantedVolumes.selectors.length +
@@ -829,6 +857,58 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                               setGrantedContainers((current) => ({
                                 ...current,
                                 create: Boolean(event.value),
+                              }))
+                            }
+                          />
+                        </FormControlLabel>
+                      )}
+                      {imageGrantCount(requestedImages) > 0 && (
+                        <Text
+                          label={`Image access · ${imageGrantCount(grantedImages)}/${imageGrantCount(requestedImages)}`}
+                          color="text-dim"
+                        />
+                      )}
+                      {IMAGE_VERBS.flatMap(({ key: verb, label }) =>
+                        requestedImages[verb].map((selector) => {
+                          const key = imageSelectorKey(selector);
+                          const selected = grantedImages[verb].some(
+                            (candidate) => imageSelectorKey(candidate) === key,
+                          );
+                          return (
+                            <FormControlLabel
+                              key={`${verb}:${key}`}
+                              label={`${label} · ${imageSelectorLabel(selector)}`}
+                              gap={2}
+                            >
+                              <Switch
+                                checked={selected}
+                                onToggle={(event: Change) =>
+                                  setGrantedImages((current) => ({
+                                    ...current,
+                                    [verb]: event.value
+                                      ? current[verb].some(
+                                          (candidate) => imageSelectorKey(candidate) === key,
+                                        )
+                                        ? current[verb]
+                                        : [...current[verb], selector]
+                                      : current[verb].filter(
+                                          (candidate) => imageSelectorKey(candidate) !== key,
+                                        ),
+                                  }))
+                                }
+                              />
+                            </FormControlLabel>
+                          );
+                        }),
+                      )}
+                      {requestedImages.prune_all_unused && (
+                        <FormControlLabel label="Prune every unused image" gap={2}>
+                          <Switch
+                            checked={grantedImages.prune_all_unused}
+                            onToggle={(event: Change) =>
+                              setGrantedImages((current) => ({
+                                ...current,
+                                prune_all_unused: Boolean(event.value),
                               }))
                             }
                           />
@@ -1231,6 +1311,28 @@ function volumeSelectorLabel(selector: VolumeSelector): string {
   return 'all' in selector ? 'All workspace volumes' : `Volume named ${selector.name}`;
 }
 
+function imageSelectorKey(selector: ImageSelector): string {
+  if ('digest' in selector) return `digest:${selector.digest}`;
+  if ('reference' in selector) return `reference:${selector.reference}`;
+  return 'all';
+}
+
+function imageSelectorLabel(selector: ImageSelector): string {
+  if ('digest' in selector) return selector.digest;
+  if ('reference' in selector) return selector.reference;
+  return 'All images';
+}
+
+function imageGrantCount(grant: ImageGrant): number {
+  return (
+    grant.read.length +
+    grant.use.length +
+    grant.pull.length +
+    grant.remove.length +
+    Number(grant.prune_all_unused)
+  );
+}
+
 function acquisitionLabel(acquisition: ExtensionAcquisitionStatus): string {
   const progress = acquisition.progress;
   if (!progress) {
@@ -1341,7 +1443,9 @@ function capabilityLabel(capability: ExtensionCapability): string {
     'containers:control': 'Create, start, stop, and remove containers',
     'containers:attach': 'Run commands inside containers',
     'images:read': 'View images',
-    'images:write': 'Pull and remove images',
+    'images:pull': 'Pull images',
+    'images:remove': 'Remove images',
+    'images:prune': 'Prune every unused image',
     'volumes:read': 'View volumes',
     'volumes:write': 'Create and remove volumes',
     'networks:read': 'View networks',

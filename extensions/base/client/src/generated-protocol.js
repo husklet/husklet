@@ -1,5 +1,5 @@
 // Generated from Rust hl-extension protocol/v1.json. Do not edit.
-// Protocol artifact fnv1a64:fef1cf27b00c6d09
+// Protocol artifact fnv1a64:0f6ed6fecc83d1fa
 export const PROTOCOL_SPECIFICATION_VERSION = 1;
 export const PROTOCOL_VERSION = 1;
 export const PROTOCOL_BOUNDS = Object.freeze({
@@ -65,7 +65,17 @@ export const PROTOCOL_CAPABILITIES = Object.freeze([
   {
     "executes": false,
     "mutates": true,
-    "wire": "images:write"
+    "wire": "images:pull"
+  },
+  {
+    "executes": false,
+    "mutates": true,
+    "wire": "images:remove"
+  },
+  {
+    "executes": false,
+    "mutates": true,
+    "wire": "images:prune"
   },
   {
     "executes": false,
@@ -185,7 +195,7 @@ export const PROTOCOL_TOPICS = Object.freeze([
     "wire": "images"
   },
   {
-    "capability": "images:write",
+    "capability": "images:pull",
     "snapshot": "image_pulls",
     "wire": "image-pulls"
   },
@@ -283,7 +293,6 @@ export const PROTOCOL_REPLIES = Object.freeze({
   "container_exec": "identity",
   "container_attach_terminal": "identity",
   "image_list": "images",
-  "image_pull": "image",
   "image_pull_start": "image_pull_job",
   "image_pull_status": "image_pull",
   "image_pull_cancel": "done",
@@ -400,13 +409,12 @@ export const PROTOCOL_REQUEST_CAPABILITIES = Object.freeze({
   "container_exec": "containers:control",
   "container_attach_terminal": "containers:attach",
   "image_list": "images:read",
-  "image_pull": "images:write",
-  "image_pull_start": "images:write",
-  "image_pull_status": "images:write",
-  "image_pull_cancel": "images:write",
+  "image_pull_start": "images:pull",
+  "image_pull_status": "images:pull",
+  "image_pull_cancel": "images:pull",
   "image_inspect": "images:read",
-  "image_remove": "images:write",
-  "image_prune": "images:write",
+  "image_remove": "images:remove",
+  "image_prune": "images:prune",
   "volume_list": "volumes:read",
   "volume_inspect": "volumes:read",
   "volume_create": "volumes:write",
@@ -587,7 +595,19 @@ const definitions = {
         }
       },
       {
-        "name": "images:write",
+        "name": "images:pull",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
+        "name": "images:remove",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
+        "name": "images:prune",
         "payload": {
           "kind": "unit"
         }
@@ -1882,6 +1902,14 @@ const definitions = {
         }
       },
       {
+        "name": "requested_images",
+        "optional": true,
+        "schema": {
+          "kind": "ref",
+          "name": "ImageGrant"
+        }
+      },
+      {
         "name": "requested_containers",
         "optional": true,
         "schema": {
@@ -2113,6 +2141,14 @@ const definitions = {
         "schema": {
           "kind": "ref",
           "name": "Grant"
+        }
+      },
+      {
+        "name": "images",
+        "optional": true,
+        "schema": {
+          "kind": "ref",
+          "name": "ImageGrant"
         }
       },
       {
@@ -2544,6 +2580,65 @@ const definitions = {
     "kind": "struct",
     "serde": {}
   },
+  "ImageGrant": {
+    "fields": [
+      {
+        "name": "read",
+        "optional": true,
+        "schema": {
+          "kind": "array",
+          "of": {
+            "kind": "ref",
+            "name": "ImageSelector"
+          }
+        }
+      },
+      {
+        "name": "use",
+        "optional": true,
+        "schema": {
+          "kind": "array",
+          "of": {
+            "kind": "ref",
+            "name": "ImageSelector"
+          }
+        }
+      },
+      {
+        "name": "pull",
+        "optional": true,
+        "schema": {
+          "kind": "array",
+          "of": {
+            "kind": "ref",
+            "name": "ImageSelector"
+          }
+        }
+      },
+      {
+        "name": "remove",
+        "optional": true,
+        "schema": {
+          "kind": "array",
+          "of": {
+            "kind": "ref",
+            "name": "ImageSelector"
+          }
+        }
+      },
+      {
+        "name": "prune_all_unused",
+        "optional": true,
+        "schema": {
+          "kind": "boolean"
+        }
+      }
+    ],
+    "kind": "struct",
+    "serde": {
+      "deny_unknown_fields": true
+    }
+  },
   "ImageInventory": {
     "fields": [
       {
@@ -2598,6 +2693,17 @@ const definitions = {
   },
   "ImagePullChange": {
     "fields": [
+      {
+        "name": "sequence",
+        "optional": false,
+        "schema": {
+          "bits": 64,
+          "kind": "integer",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "signed": false
+        }
+      },
       {
         "name": "job",
         "optional": false,
@@ -2758,6 +2864,59 @@ const definitions = {
     "kind": "struct",
     "serde": {}
   },
+  "ImageSelector": {
+    "kind": "enum",
+    "serde": {
+      "untagged": true
+    },
+    "variants": [
+      {
+        "name": "Digest",
+        "payload": {
+          "fields": [
+            {
+              "name": "digest",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            }
+          ],
+          "kind": "struct"
+        }
+      },
+      {
+        "name": "Reference",
+        "payload": {
+          "fields": [
+            {
+              "name": "reference",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            }
+          ],
+          "kind": "struct"
+        }
+      },
+      {
+        "name": "All",
+        "payload": {
+          "fields": [
+            {
+              "name": "all",
+              "optional": false,
+              "schema": {
+                "kind": "boolean"
+              }
+            }
+          ],
+          "kind": "struct"
+        }
+      }
+    ]
+  },
   "ImageSummary": {
     "fields": [
       {
@@ -2772,6 +2931,16 @@ const definitions = {
         "optional": false,
         "schema": {
           "kind": "string"
+        }
+      },
+      {
+        "name": "references",
+        "optional": true,
+        "schema": {
+          "kind": "array",
+          "of": {
+            "kind": "string"
+          }
         }
       },
       {
@@ -8391,6 +8560,14 @@ const roots = {
               }
             },
             {
+              "name": "images",
+              "optional": false,
+              "schema": {
+                "kind": "ref",
+                "name": "ImageGrant"
+              }
+            },
+            {
               "name": "networks",
               "optional": false,
               "schema": {
@@ -8469,6 +8646,14 @@ const roots = {
               "schema": {
                 "kind": "ref",
                 "name": "ContainerGrant"
+              }
+            },
+            {
+              "name": "images",
+              "optional": false,
+              "schema": {
+                "kind": "ref",
+                "name": "ImageGrant"
               }
             },
             {
@@ -9097,21 +9282,6 @@ const roots = {
         "name": "image_list",
         "payload": {
           "kind": "unit"
-        }
-      },
-      {
-        "name": "image_pull",
-        "payload": {
-          "fields": [
-            {
-              "name": "reference",
-              "optional": false,
-              "schema": {
-                "kind": "string"
-              }
-            }
-          ],
-          "kind": "struct"
         }
       },
       {

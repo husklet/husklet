@@ -829,12 +829,14 @@ fn attendant<S: Supply>(
 
 /// Serves one connection and reports how it ended.
 fn converse<S: Supply>(supply: &Arc<S>, plan: &Plan, queue: &Queue, voice: &Voice, stream: UnixStream) -> String {
-    let opened = Conversation::new_scoped(
+    let opened = Conversation::new_scoped_owned(
         stream,
         plan.authority(),
+        plan.record.name.to_string(),
         plan.workspace.clone(),
         queue.clone(),
         plan.record.containers.clone(),
+        plan.record.images.clone(),
         plan.record.networks.clone(),
         plan.record.volumes.clone(),
         plan.record.filesystem.clone(),
@@ -1080,10 +1082,6 @@ tab_title = "Sample"
         fn list(&self) -> Result<Vec<ImageSummary>, HostError> {
             Ok(Vec::new())
         }
-
-        fn pull(&self, reference: &str) -> Result<ImageSummary, HostError> {
-            Err(HostError::Absent(reference.to_owned()))
-        }
     }
 
     impl TerminalSurface for Ports {
@@ -1161,6 +1159,7 @@ tab_title = "Sample"
     fn manifest() -> Manifest {
         Manifest {
             containers: hl_extension::ContainerGrant::default(),
+            images: hl_extension::ImageGrant::default(),
             networks: hl_extension::NetworkGrant::default(),
             volumes: hl_extension::VolumeGrant::default(),
             name: ExtensionName::new("sample").expect("name"),
@@ -1182,6 +1181,7 @@ tab_title = "Sample"
         let manifest = manifest();
         let record = Record {
             containers: hl_extension::ContainerGrant::default(),
+            images: hl_extension::ImageGrant::default(),
             networks: hl_extension::NetworkGrant::default(),
             volumes: hl_extension::VolumeGrant::default(),
             filesystem: hl_extension::FilesystemGrant::default(),

@@ -13,7 +13,9 @@
 use std::collections::BTreeMap;
 
 use crate::capability::{Capability, Grant};
-use crate::manifest::{ContainerGrant, ExtensionName, FilesystemGrant, Manifest, NetworkGrant, VolumeGrant};
+use crate::manifest::{
+    ContainerGrant, ExtensionName, FilesystemGrant, ImageGrant, Manifest, NetworkGrant, VolumeGrant,
+};
 
 /// What a host persists per workspace for one extension.
 ///
@@ -33,6 +35,8 @@ pub struct Record {
     pub version: String,
     /// Exactly what the person agreed to, never what was asked for.
     pub granted: Grant,
+    #[serde(default)]
+    pub images: ImageGrant,
     /// Exact resource consent paired with `granted` and the image digest.
     #[serde(default)]
     pub containers: ContainerGrant,
@@ -288,6 +292,7 @@ impl Installation {
             digest,
             consented,
             consented_containers,
+            &ImageGrant::default(),
             &NetworkGrant::default(),
             &VolumeGrant::default(),
             &FilesystemGrant::default(),
@@ -302,6 +307,7 @@ impl Installation {
         digest: &str,
         consented: &Grant,
         consented_containers: &ContainerGrant,
+        consented_images: &ImageGrant,
         consented_networks: &NetworkGrant,
         consented_volumes: &VolumeGrant,
         consented_filesystem: &FilesystemGrant,
@@ -316,6 +322,7 @@ impl Installation {
         }
         let granted = manifest.capabilities.intersect(consented);
         let containers = manifest.containers.intersect(consented_containers);
+        let images = manifest.images.intersect(consented_images);
         let networks = manifest.networks.intersect(consented_networks);
         let volumes = manifest.volumes.intersect(consented_volumes);
         let filesystem = manifest.filesystem.intersect(consented_filesystem);
@@ -328,6 +335,7 @@ impl Installation {
                 version: manifest.version.clone(),
                 granted,
                 containers,
+                images,
                 networks,
                 volumes,
                 filesystem,
@@ -406,6 +414,7 @@ impl Installation {
             update,
             consented,
             consented_containers,
+            &ImageGrant::default(),
             &NetworkGrant::default(),
             &VolumeGrant::default(),
             &FilesystemGrant::default(),
@@ -420,6 +429,7 @@ impl Installation {
         update: Update,
         consented: &Grant,
         consented_containers: &ContainerGrant,
+        consented_images: &ImageGrant,
         consented_networks: &NetworkGrant,
         consented_volumes: &VolumeGrant,
         consented_filesystem: &FilesystemGrant,
@@ -450,6 +460,7 @@ impl Installation {
             version: update.candidate_version,
             granted,
             containers: update.manifest.containers.intersect(consented_containers),
+            images: update.manifest.images.intersect(consented_images),
             networks: update.manifest.networks.intersect(consented_networks),
             volumes: update.manifest.volumes.intersect(consented_volumes),
             filesystem: update.manifest.filesystem.intersect(consented_filesystem),
@@ -660,6 +671,7 @@ mod tests {
     fn manifest(capabilities: &[Capability]) -> Manifest {
         Manifest {
             containers: crate::ContainerGrant::default(),
+            images: crate::ImageGrant::default(),
             networks: crate::NetworkGrant::default(),
             volumes: crate::VolumeGrant::default(),
             name: ExtensionName::new("sample").expect("name"),
@@ -716,6 +728,7 @@ mod tests {
                 "sha256:network",
                 &asked.capabilities,
                 &crate::ContainerGrant::default(),
+                &crate::ImageGrant::default(),
                 &consented,
                 &crate::VolumeGrant::default(),
                 &crate::FilesystemGrant::default(),
@@ -732,13 +745,19 @@ mod tests {
         let mut asked = manifest(&[Capability::VolumeRead, Capability::VolumeWrite]);
         asked.volumes = crate::VolumeGrant {
             selectors: vec![
-                crate::VolumeSelector::Name { name: "database".into() },
-                crate::VolumeSelector::Name { name: "internal".into() },
+                crate::VolumeSelector::Name {
+                    name: "database".into(),
+                },
+                crate::VolumeSelector::Name {
+                    name: "internal".into(),
+                },
             ],
             create: true,
         };
         let consented = crate::VolumeGrant {
-            selectors: vec![crate::VolumeSelector::Name { name: "database".into() }],
+            selectors: vec![crate::VolumeSelector::Name {
+                name: "database".into(),
+            }],
             create: false,
         };
         let record = installation
@@ -747,6 +766,7 @@ mod tests {
                 "sha256:volume",
                 &asked.capabilities,
                 &crate::ContainerGrant::default(),
+                &crate::ImageGrant::default(),
                 &crate::NetworkGrant::default(),
                 &consented,
                 &crate::FilesystemGrant::default(),

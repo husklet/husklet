@@ -34,8 +34,12 @@ pub enum Capability {
     ContainerAttach,
     #[serde(rename = "images:read")]
     ImageRead,
-    #[serde(rename = "images:write")]
-    ImageWrite,
+    #[serde(rename = "images:pull")]
+    ImagePull,
+    #[serde(rename = "images:remove")]
+    ImageRemove,
+    #[serde(rename = "images:prune")]
+    ImagePrune,
     #[serde(rename = "volumes:read")]
     VolumeRead,
     #[serde(rename = "volumes:write")]
@@ -101,7 +105,9 @@ impl Capability {
             Self::ContainerControl => "containers:control",
             Self::ContainerAttach => "containers:attach",
             Self::ImageRead => "images:read",
-            Self::ImageWrite => "images:write",
+            Self::ImagePull => "images:pull",
+            Self::ImageRemove => "images:remove",
+            Self::ImagePrune => "images:prune",
             Self::VolumeRead => "volumes:read",
             Self::VolumeWrite => "volumes:write",
             Self::NetworkRead => "networks:read",
@@ -134,7 +140,9 @@ impl Capability {
                 | Self::WorkspaceEnvironmentWrite
                 | Self::ContainerControl
                 | Self::ContainerAttach
-                | Self::ImageWrite
+                | Self::ImagePull
+                | Self::ImageRemove
+                | Self::ImagePrune
                 | Self::VolumeWrite
                 | Self::NetworkWrite
                 | Self::TerminalControl
@@ -168,7 +176,9 @@ impl Capability {
         Self::ContainerControl,
         Self::ContainerAttach,
         Self::ImageRead,
-        Self::ImageWrite,
+        Self::ImagePull,
+        Self::ImageRemove,
+        Self::ImagePrune,
         Self::VolumeRead,
         Self::VolumeWrite,
         Self::NetworkRead,

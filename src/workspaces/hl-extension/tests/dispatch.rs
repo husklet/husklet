@@ -354,16 +354,6 @@ impl ImageStore for Host {
         Ok(Vec::new())
     }
 
-    fn pull(&self, reference: &str) -> Result<ImageSummary, HostError> {
-        self.ledger.note("images.pull");
-        Ok(ImageSummary {
-            id: "i1".into(),
-            reference: reference.into(),
-            size: 1,
-            created: 0,
-        })
-    }
-
     fn inspect(&self, reference: &str) -> Result<ImageDetails, HostError> {
         self.ledger.note("images.inspect");
         Ok(ImageDetails {
@@ -854,6 +844,7 @@ impl ExtensionStore for Host {
             enabled: true,
             pane_providers: Vec::new(),
             granted: Grant::default(),
+            images: hl_extension::ImageGrant::default(),
             containers: hl_extension::ContainerGrant::default(),
             networks: hl_extension::NetworkGrant::default(),
             volumes: hl_extension::VolumeGrant::default(),
@@ -871,6 +862,7 @@ impl ExtensionStore for Host {
             enabled: true,
             pane_providers: Vec::new(),
             granted: Grant::default(),
+            images: hl_extension::ImageGrant::default(),
             containers: hl_extension::ContainerGrant::default(),
             networks: hl_extension::NetworkGrant::default(),
             volumes: hl_extension::VolumeGrant::default(),
@@ -922,6 +914,7 @@ impl ExtensionStore for Host {
         _image_digest: &str,
         _granted: &Grant,
         _containers: &hl_extension::ContainerGrant,
+        _images: &hl_extension::ImageGrant,
         _networks: &hl_extension::NetworkGrant,
         _volumes: &hl_extension::VolumeGrant,
         _filesystem: &hl_extension::FilesystemGrant,
@@ -937,6 +930,7 @@ impl ExtensionStore for Host {
         _image_digest: &str,
         _granted: &Grant,
         _containers: &hl_extension::ContainerGrant,
+        _images: &hl_extension::ImageGrant,
         _networks: &hl_extension::NetworkGrant,
         _volumes: &hl_extension::VolumeGrant,
         _filesystem: &hl_extension::FilesystemGrant,
@@ -988,6 +982,13 @@ fn session(capabilities: &[Capability], roots: &[&str]) -> Session {
         selectors: vec![hl_extension::ContainerSelector::All { all: true }],
         create: true,
     })
+    .with_images(hl_extension::ImageGrant {
+        read: vec![hl_extension::ImageSelector::All { all: true }],
+        r#use: vec![hl_extension::ImageSelector::All { all: true }],
+        pull: vec![hl_extension::ImageSelector::All { all: true }],
+        remove: vec![hl_extension::ImageSelector::All { all: true }],
+        prune_all_unused: true,
+    })
     .with_networks(hl_extension::NetworkGrant {
         selectors: vec![hl_extension::NetworkSelector::All { all: true }],
         create: true,
@@ -1014,7 +1015,7 @@ fn workspace_configuration() -> WorkspaceConfiguration {
         generation: "0123456789abcdef0123456789abcdef".into(),
         configuration_revision: "abcdef0123456789abcdef0123456789".into(),
         name: "other".into(),
-        image: "alpine:3.20".into(),
+        image: "docker.io/library/alpine:3.20".into(),
         architecture: "arm64".into(),
         storage: None,
         shell: None,
@@ -1222,6 +1223,7 @@ fn calls() -> Vec<(Request, Capability)> {
                 revision: 7,
                 granted: Grant::new([Capability::Interface]),
                 containers: hl_extension::ContainerGrant::default(),
+                images: hl_extension::ImageGrant::default(),
                 networks: hl_extension::NetworkGrant::default(),
                 volumes: hl_extension::VolumeGrant::default(),
                 filesystem: hl_extension::FilesystemGrant::default(),
@@ -1235,6 +1237,7 @@ fn calls() -> Vec<(Request, Capability)> {
                 job: "job-1".into(),
                 revision: 7,
                 granted: Grant::new([Capability::Interface]),
+                images: hl_extension::ImageGrant::default(),
                 networks: hl_extension::NetworkGrant::default(),
                 volumes: hl_extension::VolumeGrant::default(),
                 containers: hl_extension::ContainerGrant::default(),
@@ -1288,7 +1291,7 @@ fn calls() -> Vec<(Request, Capability)> {
         (
             Request::ContainerCreate {
                 spec: hl_extension::port::ContainerCreateSpec {
-                    image: "alpine".into(),
+                    image: "docker.io/library/alpine:latest".into(),
                     name: "x".into(),
                     hostname: None,
                     entrypoint: None,
@@ -1397,12 +1400,6 @@ fn calls() -> Vec<(Request, Capability)> {
         ),
         (Request::ImageList, Capability::ImageRead),
         (
-            Request::ImagePull {
-                reference: "alpine".into(),
-            },
-            Capability::ImageWrite,
-        ),
-        (
             Request::ImageInspect {
                 reference: "alpine".into(),
             },
@@ -1412,9 +1409,9 @@ fn calls() -> Vec<(Request, Capability)> {
             Request::ImageRemove {
                 reference: format!("sha256:{}", "a".repeat(64)),
             },
-            Capability::ImageWrite,
+            Capability::ImageRemove,
         ),
-        (Request::ImagePrune, Capability::ImageWrite),
+        (Request::ImagePrune, Capability::ImagePrune),
         (Request::TerminalTabs, Capability::TerminalRead),
         (Request::TerminalTopology, Capability::TerminalRead),
         (Request::PaneList, Capability::PaneObserve),
@@ -1635,10 +1632,10 @@ fn all_calls() -> Vec<(Request, Capability)> {
             Request::ImagePullStart {
                 reference: "alpine".into(),
             },
-            Capability::ImageWrite,
+            Capability::ImagePull,
         ),
-        (Request::ImagePullStatus { job: "job".into() }, Capability::ImageWrite),
-        (Request::ImagePullCancel { job: "job".into() }, Capability::ImageWrite),
+        (Request::ImagePullStatus { job: "job".into() }, Capability::ImagePull),
+        (Request::ImagePullCancel { job: "job".into() }, Capability::ImagePull),
         (Request::VolumeList, Capability::VolumeRead),
         (Request::VolumeInspect { name: "cache".into() }, Capability::VolumeRead),
         (Request::VolumeCreate { name: "cache".into() }, Capability::VolumeWrite),
@@ -1869,8 +1866,15 @@ fn every_call_succeeds_with_its_capability_and_fails_without_it() {
     for (request, capability) in calls() {
         let host = Host::new();
 
-        let mut granted =
-            session(&[capability], &["logs"]).with_workspace_environment(hl_extension::WorkspaceEnvironmentGrant {
+        let mut granted = session(&[capability], &["logs"])
+            .with_images(hl_extension::ImageGrant {
+                read: vec![hl_extension::ImageSelector::All { all: true }],
+                r#use: vec![hl_extension::ImageSelector::All { all: true }],
+                pull: vec![hl_extension::ImageSelector::All { all: true }],
+                remove: vec![hl_extension::ImageSelector::All { all: true }],
+                prune_all_unused: true,
+            })
+            .with_workspace_environment(hl_extension::WorkspaceEnvironmentGrant {
                 read: Vec::new(),
                 write: vec![hl_extension::WorkspaceEnvironmentSelector::All { all: true }],
             });
@@ -1957,6 +1961,7 @@ fn extension_acquisition_identifiers_are_bounded_before_the_host() {
                 image_digest: "sha256:stale-catalogue-label".into(),
                 granted: Grant::default(),
                 containers: hl_extension::ContainerGrant::default(),
+                images: hl_extension::ImageGrant::default(),
                 networks: hl_extension::NetworkGrant::default(),
                 volumes: hl_extension::VolumeGrant::default(),
                 filesystem: hl_extension::FilesystemGrant::default(),
@@ -2158,9 +2163,15 @@ fn configured_container_creation_is_bounded_before_control_authority() {
             Capability::NetworkWrite,
         ],
         &[],
-    );
+    )
+    .with_images(hl_extension::ImageGrant {
+        r#use: vec![hl_extension::ImageSelector::Reference {
+            reference: "docker.io/library/alpine:3.20".into(),
+        }],
+        ..hl_extension::ImageGrant::default()
+    });
     let spec = ContainerCreateSpec {
-        image: "alpine:3.20".into(),
+        image: "docker.io/library/alpine:3.20".into(),
         name: "worker".into(),
         hostname: Some("h".repeat(253)),
         entrypoint: Some(vec!["/init".into()]),
@@ -2185,11 +2196,21 @@ fn configured_container_creation_is_bounded_before_control_authority() {
         pids_limit: Some(128),
     };
     let mut unscoped = session(
-        &[Capability::ContainerControl, Capability::VolumeRead, Capability::NetworkWrite],
+        &[
+            Capability::ContainerControl,
+            Capability::VolumeRead,
+            Capability::NetworkWrite,
+        ],
         &[],
     )
-    .with_volumes(hl_extension::VolumeGrant { selectors: vec![], create: true })
-    .with_networks(hl_extension::NetworkGrant { selectors: vec![], create: true });
+    .with_volumes(hl_extension::VolumeGrant {
+        selectors: vec![],
+        create: true,
+    })
+    .with_networks(hl_extension::NetworkGrant {
+        selectors: vec![],
+        create: true,
+    });
     assert!(matches!(
         unscoped.dispatch(&Request::ContainerCreate { spec: spec.clone() }, &services(&host)),
         Err(Failure::Denied { .. })
@@ -2530,7 +2551,11 @@ fn container_rename_requires_immutable_identity_and_native_name_grammar() {
 #[test]
 fn image_removal_refuses_mutable_tags_and_partial_digests_before_control_authority() {
     let host = Host::new();
-    let mut session = session(&[Capability::ImageWrite], &[]);
+    let digest = format!("sha256:{}", "a".repeat(64));
+    let mut session = session(&[Capability::ImageRemove], &[]).with_images(hl_extension::ImageGrant {
+        remove: vec![hl_extension::ImageSelector::Digest { digest: digest.clone() }],
+        ..hl_extension::ImageGrant::default()
+    });
     for reference in ["alpine:latest".to_owned(), "sha256:abc".to_owned(), "a".repeat(64)] {
         assert!(matches!(
             session.dispatch(&Request::ImageRemove { reference }, &services(&host)),
@@ -2539,14 +2564,30 @@ fn image_removal_refuses_mutable_tags_and_partial_digests_before_control_authori
     }
     assert!(host.ledger.reached().is_empty());
     session
-        .dispatch(
-            &Request::ImageRemove {
-                reference: format!("sha256:{}", "a".repeat(64)),
-            },
-            &services(&host),
-        )
+        .dispatch(&Request::ImageRemove { reference: digest }, &services(&host))
         .unwrap();
     assert_eq!(host.ledger.reached(), ["images.remove"]);
+}
+
+#[test]
+fn image_inventory_filters_every_alias_before_applying_the_bound() {
+    let permitted = "docker.io/library/alpine:3.20".to_owned();
+    let session = session(&[Capability::ImageRead], &[]).with_images(hl_extension::ImageGrant {
+        read: vec![hl_extension::ImageSelector::Reference {
+            reference: permitted.clone(),
+        }],
+        ..hl_extension::ImageGrant::default()
+    });
+    let inventory = session.visible_images(vec![ImageSummary {
+        id: format!("sha256:{}", "a".repeat(64)),
+        reference: "registry.example/private:latest".into(),
+        references: vec!["registry.example/private:latest".into(), permitted.clone()],
+        size: 1,
+        created: 0,
+    }]);
+    assert_eq!(inventory.images.len(), 1);
+    assert_eq!(inventory.images[0].reference, permitted);
+    assert_eq!(inventory.images[0].references.len(), 1);
 }
 
 #[test]
@@ -3427,24 +3468,42 @@ fn exact_network_scope_filters_inventory_and_denies_unrelated_inspection_and_cre
 #[test]
 fn exact_volume_scope_filters_and_denies_before_host_access() {
     let host = Host::new();
-    let mut scoped = session(&[Capability::VolumeRead, Capability::VolumeWrite], &[])
-        .with_volumes(hl_extension::VolumeGrant {
+    let mut scoped =
+        session(&[Capability::VolumeRead, Capability::VolumeWrite], &[]).with_volumes(hl_extension::VolumeGrant {
             selectors: vec![hl_extension::VolumeSelector::Name { name: "cache".into() }],
             create: false,
         });
-    assert!(matches!(scoped.dispatch(&Request::VolumeList, &services(&host)), Ok(Reply::Volumes(values)) if values.volumes.len() == 1));
+    assert!(
+        matches!(scoped.dispatch(&Request::VolumeList, &services(&host)), Ok(Reply::Volumes(values)) if values.volumes.len() == 1)
+    );
     host.ledger.clear();
-    assert!(matches!(scoped.dispatch(&Request::VolumeInspect { name: "other".into() }, &services(&host)), Err(Failure::Denied { .. })));
-    assert!(matches!(scoped.dispatch(&Request::VolumeInspect { name: "bad/name".into() }, &services(&host)), Err(Failure::Conflict { .. })));
+    assert!(matches!(
+        scoped.dispatch(&Request::VolumeInspect { name: "other".into() }, &services(&host)),
+        Err(Failure::Denied { .. })
+    ));
+    assert!(matches!(
+        scoped.dispatch(
+            &Request::VolumeInspect {
+                name: "bad/name".into()
+            },
+            &services(&host)
+        ),
+        Err(Failure::Conflict { .. })
+    ));
     assert!(host.ledger.reached().is_empty());
 }
 
 #[test]
 fn volume_creation_requires_create_and_selection_to_prevent_namesake_capture() {
     let host = Host::new();
-    let mut create_only = session(&[Capability::VolumeWrite], &[])
-        .with_volumes(hl_extension::VolumeGrant { selectors: vec![], create: true });
-    assert!(matches!(create_only.dispatch(&Request::VolumeCreate { name: "cache".into() }, &services(&host)), Err(Failure::Denied { .. })));
+    let mut create_only = session(&[Capability::VolumeWrite], &[]).with_volumes(hl_extension::VolumeGrant {
+        selectors: vec![],
+        create: true,
+    });
+    assert!(matches!(
+        create_only.dispatch(&Request::VolumeCreate { name: "cache".into() }, &services(&host)),
+        Err(Failure::Denied { .. })
+    ));
     assert!(host.ledger.reached().is_empty());
 }
 

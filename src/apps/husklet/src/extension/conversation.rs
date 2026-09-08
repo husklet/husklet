@@ -215,6 +215,7 @@ pub struct Conversation {
     pane_next: Instant,
     pane_cursor: usize,
     workspace_lifecycle_revision: Option<u64>,
+    image_pull_cursor: u64,
     events: Option<super::host::Events>,
     voice: Option<super::host::Voice>,
 }
@@ -246,20 +247,31 @@ impl Conversation {
             .cloned()
             .map(|subtree| hl_extension::FilesystemSelector::Subtree { subtree })
             .collect::<Vec<_>>();
-        Self::new_scoped(
+        Self::new_scoped_owned(
             stream,
             authority,
+            "test",
             workspace,
             queue,
             hl_extension::ContainerGrant {
                 selectors: vec![hl_extension::ContainerSelector::All { all: true }],
                 create: true,
             },
+            hl_extension::ImageGrant {
+                read: vec![hl_extension::ImageSelector::All { all: true }],
+                r#use: vec![hl_extension::ImageSelector::All { all: true }],
+                pull: vec![hl_extension::ImageSelector::All { all: true }],
+                remove: vec![hl_extension::ImageSelector::All { all: true }],
+                prune_all_unused: true,
+            },
             hl_extension::NetworkGrant {
                 selectors: vec![hl_extension::NetworkSelector::All { all: true }],
                 create: true,
             },
-            hl_extension::VolumeGrant { selectors: vec![hl_extension::VolumeSelector::All { all: true }], create: true },
+            hl_extension::VolumeGrant {
+                selectors: vec![hl_extension::VolumeSelector::All { all: true }],
+                create: true,
+            },
             hl_extension::FilesystemGrant {
                 read: roots.clone(),
                 write: roots.clone(),
@@ -272,12 +284,14 @@ impl Conversation {
     }
 
     /// Wraps a connection with its separately persisted container-resource consent.
-    pub fn new_scoped(
+    pub fn new_scoped_owned(
         stream: UnixStream,
         authority: Authority,
+        extension_identity: impl Into<String>,
         workspace: impl Into<String>,
         queue: Queue,
         containers: hl_extension::ContainerGrant,
+        images: hl_extension::ImageGrant,
         networks: hl_extension::NetworkGrant,
         volumes: hl_extension::VolumeGrant,
         filesystem: hl_extension::FilesystemGrant,
@@ -291,7 +305,9 @@ impl Conversation {
             // empty slot is the extension's primary surface; extra tab/split
             // surfaces are acquired explicitly through the terminal port.
             session: Session::new(authority)
+                .with_extension_identity(extension_identity)
                 .with_containers(containers)
+                .with_images(images)
                 .with_networks(networks)
                 .with_volumes(volumes)
                 .with_filesystem(filesystem)
@@ -311,9 +327,37 @@ impl Conversation {
             pane_next: Instant::now(),
             pane_cursor: 0,
             workspace_lifecycle_revision: None,
+            image_pull_cursor: 0,
             events: None,
             voice: None,
         })
+    }
+
+    #[cfg(test)]
+    pub fn new_scoped(
+        stream: UnixStream,
+        authority: Authority,
+        workspace: impl Into<String>,
+        queue: Queue,
+        containers: hl_extension::ContainerGrant,
+        networks: hl_extension::NetworkGrant,
+        volumes: hl_extension::VolumeGrant,
+        filesystem: hl_extension::FilesystemGrant,
+        workspace_environment: hl_extension::WorkspaceEnvironmentGrant,
+    ) -> io::Result<Self> {
+        Self::new_scoped_owned(
+            stream,
+            authority,
+            "test",
+            workspace,
+            queue,
+            containers,
+            hl_extension::ImageGrant::default(),
+            networks,
+            volumes,
+            filesystem,
+            workspace_environment,
+        )
     }
 
     pub(crate) fn with_events(&mut self, events: super::host::Events) {
@@ -454,11 +498,17 @@ impl Conversation {
         }
         if self.may_observe(Topic::Images) {
             if let Ok(images) = services.images.list() {
-                snapshots.push(Snapshot::Images(hl_extension::port::ImageInventory::bounded(images)));
+                snapshots.push(Snapshot::Images(self.session.visible_images(images)));
             }
         }
         if self.may_observe(Topic::ImagePulls) {
-            snapshots.extend(services.images.pull_changes().into_iter().map(Snapshot::ImagePulls));
+            snapshots.extend(
+                services
+                    .images
+                    .pull_changes(self.session.extension_identity(), self.image_pull_cursor)
+                    .into_iter()
+                    .map(Snapshot::ImagePulls),
+            );
         }
         if self.may_observe(Topic::Volumes) {
             if let Ok(volumes) = services.volumes.list() {
@@ -526,6 +576,9 @@ impl Conversation {
                 continue;
             }
             self.publish(&snapshot)?;
+            if let Snapshot::ImagePulls(change) = &snapshot {
+                self.image_pull_cursor = self.image_pull_cursor.max(change.sequence);
+            }
             if topic != Topic::WorkspaceEvents && topic != Topic::WorkspaceLifecycle {
                 self.observed.insert(topic, snapshot);
             }
@@ -1372,17 +1425,7 @@ mod tests {
             Ok(Vec::new())
         }
 
-        fn pull(&self, reference: &str) -> Result<ImageSummary, HostError> {
-            self.ledger.note("images.pull");
-            Ok(ImageSummary {
-                id: "i1".to_owned(),
-                reference: reference.to_owned(),
-                size: 1,
-                created: 0,
-            })
-        }
-
-        fn pull_changes(&self) -> Vec<hl_extension::port::ImagePullChange> {
+        fn pull_changes(&self, _owner: &str, _after: u64) -> Vec<hl_extension::port::ImagePullChange> {
             self.ledger.note("images.pull_changes");
             Vec::new()
         }
@@ -1658,6 +1701,7 @@ mod tests {
                 enabled: true,
                 pane_providers: Vec::new(),
                 granted: hl_extension::Grant::default(),
+                images: hl_extension::ImageGrant::default(),
                 containers: hl_extension::ContainerGrant::default(),
                 networks: hl_extension::NetworkGrant::default(),
                 volumes: hl_extension::VolumeGrant::default(),
@@ -2025,6 +2069,7 @@ mod tests {
             enabled: true,
             pane_providers: Vec::new(),
             granted: hl_extension::Grant::default(),
+            images: hl_extension::ImageGrant::default(),
             containers: hl_extension::ContainerGrant::default(),
             networks: hl_extension::NetworkGrant::default(),
             volumes: hl_extension::VolumeGrant::default(),
@@ -2988,7 +3033,7 @@ mod tests {
             Grant::new([
                 Capability::ContainerRead,
                 Capability::ImageRead,
-                Capability::ImageWrite,
+                Capability::ImagePull,
                 Capability::VolumeRead,
                 Capability::NetworkRead,
                 Capability::TerminalRead,
