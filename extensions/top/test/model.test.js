@@ -13,6 +13,9 @@ import {
   NETWORK_DETAIL_SOURCE,
   NETWORK_DETAIL_WINDOW_LIMIT,
   NetworkDetailsSource,
+  PROCESS_TABLE_SOURCE,
+  PROCESS_TABLE_WINDOW_LIMIT,
+  ProcessTableSource,
   VOLUME_DETAIL_SOURCE,
   VOLUME_DETAIL_WINDOW_LIMIT,
   VolumeDetailsSource,
@@ -24,9 +27,89 @@ import {
   immutableContainerId,
   logText,
   processRows,
+  processTableSchema,
   resourceReference,
   shortId,
 } from '../dist/model.js';
+
+test('process table exposes supplied metrics and serves only requested bounded windows', async () => {
+  const mutations = [];
+  const source = new ProcessTableSource(async (mutation) => mutations.push(mutation));
+  const records = Array.from({ length: 10_000 }, (_, index) => ({
+    container: index % 2 ? 'worker' : 'api',
+    cells: {
+      PID: String(index + 1),
+      USER: index % 2 ? 'builder' : 'root',
+      '%CPU': `${index % 100}.5`,
+      RSS: String(4096 + index),
+      COMMAND: `job-${index}`,
+    },
+    values: [String(index + 1), index % 2 ? 'builder' : 'root', `job-${index}`],
+  }));
+  const schema = processTableSchema(records);
+  assert.deepEqual(
+    schema.map(({ key }) => key),
+    ['container', 'pid', 'user', 'cpu', 'memory', 'command'],
+  );
+  assert.equal(await source.replace(records, schema, 'worker', 'pid', true), 5_000);
+  assert.deepEqual(mutations, [
+    { Length: { source: PROCESS_TABLE_SOURCE, version: 1, rows: 5_000 } },
+  ]);
+  const window = source.answer({
+    source: PROCESS_TABLE_SOURCE,
+    version: 1,
+    id: 44,
+    range: { start: 0, count: 10_000 },
+  });
+  assert.equal(window.rows.length, PROCESS_TABLE_WINDOW_LIMIT);
+  assert.equal(source.generated, PROCESS_TABLE_WINDOW_LIMIT);
+  assert.deepEqual(window.rows[0].cells, [
+    { Text: 'worker' },
+    { Text: '10000' },
+    { Text: 'builder' },
+    { Text: '99.5' },
+    { Text: '14095' },
+    { Text: 'job-9999' },
+  ]);
+  assert.equal(
+    source.answer({
+      source: PROCESS_TABLE_SOURCE,
+      version: 0,
+      id: 45,
+      range: { start: 0, count: 1 },
+    }),
+    null,
+  );
+});
+
+test('process table omits metric columns the daemon did not supply', async () => {
+  const records = processRows({ titles: ['PID', 'COMMAND'], processes: [['7', 'sleep 5']] }, 'api');
+  const schema = processTableSchema(records);
+  assert.deepEqual(
+    schema.map(({ key }) => key),
+    ['container', 'pid', 'command'],
+  );
+  const source = new ProcessTableSource();
+  await source.replace(records, schema);
+  assert.equal(
+    source.accepts({
+      source: PROCESS_TABLE_SOURCE,
+      version: source.version,
+      column: 'pid',
+      descending: false,
+    }),
+    true,
+  );
+  assert.equal(
+    source.accepts({
+      source: PROCESS_TABLE_SOURCE,
+      version: source.version - 1,
+      column: 'pid',
+      descending: false,
+    }),
+    false,
+  );
+});
 
 test('container rename validation matches the native byte grammar exactly', () => {
   for (const valid of ['a', 'Worker_2.prod', `a${'-'.repeat(127)}`])

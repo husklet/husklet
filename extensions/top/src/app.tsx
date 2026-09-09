@@ -18,6 +18,7 @@ import {
   ContainerDetailsSource,
   ExecutionDetailsSource,
   ImageDetailsSource,
+  ProcessTableSource,
   VolumeDetailsSource,
 } from './model.js';
 import { Navigation, Overview, SECTIONS, type Resource, type Section } from './overview.js';
@@ -89,6 +90,7 @@ type TopProps = {
   containerDetails?: ContainerDetailsSource;
   executionDetails?: ExecutionDetailsSource;
   imageDetails?: ImageDetailsSource;
+  processTable?: ProcessTableSource;
   volumeDetails?: VolumeDetailsSource;
   initial?: Partial<{
     containers: ContainerSummary[];
@@ -107,6 +109,7 @@ export function Top({
   containerDetails,
   executionDetails,
   imageDetails,
+  processTable,
   volumeDetails,
   initial = {},
   initialSection = 'overview',
@@ -255,6 +258,7 @@ export function Top({
       <Processes
         api={api}
         resource={containers}
+        processTable={processTable}
         onOpenContainers={() => setSection('containers')}
       />
     ) : section === 'executions' ? (

@@ -8,6 +8,7 @@ import { createElement as h } from 'react';
 import { connect, workspace } from '../../../extensions/base/react/dist/index.js';
 import { KIND, Reader, encode } from '../../../extensions/base/react/dist/wire.js';
 import { Processes } from '../dist/app.js';
+import { PROCESS_TABLE_SOURCE, ProcessTableSource } from '../dist/model.js';
 import { host } from './host.js';
 
 test(
@@ -75,9 +76,11 @@ test(
     try {
       session = await connect({ path: socketPath });
       stage = host();
+      const processTable = new ProcessTableSource();
       stage.render(
         h(Processes, {
           api: workspace(session),
+          processTable,
           resource: {
             data: [{ id: container, name: 'worker' }],
             loading: false,
@@ -87,8 +90,8 @@ test(
         }),
       );
       await until(() => labelled(stage, 'Reading processes…'));
-      await until(() => labelled(stage, 'stale-process'));
-      assert.ok(labelled(stage, 'PID 41'));
+      await until(() => tableText(processTable).includes('stale-process'));
+      assert.ok(tableText(processTable).includes('41'));
       assert.ok(
         labelled(stage, 'Initial processes only; PIDs identify this snapshot and may be reused.'),
       );
@@ -103,8 +106,8 @@ test(
         'loading unmounts stale PID rows and claims',
       );
       await until(() => labelled(stage, 'process snapshot unavailable'));
+      assert.equal(tableText(processTable).includes('stale-process'), false);
       for (const stale of [
-        'PID 41',
         'Initial processes only; PIDs identify this snapshot and may be reused.',
         'The host process snapshot was truncated at its safety limit.',
       ]) {
@@ -120,8 +123,8 @@ test(
       assert.equal(attempts, 3);
 
       invoke(stage, 'Refresh');
-      await until(() => labelled(stage, 'current-process'));
-      assert.ok(labelled(stage, 'PID 84'));
+      await until(() => tableText(processTable).includes('current-process'));
+      assert.ok(tableText(processTable).includes('84'));
       assert.ok(
         labelled(
           stage,
@@ -197,9 +200,11 @@ test(
     try {
       session = await connect({ path: socketPath });
       stage = host();
+      const processTable = new ProcessTableSource();
       stage.render(
         h(Processes, {
           api: workspace(session),
+          processTable,
           resource: {
             data: [
               { id: healthy, name: 'api' },
@@ -211,7 +216,7 @@ test(
           },
         }),
       );
-      await until(() => labelled(stage, '/usr/bin/healthy'));
+      await until(() => tableText(processTable).includes('/usr/bin/healthy'));
       assert.ok(
         labelled(
           stage,
@@ -248,6 +253,17 @@ function invoke(stage, label) {
     ),
     `${label} invokes`,
   );
+}
+
+function tableText(source) {
+  if (source.version === 0) return [];
+  const window = source.answer({
+    source: PROCESS_TABLE_SOURCE,
+    version: source.version,
+    id: 1,
+    range: { start: 0, count: 128 },
+  });
+  return window?.rows.flatMap((row) => row.cells.map((cell) => cell.Text ?? '')) ?? [];
 }
 
 async function until(done) {

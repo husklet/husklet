@@ -1,11 +1,9 @@
 import React from 'react';
 import {
-  Badge,
   Button,
-  Card,
-  CardContent,
-  CardHeader,
   Column,
+  DataTable,
+  Entry,
   Heading,
   ResourceState,
   Row,
@@ -14,11 +12,19 @@ import {
   Text,
   type ContainerSummary,
   type ProcessList,
+  type SortReport,
   type WorkspaceApi,
 } from '@husklet/react';
-import { bounded, boundedMessage, processRows, shortId } from './model.js';
+import {
+  PROCESS_TABLE_SOURCE,
+  ProcessTableSource,
+  bounded,
+  boundedMessage,
+  processRows,
+  processTableSchema,
+  shortId,
+} from './model.js';
 import type { Resource } from './overview.js';
-import { ResourceList } from './resource-list.js';
 
 const SAMPLING_CONCURRENCY = 8;
 const OBSERVED_AT = new Intl.DateTimeFormat('en-US', {
@@ -37,16 +43,22 @@ type Group = Snapshot | Failure;
 export function Processes({
   api,
   resource,
+  processTable,
   onOpenContainers,
 }: {
   api: WorkspaceApi;
   resource: Resource<ContainerSummary>;
+  processTable?: ProcessTableSource;
   onOpenContainers?: () => void;
 }) {
+  const localTable = React.useMemo(() => new ProcessTableSource(), []);
+  const table = processTable ?? localTable;
   const [snapshots, setSnapshots] = React.useState<Snapshot[]>([]);
   const [failures, setFailures] = React.useState<Failure[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState<unknown>(null);
+  const [filter, setFilter] = React.useState('');
+  const [sort, setSort] = React.useState({ column: 'container', descending: false });
   const loadRevision = React.useRef(0);
   const load = React.useCallback(async () => {
     const revision = ++loadRevision.current;
@@ -91,13 +103,21 @@ export function Processes({
       loadRevision.current += 1;
     };
   }, [load]);
-  const processes = snapshots.flatMap(({ container, rows }) =>
-    processRows(rows, container.name || shortId(container.id)),
+  const processes = React.useMemo(
+    () =>
+      snapshots.flatMap(({ container, rows }) =>
+        processRows(rows, container.name || shortId(container.id)),
+      ),
+    [snapshots],
   );
   const observed = Math.max(0, ...snapshots.map(({ rows }) => Number(rows.observed_at_ms) || 0));
   const completeNamespace =
     snapshots.length > 0 && snapshots.every(({ rows }) => rows.scope === 'namespace');
-  const view = bounded(processes);
+  const view = React.useMemo(() => bounded(processes), [processes]);
+  const schema = React.useMemo(() => processTableSchema(view.records), [view.records]);
+  React.useEffect(() => {
+    void table.replace(view.records, schema, filter, sort.column, sort.descending);
+  }, [filter, schema, sort.column, sort.descending, table, view.records]);
   const failure = error ?? resource.error;
   const state: 'loading' | 'error' | 'empty' | 'ready' =
     loading || resource.loading
@@ -134,32 +154,26 @@ export function Processes({
         {observed > 0 ? (
           <Text label={`Observed ${OBSERVED_AT.format(observed)} UTC`} color="text-dim" />
         ) : null}
-        <ResourceList>
-          {view.records.map((process, index) => {
-            const pid = process.cells.PID ?? process.cells.Pid ?? process.cells.pid ?? '—';
-            const command =
-              process.cells.CMD ??
-              process.cells.Command ??
-              process.cells.COMMAND ??
-              process.values.at(-1) ??
-              'Process';
-            const detail = Object.entries(process.cells)
-              .filter(([key]) => !['PID', 'Pid', 'pid', 'CMD', 'Command', 'COMMAND'].includes(key))
-              .map(([key, value]) => `${key} ${value}`)
-              .join(' · ');
-            return (
-              <Card key={`${process.container}:${pid}:${index}`} variant="outline">
-                <CardHeader label={command} detail={process.container} align="start" width="fill" />
-                <CardContent>
-                  <Row gap={2}>
-                    <Badge label={`PID ${pid}`} />
-                    <Text label={detail} color="text-dim" />
-                  </Row>
-                </CardContent>
-              </Card>
-            );
-          })}
-        </ResourceList>
+        <Entry
+          value={filter}
+          placeholder="Filter container, user, PID, or command"
+          width={{ minimum: { chars: 18 }, maximum: { chars: 52 } }}
+          onChange={(event) => setFilter(String(event.value ?? '').slice(0, 256))}
+        />
+        <DataTable
+          source={PROCESS_TABLE_SOURCE}
+          schema={schema}
+          width="fill"
+          height={{ step: 80 }}
+          onSort={(event: SortReport) => {
+            if (table.accepts(event)) {
+              setSort({ column: event.column, descending: Boolean(event.descending) });
+            }
+          }}
+        />
+        {filter.trim() ? (
+          <Text label="Filter applies to the bounded snapshot shown here." color="text-dim" />
+        ) : null}
         <Omitted count={view.omitted} />
         {snapshots.some(({ rows }) => rows.truncated) ? (
           <Text

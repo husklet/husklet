@@ -5,6 +5,7 @@ import type {
   ContainerDetailsSource,
   ExecutionDetailsSource,
   ImageDetailsSource,
+  ProcessTableSource,
   VolumeDetailsSource,
 } from './model.js';
 import { SECTIONS } from './overview.js';
@@ -15,15 +16,17 @@ let imageDetails: ImageDetailsSource | undefined;
 let containerDetails: ContainerDetailsSource | undefined;
 let executionDetails: ExecutionDetailsSource | undefined;
 let volumeDetails: VolumeDetailsSource | undefined;
+let processTable: ProcessTableSource | undefined;
 const send = (mutation: InterfaceSourceMutation) => surface.source(mutation);
 const session = await connect({
-  onRows(request, channel) {
+  onRows(request) {
     const window =
       imageDetails?.answer(request) ??
       containerDetails?.answer(request) ??
       executionDetails?.answer(request) ??
-      volumeDetails?.answer(request);
-    if (window) session.answer(channel, window);
+      volumeDetails?.answer(request) ??
+      processTable?.answer(request);
+    if (window) void surface.source({ Window: window });
   },
   onEvent(payload) {
     if (payload && typeof payload === 'object') providerSelections.publish(payload);
@@ -53,6 +56,7 @@ imageDetails = new models.ImageDetailsSource(send);
 containerDetails = new models.ContainerDetailsSource(send);
 executionDetails = new models.ExecutionDetailsSource(send);
 volumeDetails = new models.VolumeDetailsSource(send);
+processTable = new models.ProcessTableSource(send);
 surface.update(
   <Top
     api={fixtureModule ? fixtureModule.fixtureApi(api, fixture) : api}
@@ -60,6 +64,7 @@ surface.update(
     containerDetails={containerDetails}
     executionDetails={executionDetails}
     imageDetails={imageDetails}
+    processTable={processTable}
     volumeDetails={volumeDetails}
     initial={fixtureModule?.populatedFixture}
     initialSection={

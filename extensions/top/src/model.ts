@@ -6,11 +6,13 @@ import type {
   InterfaceSourceMutation,
   NetworkSummary,
   ProcessList,
+  ColumnSpec,
+  SortReport,
   VolumeSummary,
 } from '@husklet/react';
 
 type DetailCell = { Text: string } | { Code: string };
-type DetailRow = { id: number; cells: DetailCell[] };
+type DetailRow = { key: number; cells: DetailCell[] };
 type RowRequest = {
   source: number;
   version: number;
@@ -31,7 +33,7 @@ function detailRows(values: ReadonlyArray<readonly [string, unknown]>): DetailRo
   return values
     .filter(([, value]) => value !== null && value !== undefined && String(value).length > 0)
     .map(([key, value], index) => ({
-      id: index + 1,
+      key: index + 1,
       cells: [{ Text: key }, { Code: String(value) }],
     }));
 }
@@ -137,6 +139,138 @@ export const NETWORK_DETAIL_SOURCE = 204;
 export const NETWORK_DETAIL_WINDOW_LIMIT = 4;
 export const VOLUME_DETAIL_SOURCE = 205;
 export const VOLUME_DETAIL_WINDOW_LIMIT = 2;
+export const PROCESS_TABLE_SOURCE = 206;
+export const PROCESS_TABLE_WINDOW_LIMIT = 128;
+
+export type ProcessRecord = {
+  container: string;
+  cells: Record<string, string>;
+  values: string[];
+};
+
+type ProcessColumn = ColumnSpec & { key: string };
+type ProcessTableRow = { key: number; cells: Array<{ Text: string }> };
+
+const PROCESS_COLUMNS = {
+  container: { key: 'container', title: 'Container', width: { chars: 18 }, sortable: true },
+  pid: { key: 'pid', title: 'PID', width: { chars: 8 }, align: 'end', sortable: true },
+  user: { key: 'user', title: 'User', width: { chars: 14 }, sortable: true },
+  cpu: { key: 'cpu', title: 'CPU', width: { chars: 9 }, align: 'end', sortable: true },
+  memory: { key: 'memory', title: 'Memory', width: { chars: 12 }, align: 'end', sortable: true },
+  command: { key: 'command', title: 'Command', width: 'fill', sortable: true },
+} as const satisfies Record<string, ProcessColumn>;
+
+const PROCESS_ALIASES = {
+  pid: ['PID', 'Pid', 'pid'],
+  user: ['USER', 'User', 'user', 'UID'],
+  cpu: ['CPU', '%CPU', 'CPU%', 'cpu'],
+  memory: ['MEMORY', 'Memory', 'memory', 'MEM', '%MEM', 'MEM%', 'RSS', 'VSZ'],
+  command: ['COMMAND', 'Command', 'command', 'CMD', 'Cmd', 'cmd'],
+} as const;
+
+function processValue(record: ProcessRecord, key: keyof typeof PROCESS_ALIASES): string {
+  for (const alias of PROCESS_ALIASES[key]) {
+    const value = record.cells[alias];
+    if (value !== undefined) return value;
+  }
+  return key === 'command' ? (record.values.at(-1) ?? '') : '';
+}
+
+/** Stable, compact columns; optional metrics appear only when the daemon supplied them. */
+export function processTableSchema(records: readonly ProcessRecord[]): readonly ProcessColumn[] {
+  return [
+    PROCESS_COLUMNS.container,
+    PROCESS_COLUMNS.pid,
+    ...(records.some((record) => processValue(record, 'user')) ? [PROCESS_COLUMNS.user] : []),
+    ...(records.some((record) => processValue(record, 'cpu')) ? [PROCESS_COLUMNS.cpu] : []),
+    ...(records.some((record) => processValue(record, 'memory')) ? [PROCESS_COLUMNS.memory] : []),
+    PROCESS_COLUMNS.command,
+  ];
+}
+
+/** A revisioned, filtered and sorted process snapshot served only in requested windows. */
+export class ProcessTableSource {
+  private readonly send: DetailSender;
+  version: number;
+  private rows: ProcessTableRow[];
+  generated: number;
+
+  constructor(send: DetailSender = async () => {}) {
+    this.send = send;
+    this.version = 0;
+    this.rows = [];
+    this.generated = 0;
+  }
+
+  async replace(
+    records: readonly ProcessRecord[],
+    schema: readonly ProcessColumn[],
+    filter = '',
+    sort = 'container',
+    descending = false,
+  ): Promise<number> {
+    const query = filter.trim().toLocaleLowerCase();
+    const selected = records
+      .map((record, index) => ({ record, key: index + 1 }))
+      .filter(({ record }) =>
+        query
+          ? [record.container, ...record.values].some((value) =>
+              value.toLocaleLowerCase().includes(query),
+            )
+          : true,
+      );
+    const value = (record: ProcessRecord, key: string) =>
+      key === 'container'
+        ? record.container
+        : processValue(record, key as keyof typeof PROCESS_ALIASES);
+    const numeric = new Set(['pid', 'cpu', 'memory']);
+    selected.sort((left, right) => {
+      const a = value(left.record, sort);
+      const b = value(right.record, sort);
+      const order = numeric.has(sort)
+        ? (Number.parseFloat(a) || 0) - (Number.parseFloat(b) || 0)
+        : a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
+      return descending ? -order : order;
+    });
+    this.rows = selected.map(({ record, key }) => ({
+      key,
+      cells: schema.map(({ key }) => ({ Text: value(record, key) || '—' })),
+    }));
+    this.version += 1;
+    await this.send({
+      Length: { source: PROCESS_TABLE_SOURCE, version: this.version, rows: this.rows.length },
+    });
+    return this.rows.length;
+  }
+
+  accepts(event: SortReport): boolean {
+    return (
+      event.source === PROCESS_TABLE_SOURCE &&
+      event.version === this.version &&
+      Object.hasOwn(PROCESS_COLUMNS, event.column)
+    );
+  }
+
+  answer(value: unknown): RowWindow | null {
+    const request = rowRequest(value);
+    if (!request) return null;
+    if (request.source !== PROCESS_TABLE_SOURCE || request.version !== this.version) return null;
+    const count = Math.min(
+      request.range.count,
+      PROCESS_TABLE_WINDOW_LIMIT,
+      Math.max(0, this.rows.length - request.range.start),
+    );
+    const rows = this.rows.slice(request.range.start, request.range.start + count);
+    this.generated += rows.length;
+    return {
+      source: PROCESS_TABLE_SOURCE,
+      version: this.version,
+      request: request.id,
+      range: request.range,
+      rows,
+    };
+  }
+}
 
 /** Windowed rows derived only from the public typed ImageDetails contract. */
 export class ImageDetailsSource {
@@ -407,10 +541,7 @@ export function logText(
 }
 
 /** Turns the protocol's title + matrix process list into labelled cells. */
-export function processRows(
-  list: ProcessList,
-  container: string,
-): Array<{ container: string; cells: Record<string, string>; values: string[] }> {
+export function processRows(list: ProcessList, container: string): ProcessRecord[] {
   const titles = Array.isArray(list?.titles) ? list.titles.map(String) : [];
   const rows = Array.isArray(list?.processes) ? list.processes : [];
   return rows.map((cells) => ({

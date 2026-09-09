@@ -31,6 +31,7 @@ import {
   ContainerDetailsSource,
   ExecutionDetailsSource,
   ImageDetailsSource,
+  ProcessTableSource,
   VolumeDetailsSource,
 } from '../dist/model.js';
 import { host } from './host.js';
@@ -3007,10 +3008,12 @@ test('process snapshots disclose initial-only reusable PID scope and host trunca
     },
   };
   const stage = host();
+  const processTable = new ProcessTableSource();
   stage.render(
     h(Processes, {
       api: processApi,
       resource: { data: [{ id: 'c1', name: 'api' }], loading: false },
+      processTable,
     }),
   );
   await settled();
@@ -3021,7 +3024,17 @@ test('process snapshots disclose initial-only reusable PID scope and host trunca
   assert.ok(labelled(stage, 'Observed Nov 14, 2023, 22:13 UTC'));
   assert.ok(!labelled(stage, 'Observed 2023-11-14T22:13:20.000Z'));
   assert.ok(labelled(stage, 'The host process snapshot was truncated at its safety limit.'));
-  assert.ok(labelled(stage, '/usr/bin/server'));
+  assert.equal(
+    latestPropertyForTag(stage, 'Entry', 'Placeholder')?.Text,
+    'Filter container, user, PID, or command',
+  );
+  const schema = latestPropertyForTag(stage, 'DataTable', 'Schema')?.Schema;
+  assert.deepEqual(
+    schema.map(({ key }) => key),
+    ['container', 'pid', 'user', 'command'],
+  );
+  assert.equal(latestPropertyForTag(stage, 'DataTable', 'Source')?.Source, 206);
+  assert.ok(processTable.version >= 1);
   assert.ok(!labelled(stage, 'Signal'), 'snapshot PID rows never acquire a control action');
   assert.ok(!labelled(stage, 'Kill'), 'snapshot PID rows never acquire a control action');
 });
@@ -3043,9 +3056,11 @@ test('one unavailable container does not hide healthy process snapshots', async 
     },
   };
   const stage = host();
+  const processTable = new ProcessTableSource();
   stage.render(
     h(Processes, {
       api: processApi,
+      processTable,
       resource: {
         data: [
           { id: 'healthy', name: 'api' },
@@ -3059,7 +3074,7 @@ test('one unavailable container does not hide healthy process snapshots', async 
   );
   await settled();
   await settled();
-  assert.ok(labelled(stage, '/usr/bin/healthy'));
+  assert.ok(processWindowText(processTable).includes('/usr/bin/healthy'));
   assert.ok(
     labelled(
       stage,
@@ -3123,15 +3138,20 @@ test('a late process snapshot cannot replace a newer container inventory', async
     containers: { processes: (id) => new Promise((resolve) => pending.set(id, resolve)) },
   };
   const stage = host();
+  const processTable = new ProcessTableSource();
   const resource = (id, name) => ({
     data: [{ id, name }],
     loading: false,
     error: null,
     reload: async () => {},
   });
-  stage.render(h(Processes, { api: processApi, resource: resource('old', 'former') }));
+  stage.render(
+    h(Processes, { api: processApi, resource: resource('old', 'former'), processTable }),
+  );
   await settled();
-  stage.render(h(Processes, { api: processApi, resource: resource('new', 'current') }));
+  stage.render(
+    h(Processes, { api: processApi, resource: resource('new', 'current'), processTable }),
+  );
   await settled();
   pending.get('new')({
     titles: ['PID', 'COMMAND'],
@@ -3143,7 +3163,7 @@ test('a late process snapshot cannot replace a newer container inventory', async
   });
   await settled();
   await settled();
-  assert.ok(labelled(stage, '/usr/bin/current'));
+  assert.ok(processWindowText(processTable).includes('/usr/bin/current'));
   pending.get('old')({
     titles: ['PID', 'COMMAND'],
     processes: [['11', '/usr/bin/stale']],
@@ -3154,12 +3174,8 @@ test('a late process snapshot cannot replace a newer container inventory', async
   });
   await settled();
   await settled();
-  assert.ok(labelled(stage, '/usr/bin/current'));
-  assert.equal(
-    labelled(stage, '/usr/bin/stale'),
-    undefined,
-    'superseded process authority never reaches the tree',
-  );
+  assert.ok(processWindowText(processTable).includes('/usr/bin/current'));
+  assert.equal(processWindowText(processTable).includes('/usr/bin/stale'), false);
 });
 
 test('execution observation is scoped to its page and replaces inventory without polling', async () => {
@@ -6245,6 +6261,17 @@ function latestPropertyForTag(stage, tag, prop) {
   return patches
     .filter((patch) => patch.SetProp?.prop === prop && nodes.has(patch.SetProp.id))
     .at(-1)?.SetProp.value;
+}
+
+function processWindowText(source) {
+  if (source.version === 0) return [];
+  const window = source.answer({
+    source: 206,
+    version: source.version,
+    id: 1,
+    range: { start: 0, count: 128 },
+  });
+  return window?.rows.flatMap((row) => row.cells.map((cell) => cell.Text ?? '')) ?? [];
 }
 
 function latestProperty(stage, node, prop) {
