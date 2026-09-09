@@ -25,6 +25,7 @@ const capabilities = [
   'containers:create',
   'containers:execute',
   'containers:input',
+  'credentials:inject',
   'containers:lifecycle',
   'containers:remove',
   'networks:read',
@@ -57,7 +58,9 @@ async function scenario(name, configuration, reply, expectedCode = 0) {
   });
   await new Promise((resolve) => server.listen(socketPath, resolve));
   const example =
-    name === 'postgres-inspector.ts' ? path.join(reactExamples, name) : path.join(examples, name);
+    name === 'postgres-inspector.ts' || name === 'embeddings-workbench.ts'
+      ? path.join(reactExamples, name)
+      : path.join(examples, name);
   const child = spawn(
     process.execPath,
     ['--experimental-strip-types', example, JSON.stringify({ path: socketPath, ...configuration })],
@@ -406,6 +409,161 @@ test('embeddings indexer refuses publication after journal invalidation', async 
   assert.equal(
     run.calls.some(({ call }) => call === 'state_write'),
     false,
+  );
+});
+
+test('embeddings workbench resumes, indexes changed ranges with an opaque credential, and renders progress', async () => {
+  const container = 'c'.repeat(64);
+  const execution = 'e'.repeat(32);
+  const document = Buffer.from('export const answer = 42;');
+  const previous = {
+    version: 1,
+    revision: 5,
+    documents: { 'src/old.ts': { identity: 'old-v1', embedding: '[0.1]' } },
+  };
+  const run = await scenario(
+    'embeddings-workbench.ts',
+    { root: 'src', model: { container, generation: 7, credential: 'embeddings.api-key' } },
+    (socket, frame) => {
+      const { call, with: value } = frame.payload;
+      if (call === 'state_read')
+        respond(socket, frame, {
+          reply: 'state',
+          with: {
+            identity: `sha256:${'a'.repeat(64)}`,
+            contents: [...Buffer.from(JSON.stringify(previous))],
+          },
+        });
+      else if (call === 'filesystem_inventory')
+        respond(socket, frame, {
+          reply: 'file_inventory',
+          with: { entries: [], complete: true, coalesced: 0, revision: 6 },
+        });
+      else if (call === 'filesystem_changes')
+        respond(socket, frame, {
+          reply: 'file_changes',
+          with: {
+            changes: [
+              {
+                revision: 6,
+                kind: 'modify',
+                path: 'src/new.ts',
+                entry: {
+                  path: 'src/new.ts',
+                  directory: false,
+                  size: document.length,
+                  identity: 'new-v2',
+                },
+              },
+            ],
+            next: 6,
+            current: 6,
+            more: false,
+            truncated: false,
+          },
+        });
+      else if (call === 'filesystem_list_page')
+        respond(socket, frame, {
+          reply: 'directory_page',
+          with: {
+            entries: [
+              { path: 'src/old.ts', directory: false, size: 1, identity: 'old-v1' },
+              { path: 'src/new.ts', directory: false, size: document.length, identity: 'new-v2' },
+            ],
+            identity: 'directory-v2',
+            next: 'src/new.ts',
+            more: false,
+          },
+        });
+      else if (call === 'filesystem_read_range') {
+        const bytes = document.subarray(value.offset, value.offset + value.limit);
+        respond(socket, frame, {
+          reply: 'file_range',
+          with: {
+            path: 'src/new.ts',
+            identity: 'new-v2',
+            offset: value.offset,
+            total: document.length,
+            contents: [...bytes],
+            eof: value.offset + bytes.length === document.length,
+            truncated: value.offset + bytes.length !== document.length,
+          },
+        });
+      } else if (call === 'container_exec_credential')
+        respond(socket, frame, { reply: 'identity', with: execution });
+      else if (call === 'execution_output')
+        respond(socket, frame, {
+          reply: 'execution_output',
+          with: {
+            entries:
+              value.after === 0
+                ? [
+                    {
+                      sequence: 0,
+                      timestamp_ms: 7,
+                      stream: 'stdout',
+                      bytes: [...Buffer.from('[0.2]\n')],
+                    },
+                  ]
+                : [],
+            next: 1,
+            more: false,
+            eof: true,
+            gap: false,
+          },
+        });
+      else if (call === 'execution_inspect')
+        respond(socket, frame, {
+          reply: 'execution',
+          with: {
+            id: execution,
+            container_id: container,
+            running: false,
+            exit_code: 0,
+            pid: 9,
+            command: ['embed', 'src/new.ts'],
+            user: 'indexer',
+          },
+        });
+      else if (call === 'state_write')
+        respond(socket, frame, { reply: 'identity', with: `sha256:${'b'.repeat(64)}` });
+      else if (call === 'interface_open_tab')
+        respond(socket, frame, { reply: 'identity', with: 'index-pane' });
+      else respond(socket, frame, { reply: 'done' });
+    },
+  );
+  assert.deepEqual(run.result, {
+    indexed: 1,
+    revision: 6,
+    checkpoint: `sha256:${'b'.repeat(64)}`,
+  });
+  assert.equal(run.calls.find(({ call }) => call === 'filesystem_changes').with.after, 5);
+  assert.deepEqual(
+    run.calls
+      .filter(({ call }) => call === 'filesystem_read_range')
+      .map(({ with: value }) => [value.offset, value.limit, value.observed]),
+    [
+      [0, 8, 'new-v2'],
+      [8, 8, 'new-v2'],
+      [16, 8, 'new-v2'],
+      [24, 8, 'new-v2'],
+    ],
+  );
+  const credentialExec = run.calls.find(({ call }) => call === 'container_exec_credential');
+  assert.deepEqual(credentialExec.with.credentials, [['EMBEDDINGS_API_KEY', 'embeddings.api-key']]);
+  assert.equal(
+    run.calls.some(({ call }) => call === 'credential_read'),
+    false,
+  );
+  assert(
+    run.calls.some(({ call }) => call === 'interface_render' || call === 'interface_render_at'),
+    'progress UI was not rendered',
+  );
+  assert.match(
+    new TextDecoder().decode(
+      Uint8Array.from(run.calls.find(({ call }) => call === 'state_write').with.contents),
+    ),
+    /"revision":6.*"src\/old.ts".*"src\/new.ts"/,
   );
 });
 
