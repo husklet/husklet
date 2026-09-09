@@ -908,6 +908,10 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
           color="text-dim"
           wrap
         />
+        {error && <RecoveryState operation="Extension change" error={error} />}
+        {notice && (
+          <InlineMessage label={notice.label} tone={notice.uncertain ? 'warning' : 'positive'} />
+        )}
         <Column gap={3} width="fill">
           <Column gap={2} width="fill">
             {!acquisition && (
@@ -1625,13 +1629,6 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                   </CardContent>
                 )}
               </Card>
-            )}
-            {error && <RecoveryState operation="Extension change" error={error} />}
-            {notice && (
-              <InlineMessage
-                label={notice.label}
-                tone={notice.uncertain ? 'warning' : 'positive'}
-              />
             )}
           </Column>
           <Column gap={2} width="fill">
