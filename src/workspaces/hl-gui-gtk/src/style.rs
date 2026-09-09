@@ -232,6 +232,9 @@ fn components(css: &mut String, theme: &Theme) {
          .hl-listitembutton.variant-filled, .hl-listitembutton.variant-filled:hover {{ background: {raised}; color: {text}; box-shadow: inset 2px 0 0 {accent}; font-weight: 600; }}\n\
          .hl-iconbutton {{ min-width: 30px; min-height: 30px; padding: 3px; border-color: transparent; background: transparent; }}\n\
          .hl-iconbutton:hover {{ background: {raised}; border-color: {line}; }}\n\
+         .hl-togglebutton {{ background: transparent; border-color: {line}; }}\n\
+         .hl-togglebutton:checked, .hl-togglebutton:checked:hover {{ background: {raised}; color: {text}; border-color: {accent}; box-shadow: inset 0 -3px 0 {accent}; font-weight: 700; }}\n\
+         .hl-togglebutton:checked:focus-visible {{ outline: 2px solid {accent}; outline-offset: 2px; box-shadow: inset 0 -3px 0 {accent}; }}\n\
          .hl-chip {{ min-height: 24px; padding: 1px 8px; border-radius: {pill}px; background: {raised}; border-color: {line}; }}\n\
          .hl-separator {{ background: {line}; min-height: 1px; min-width: 1px; }}\n\
          .hl-datatable, .hl-list {{ background: {surface}; border: 1px solid {line}; border-radius: {radius}px; }}\n\
@@ -343,9 +346,14 @@ mod tests {
         ));
         assert!(css.contains(".variant-ghost { background: transparent;"));
         assert!(css.contains(".hl-iconbutton { min-width: 30px; min-height: 30px;"));
+        assert!(css.contains(".hl-togglebutton { background: transparent; border-color: #323843;"));
         assert!(css.contains(
-            ".hl-listitembutton, .hl-listitembutton.variant-ghost { background: transparent;"
+            ".hl-togglebutton:checked, .hl-togglebutton:checked:hover { background: #21252d; color: #f0f2f5; border-color: #559df7; box-shadow: inset 0 -3px 0 #559df7; font-weight: 700;"
         ));
+        assert!(
+            css.contains(".hl-togglebutton:checked:focus-visible { outline: 2px solid #559df7; outline-offset: 2px;")
+        );
+        assert!(css.contains(".hl-listitembutton, .hl-listitembutton.variant-ghost { background: transparent;"));
         assert!(css.contains(".hl-card > box { padding: 10px"));
     }
 
