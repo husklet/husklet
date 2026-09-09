@@ -65,6 +65,9 @@ fn pagination() -> gtk::Box {
 fn cell() -> gtk::Label {
     let widget = axis::label();
     widget.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    widget.set_hexpand(true);
+    widget.set_halign(gtk::Align::Fill);
+    widget.set_xalign(0.0);
     widget
 }
 

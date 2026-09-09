@@ -117,19 +117,19 @@ function ApiTable({ rows }: { rows: ControlRow[] }) {
     <Table width="fill">
       <TableHead>
         <TableRow>
-          <TableCell label="Property" wrap />
-          <TableCell label="Type" wrap />
-          <TableCell label="Default" wrap />
-          <TableCell label="Description" wrap />
+          <TableCell label="Property" wrap ellipsize={false} />
+          <TableCell label="Type" wrap ellipsize={false} />
+          <TableCell label="Default" wrap ellipsize={false} />
+          <TableCell label="Description" wrap ellipsize={false} />
         </TableRow>
       </TableHead>
       <TableBody>
         {rows.map((row) => (
           <TableRow key={row.name}>
-            <TableCell label={row.name} wrap />
-            <TableCell label={publicType(row)} wrap />
-            <TableCell label={defaultValue(row)} wrap />
-            <TableCell label={row.note} wrap />
+            <TableCell label={row.name} wrap ellipsize={false} />
+            <TableCell label={publicType(row)} wrap ellipsize={false} />
+            <TableCell label={defaultValue(row)} wrap ellipsize={false} />
+            <TableCell label={row.note} wrap ellipsize={false} />
           </TableRow>
         ))}
       </TableBody>
