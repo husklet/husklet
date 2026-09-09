@@ -144,7 +144,7 @@ test('resource inventories wrap readable cards instead of stretching across wide
 
   assert.deepEqual(ancestorProperty(stage, 'First resource', 'Row', 'Wrap'), { Flag: true });
   assert.deepEqual(ancestorProperty(stage, 'First resource', 'Column', 'Width'), {
-    Bounds: { minimum: { Chars: 34 }, maximum: { Chars: 64 } },
+    Bounds: { minimum: { Chars: 34 }, maximum: null },
   });
   assert.deepEqual(ancestorProperty(stage, 'Second resource', 'Column', 'Grow'), { Number: 1 });
 });
@@ -3749,7 +3749,7 @@ test('volume and network panels render bounded real inventories and controls', (
   assert.ok(taggedProperty(volumeStage, 'cache', 'CardHeader', 'Width'));
   assert.deepEqual(ancestorProperty(volumeStage, 'cache', 'Row', 'Wrap'), { Flag: true });
   assert.deepEqual(ancestorProperty(volumeStage, 'cache', 'Column', 'Width'), {
-    Bounds: { minimum: { Chars: 34 }, maximum: { Chars: 64 } },
+    Bounds: { minimum: { Chars: 34 }, maximum: null },
   });
   for (const label of ['Networks', 'private', 'Remove'])
     assert.ok(labels(networkFrame).includes(label), label);
@@ -3763,7 +3763,7 @@ test('volume and network panels render bounded real inventories and controls', (
     Flag: true,
   });
   assert.deepEqual(ancestorProperty(networkInventoryStage, 'private', 'Column', 'Width'), {
-    Bounds: { minimum: { Chars: 34 }, maximum: { Chars: 64 } },
+    Bounds: { minimum: { Chars: 34 }, maximum: null },
   });
   assert.ok(
     !labels(networkFrame).includes('Disconnect'),

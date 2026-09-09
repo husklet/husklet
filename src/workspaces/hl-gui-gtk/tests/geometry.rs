@@ -107,6 +107,7 @@ fn geometry_is_what_the_description_asked_for() {
     a_removed_child_closes_the_hole_it_left();
     a_wrapping_row_moves_a_child_onto_a_second_line();
     a_wrapping_row_shares_spare_width_between_growing_children();
+    a_wrapping_row_gives_one_growing_child_the_whole_row();
     a_wrapping_row_gives_a_growing_child_the_available_height();
     every_wrapped_line_distributes_its_own_spare_width();
     a_wrapping_column_shares_spare_height_between_growing_children();
@@ -497,6 +498,31 @@ fn a_wrapping_row_shares_spare_width_between_growing_children() {
     assert_eq!(panes.len(), 2);
     assert_eq!(panes[0].width(), 300);
     assert_eq!(panes[1].width(), 300);
+}
+
+/// A responsive card inventory may contain one record. Its readable minimum is
+/// only the wrapping threshold; grow must still consume the row after layout.
+fn a_wrapping_row_gives_one_growing_child_the_whole_row() {
+    let mut stage = Stage::new();
+    let row = stage.producer.create(Tag::Row);
+    stage.producer.set(row, Prop::Wrap, PropValue::Flag(true));
+    stage.producer.append(NodeId::ROOT, row);
+    let card = stage.producer.create(Tag::Column);
+    stage.producer.set(
+        card,
+        Prop::Width,
+        PropValue::Bounds(Bounds::at_least(Length::Chars(34))),
+    );
+    stage.producer.set(card, Prop::Grow, PropValue::Number(1.0));
+    stage.producer.append(row, card);
+    stage.draw();
+
+    stage.allocate(520, 200);
+    assert_eq!(
+        offspring(&stage.tagged(Tag::Row))[0].width(),
+        520,
+        "one resource card fills a narrow inventory row"
+    );
 }
 
 /// A wrapping row is still a full two-dimensional container. A child that
