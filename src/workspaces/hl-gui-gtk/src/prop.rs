@@ -231,7 +231,10 @@ fn width(widget: &gtk::Widget, value: &PropValue) {
         return;
     }
     match value.as_length() {
-        Some(Length::Fill) => widget.set_hexpand(true),
+        Some(Length::Fill) => {
+            widget.set_hexpand(true);
+            widget.set_halign(gtk::Align::Fill);
+        }
         Some(Length::Chars(count)) => characters(widget, count),
         Some(Length::Step(step)) => {
             widget.set_size_request(i32::from(Length::Step(step).pixels().unwrap_or(0)), -1);

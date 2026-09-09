@@ -8,9 +8,9 @@ use super::{axis, slot};
 /// Interactive controls that report an invocation.
 pub(crate) fn widget(tag: Tag) -> gtk::Widget {
     match tag {
-        Tag::Button => gtk::Button::new().upcast(),
+        Tag::Button => action().upcast(),
         Tag::IconButton => icon().upcast(),
-        Tag::ToggleButton => gtk::ToggleButton::new().upcast(),
+        Tag::ToggleButton => toggle().upcast(),
         Tag::ButtonGroup | Tag::ToggleButtonGroup => group().upcast(),
         Tag::SplitButton => split().upcast(),
         Tag::Fab => floating().upcast(),
@@ -23,6 +23,18 @@ pub(crate) fn widget(tag: Tag) -> gtk::Widget {
         // opens the dialog from the invoke it reports.
         _ => gtk::Button::with_label("Choose…").upcast(),
     }
+}
+
+fn action() -> gtk::Button {
+    let widget = gtk::Button::new();
+    widget.set_halign(gtk::Align::Start);
+    widget
+}
+
+fn toggle() -> gtk::ToggleButton {
+    let widget = gtk::ToggleButton::new();
+    widget.set_halign(gtk::Align::Start);
+    widget
 }
 
 fn icon() -> gtk::Button {
