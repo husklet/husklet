@@ -26,6 +26,19 @@ test('no default preview is blank', () => {
   }
 });
 
+test('default previews satisfy every catalogue property constraint', () => {
+  for (const tag of tags) {
+    const { props } = defaults(tag.name);
+    for (const [wire, constraint] of Object.entries(tag.propConstraints)) {
+      const name = `${wire.charAt(0).toLowerCase()}${wire.slice(1)}`;
+      if (constraint === 'non-empty') {
+        assert.equal(typeof props[name], 'string', `<${tag.name}> default omits ${name}`);
+        assert.ok(props[name].trim().length > 0, `<${tag.name}> default leaves ${name} blank`);
+      }
+    }
+  }
+});
+
 test('a leaf carries something to show', () => {
   for (const tag of tags.filter((entry) => !entry.acceptsChildren)) {
     const { props } = defaults(tag.name);

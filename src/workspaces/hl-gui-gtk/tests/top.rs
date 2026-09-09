@@ -276,6 +276,10 @@ mod unix {
             root.allocate(width, 1_600, -1, None);
             assert_eq!(root.width(), width, "{fixture}/{name} rejected {width}px");
             assert_contained(&root, &format!("{fixture}/{name}/{width_name}"));
+            if fixture == "populated" && name == "extensions" {
+                let refresh = find_tooltip_button(&root, "Refresh installed extensions");
+                assert_eq!(refresh.icon_name().as_deref(), Some("view-refresh-symbolic"));
+            }
             if fixture == "error" && name == "networks" {
                 for label in [
                     "Network inventory is unavailable. Check that the workspace is running, then retry.",
@@ -959,6 +963,23 @@ mod unix {
             }
         }
         panic!("button {label:?} was not rendered");
+    }
+
+    fn find_tooltip_button(root: &gtk::Widget, tooltip: &str) -> gtk::Button {
+        let mut pending = vec![root.clone()];
+        while let Some(widget) = pending.pop() {
+            if let Ok(button) = widget.clone().downcast::<gtk::Button>() {
+                if button.tooltip_text().as_deref() == Some(tooltip) {
+                    return button;
+                }
+            }
+            let mut child = widget.first_child();
+            while let Some(current) = child {
+                child = current.next_sibling();
+                pending.push(current);
+            }
+        }
+        panic!("no button with tooltip {tooltip:?}");
     }
 
     fn find_button_optional(root: &gtk::Widget, label: &str) -> Option<gtk::Button> {

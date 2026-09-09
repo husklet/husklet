@@ -214,7 +214,8 @@ function component(tag, props, enums) {
   for (const name of tag.props) {
     const entry = props.get(name);
     lines.push(`  /** ${entry.note} */`);
-    lines.push(`  ${camel(name)}?: ${typed(entry, enums)};`);
+    const optional = Object.hasOwn(tag.propConstraints, name) ? '' : '?';
+    lines.push(`  ${camel(name)}${optional}: ${typed(entry, enums)};`);
   }
   for (const trigger of tag.triggers) {
     lines.push(

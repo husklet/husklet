@@ -46,7 +46,7 @@
     "lint": "eslint --config eslint.config.js 'src/**/*.{ts,tsx}' 'tools/*.js' --max-warnings 0",
     "format": "prettier --write 'src/**/*.{ts,tsx}'",
     "format:check": "prettier --check 'src/**/*.{ts,tsx}'",
-    "types:examples": "tsc --module NodeNext --moduleResolution NodeNext --target ES2022 --lib ES2022,DOM --esModuleInterop --skipLibCheck --noEmit examples/embeddings-workbench.ts examples/git-review-workbench.ts examples/postgres-inspector.ts examples/debugger-workbench.ts examples/language-workbench.ts",
+    "types:examples": "tsc --module NodeNext --moduleResolution NodeNext --target ES2022 --lib ES2022,DOM --esModuleInterop --skipLibCheck --noEmit examples/embeddings-workbench.ts examples/git-review-workbench.ts examples/postgres-inspector.ts examples/debugger-workbench.ts examples/language-workbench.ts test/icon-button-types.ts",
     "pack:check": "node tools/package-smoke.js",
     "catalogue": "cargo run -q --manifest-path ../../../Cargo.toml -p hl-gui --bin catalogue > catalogue.json",
     "types": "npm run catalogue && npm run build"

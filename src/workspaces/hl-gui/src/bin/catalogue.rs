@@ -16,7 +16,7 @@ use hl_gui::{Align, ControlSize, Density, Prop, Scale, Tag, Token, Tone, Variant
 
 /// Version of the document shape itself, so a consumer can refuse a catalogue
 /// it does not understand instead of reading absent fields as empty ones.
-const SHAPE_VERSION: u32 = 3;
+const SHAPE_VERSION: u32 = 4;
 
 /// Largest spacing step with a generated style class, as a length editor should
 /// offer it.
@@ -51,17 +51,27 @@ fn tags() -> Vec<String> {
         .iter()
         .map(|tag| {
             format!(
-                "{{\"name\": {}, \"family\": {}, \"acceptsChildren\": {}, \"detached\": {}, \"props\": {}, \"propNotes\": {}, \"triggers\": {}}}",
+                "{{\"name\": {}, \"family\": {}, \"acceptsChildren\": {}, \"detached\": {}, \"props\": {}, \"propNotes\": {}, \"propConstraints\": {}, \"triggers\": {}}}",
                 text(tag.as_str()),
                 text(family(*tag)),
                 tag.accepts_children(),
                 tag.is_detached(),
                 inline(&spelled(tag.props())),
                 prop_notes(*tag),
+                prop_constraints(*tag),
                 inline(&spelled(tag.triggers()))
             )
         })
         .collect()
+}
+
+/// Component-owned requirements which cannot be inferred from a property's
+/// transport shape. Consumers share these for declarations and validation.
+fn prop_constraints(tag: Tag) -> String {
+    match tag {
+        Tag::IconButton => "{\"Icon\":\"non-empty\",\"Label\":\"non-empty\"}".into(),
+        _ => "{}".into(),
+    }
 }
 
 /// Component-specific meaning for shared wire properties. The global property
@@ -99,7 +109,7 @@ fn prop_notes(tag: Tag) -> String {
                 "Label",
                 "Required accessible action name; it is announced even when only the icon is visible.",
             ),
-            ("Icon", "Named icon rendered as the button's visible content."),
+            ("Icon", "Required non-empty named icon rendered as the button's visible content."),
             (
                 "Variant",
                 "Visual emphasis around the icon; outline exposes the hit-area boundary most clearly.",

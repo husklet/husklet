@@ -229,6 +229,24 @@ fn an_icon_button_keeps_its_icon_when_accessibly_labelled() {
     assert_eq!(button.icon_name().as_deref(), Some("edit-clear-symbolic"));
     assert_eq!(button.label(), None, "the accessible label must not replace the icon");
     assert_eq!(button.tooltip_text().as_deref(), Some("Reset foreground"));
+
+    session.render(
+        &Element::icon_button("edit-clear-symbolic", EventId::new("reset"))
+            .label("Reset foreground")
+            .prop(Prop::Tooltip, PropValue::text("Use the host default foreground")),
+    );
+    let button = session
+        .tagged(Tag::IconButton)
+        .expect("the updated icon button remains reachable")
+        .downcast::<gtk::Button>()
+        .expect("an icon button remains a button");
+    assert_eq!(button.icon_name().as_deref(), Some("edit-clear-symbolic"));
+    assert_eq!(button.label(), None, "a tooltip override must not expose visible text");
+    assert_eq!(
+        button.tooltip_text().as_deref(),
+        Some("Use the host default foreground"),
+        "an explicit tooltip replaces only the label-derived pointer text"
+    );
 }
 
 fn a_button_keeps_its_label_beside_its_icon() {

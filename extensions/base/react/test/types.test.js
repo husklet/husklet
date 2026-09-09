@@ -40,6 +40,14 @@ test('a component offers what it declares and nothing else', () => {
   assert.match(shape('DataTable'), /schema\?: readonly ColumnSpec\[\];/);
 });
 
+test('constrained component properties are required in generated declarations', () => {
+  const iconButton = shape('IconButton');
+  assert.match(iconButton, /icon: string;/);
+  assert.match(iconButton, /label: string;/);
+  assert.doesNotMatch(iconButton, /(?:icon|label)\?: string;/);
+  assert.match(shape('Button'), /label\?: string;/, 'unconstrained properties remain optional');
+});
+
 test('RadioGroup exposes authored children rather than inert generated choices', () => {
   const group = shape('RadioGroup');
   assert.match(group, /children\?: ReactNode;/);

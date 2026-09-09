@@ -15,7 +15,6 @@ import {
   ApiReference,
   ComponentDocument,
   DocumentationSection,
-  SpecimenGrid,
   FieldSpecimen,
 } from './component-document.js';
 import { rows } from './editors.js';
@@ -33,15 +32,10 @@ export function IconButtonWorkbench() {
   return (
     <ComponentDocument
       name="IconButton"
-      summary="Icon buttons expose a familiar action where space is constrained. Every icon still needs a concise accessible label and tooltip."
+      summary="Icon buttons expose a familiar action where space is constrained. Every icon needs a concise accessible label; that label is also the fallback tooltip."
     >
       <Block title="Overview">
-        <Code
-          value={
-            '<IconButton icon="view-refresh-symbolic" label="Refresh" tooltip="Refresh" onInvoke={refresh} />'
-          }
-          wrap
-        />
+        <Code value={'<IconButton icon="view-refresh-symbolic" label="Refresh" />'} wrap />
         <Row gap={2} wrap>
           <IconButton
             icon="view-refresh-symbolic"
@@ -53,8 +47,22 @@ export function IconButtonWorkbench() {
           <Text label={event} color="text-dim" />
         </Row>
       </Block>
-      <SpecimenGrid>
-        <Block title="Sizes">
+      <Block title="Tooltip override">
+        <Text
+          label="Label supplies the accessible name and fallback tooltip. Override tooltip only when pointer users need additional context."
+          color="text-dim"
+          wrap
+        />
+        <IconButton
+          icon="edit-clear-symbolic"
+          label="Reset font size"
+          tooltip="Use the host default for font size"
+          variant="ghost"
+          align="start"
+        />
+      </Block>
+      <Row gap={3} wrap width="fill" align="start">
+        <Block title="Sizes" width={{ chars: 42 }}>
           <Row gap={2} wrap>
             {(['small', 'medium', 'large'] as const).map((size) => (
               <Column key={size} gap={1} align="center">
@@ -72,7 +80,7 @@ export function IconButtonWorkbench() {
           </Row>
           <Text label="Square 28px · 36px · 44px hit areas" color="text-dim" />
         </Block>
-        <Block title="Variants">
+        <Block title="Variants" width={{ chars: 42 }}>
           <Row gap={2} wrap>
             {(['filled', 'outline', 'ghost', 'plain'] as const).map((variant) => (
               <Column key={variant} gap={1} align="center">
@@ -89,7 +97,7 @@ export function IconButtonWorkbench() {
             ))}
           </Row>
         </Block>
-        <Block title="States">
+        <Block title="States" width={{ chars: 42 }}>
           <Row gap={3} wrap>
             <Column gap={1} align="center">
               <IconButton
@@ -137,17 +145,14 @@ export function IconButtonWorkbench() {
             </Column>
           </Row>
           <Text
-            label="Focus is a persistent keyboard ring; pressed feedback uses the filled surface during activation."
+            label="Focus keeps a visible ring. Pressed uses a filled surface during activation."
             color="text-dim"
             wrap
           />
         </Block>
-      </SpecimenGrid>
+      </Row>
       <Block title="Accessibility">
-        <Text
-          label="The label names the action for assistive technology; the tooltip makes the same meaning available to pointer users. Do not use an icon alone when its meaning is ambiguous."
-          wrap
-        />
+        <Text label="Label is the accessible name and fallback tooltip. Never omit it." wrap />
       </Block>
       <DocumentationSection title="API">
         <ApiReference rows={rows('IconButton')} />
@@ -194,9 +199,17 @@ export function IconButtonWorkbench() {
   );
 }
 
-function Block({ title: label, children }: { title: string; children: React.ReactNode }) {
+function Block({
+  title: label,
+  width = 'fill',
+  children,
+}: {
+  title: string;
+  width?: React.ComponentProps<typeof Section>['width'];
+  children: React.ReactNode;
+}) {
   return (
-    <Section gap={2} width="fill">
+    <Section gap={2} width={width}>
       <Heading label={label} scale="title" />
       {children}
     </Section>

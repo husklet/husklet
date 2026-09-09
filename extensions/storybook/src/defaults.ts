@@ -39,6 +39,7 @@ const BY_FAMILY: Record<string, Record<string, StoryValue>> = {
 /** The components whose point is not a label. */
 const BY_TAG: Record<string, Record<string, StoryValue>> = {
   Icon: { icon: 'star' },
+  IconButton: { icon: 'view-refresh-symbolic', label: 'Refresh' },
   Avatar: { label: 'HK' },
   Image: { uri: 'https://example.invalid/picture.png' },
   ImageListItem: { uri: 'https://example.invalid/picture.png' },

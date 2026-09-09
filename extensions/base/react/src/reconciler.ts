@@ -114,6 +114,18 @@ function describe(tag: string) {
   return entry;
 }
 
+/** Enforces component-owned requirements before any partial wire state exists. */
+function validate(type: string, props: HostProps): void {
+  const entry = describe(type);
+  for (const [wire, constraint] of Object.entries(entry.propConstraints)) {
+    const name = `${wire.charAt(0).toLowerCase()}${wire.slice(1)}`;
+    const value = props[name];
+    if (constraint === 'non-empty' && (typeof value !== 'string' || value.trim().length === 0)) {
+      throw new Error(`<${type}> requires a non-empty ${name} prop`);
+    }
+  }
+}
+
 /** Where a node actually attaches: a detached surface always sits at the root. */
 function anchor(parent: HostInstance, child: HostInstance): number {
   return child.detached ? ROOT : parent.id;
@@ -198,6 +210,7 @@ const config = {
 
   createInstance(type: string, props: HostProps, surface: Surface): HostInstance {
     const entry = describe(type);
+    validate(type, props);
     const split = partition(type, props);
     const instance = {
       id: surface.allocate(),
@@ -269,6 +282,7 @@ const config = {
     _before: HostProps,
     after: HostProps,
   ): Patch[] | null {
+    validate(type, after);
     const split = partition(type, after);
     const patches = difference(instance.surface, instance, instance.props, split);
     instance.pending = split;

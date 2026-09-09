@@ -6,6 +6,7 @@ import { components } from '@husklet/react';
 
 import catalogue, {
   SHAPE_VERSION,
+  component,
   enums,
   families,
   grouped,
@@ -57,8 +58,20 @@ test('every tag declares its property and interaction contract', () => {
     for (const name of Object.keys(tag.propNotes)) {
       assert.ok(tag.props.includes(name), `<${tag.name}> documents undeclared ${name}`);
     }
+    assert.equal(typeof tag.propConstraints, 'object');
+    for (const [name, constraint] of Object.entries(tag.propConstraints)) {
+      assert.ok(tag.props.includes(name), `<${tag.name}> constrains undeclared ${name}`);
+      assert.equal(constraint, 'non-empty');
+    }
     assert.ok(Array.isArray(tag.triggers), `<${tag.name}> has no interaction contract`);
   }
+});
+
+test('IconButton publishes its accessible identity requirements', () => {
+  assert.deepEqual(component('IconButton').propConstraints, {
+    Icon: 'non-empty',
+    Label: 'non-empty',
+  });
 });
 
 test('core controls override transport vocabulary with component-specific contracts', () => {

@@ -9,7 +9,7 @@ import {
   TABLE_COLUMN_LIMIT,
   value,
 } from '../dist/protocol.js';
-import { Button, Column, List, ListItemText, ListRow, Text } from '../dist/components.js';
+import { Button, Column, IconButton, List, ListItemText, ListRow, Text } from '../dist/components.js';
 
 /** A surface that keeps its frames instead of writing them to a socket. */
 function surface() {
@@ -44,6 +44,28 @@ test('a button in a column is exactly six patches', () => {
       { Insert: { parent: 0, child: 2, before: null } },
     ],
   });
+});
+
+test('IconButton rejects absent and blank required identity before emitting wire state', () => {
+  for (const props of [
+    { icon: 'view-refresh-symbolic' },
+    { label: 'Refresh' },
+    { icon: '', label: 'Refresh' },
+    { icon: 'view-refresh-symbolic', label: '   ' },
+  ]) {
+    const host = surface();
+    assert.throws(() => host.render(h(IconButton, props)), /requires a non-empty (icon|label) prop/);
+    assert.deepEqual(host.frames, []);
+  }
+});
+
+test('IconButton accepts a non-empty icon and accessible label', () => {
+  const host = surface();
+  const frame = host.render(
+    h(IconButton, { icon: 'view-refresh-symbolic', label: 'Refresh' }),
+  );
+  assert.ok(frame.patches.some((patch) => patch.SetProp?.prop === 'Icon'));
+  assert.ok(frame.patches.some((patch) => patch.SetProp?.prop === 'Label'));
 });
 
 test('table schemas enforce host allocation and UTF-8 identity bounds before rendering', () => {

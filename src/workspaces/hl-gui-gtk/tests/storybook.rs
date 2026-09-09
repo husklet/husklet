@@ -213,6 +213,7 @@ mod unix {
         let narrow_story = matches!(
             story,
             "Button"
+                | "IconButton"
                 | "Entry"
                 | "Select"
                 | "Checkbox"
@@ -347,7 +348,11 @@ mod unix {
             }
         }
         if story == "IconButton" {
-            for (class, expected) in [("size-small", 28), ("size-medium", 36), ("size-large", 44)] {
+            for (class, expected, icon) in [
+                ("size-small", 28, 14),
+                ("size-medium", 36, 18),
+                ("size-large", 44, 20),
+            ] {
                 let sizes = descendants::<gtk::Button>(&root)
                     .into_iter()
                     .filter(|button| button.has_css_class(class))
@@ -358,7 +363,27 @@ mod unix {
                     sizes.iter().all(|size| *size == (expected, expected)),
                     "IconButton {class} specimens allocated {sizes:?}, expected {expected}px square"
                 );
+                let icon_sizes = descendants::<gtk::Button>(&root)
+                    .into_iter()
+                    .filter(|button| button.has_css_class(class))
+                    .filter_map(|button| button.child())
+                    .filter_map(|child| child.downcast::<gtk::Image>().ok())
+                    .map(|image| (image.width(), image.height()))
+                    .collect::<Vec<_>>();
+                assert!(!icon_sizes.is_empty(), "IconButton has no {class} icon specimen");
+                assert!(
+                    icon_sizes.iter().all(|size| size.0 >= icon && size.1 == icon),
+                    "IconButton {class} icon paint boxes {icon_sizes:?} did not preserve {icon}px optical size"
+                );
             }
+            let fallback = find::<gtk::Button>(&root, |button| {
+                button.tooltip_text().as_deref() == Some("Refresh")
+            });
+            assert_eq!(fallback.icon_name().as_deref(), Some("view-refresh-symbolic"));
+            let override_ = find::<gtk::Button>(&root, |button| {
+                button.tooltip_text().as_deref() == Some("Use the host default for font size")
+            });
+            assert_eq!(override_.icon_name().as_deref(), Some("edit-clear-symbolic"));
             let focus = find::<gtk::Button>(&root, |button| {
                 button.tooltip_text().as_deref() == Some("Keyboard focus")
             });
