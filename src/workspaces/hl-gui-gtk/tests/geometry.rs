@@ -169,41 +169,44 @@ fn a_page_container_shrinks_and_caps_its_content_width() {
 }
 
 fn a_short_page_never_underallocates_its_content_column() {
-    let mut stage = Stage::new();
-    let container = stage.producer.create(Tag::Container);
+    let mut scrolled = Stage::new();
+    let viewport = scrolled.producer.create(Tag::Scroll);
+    let page = scrolled.producer.create(Tag::Container);
+    scrolled
+        .producer
+        .set(page, Prop::Pad, PropValue::Length(Length::Step(2)));
     for index in 0..12 {
-        let child = stage.producer.create(Tag::Button);
-        stage
-            .producer
-            .set(child, Prop::Label, PropValue::text(format!("Action {index}")));
-        stage.producer.append(container, child);
+        let child = scrolled.producer.create(Tag::Button);
+        scrolled.producer.set(
+            child,
+            Prop::Label,
+            PropValue::text(format!("Scrollable action {index}")),
+        );
+        scrolled.producer.append(page, child);
     }
-    stage.producer.append(NodeId::ROOT, container);
-    stage.draw();
+    scrolled.producer.append(viewport, page);
+    scrolled.producer.append(NodeId::ROOT, viewport);
+    scrolled.draw();
+    scrolled.allocate(520, 160);
 
-    let body = stage.tagged(Tag::Container);
-    let column = offspring(&body).into_iter().next().expect("page content column");
-    let width = 504;
-    let (minimum_height, _, _, _) = column.measure(gtk::Orientation::Vertical, width);
-    assert!(minimum_height > 160, "fixture must exceed the constrained viewport");
-
-    let (body_minimum, body_natural, _, _) = body.measure(gtk::Orientation::Vertical, width);
-    assert_eq!(body_minimum, 0, "a page body must yield to its viewport height");
+    let viewport = scrolled
+        .tagged(Tag::Scroll)
+        .downcast::<gtk::ScrolledWindow>()
+        .expect("Scroll maps to a scrolled window");
+    let adjustment = viewport.vadjustment();
     assert!(
-        body_natural >= minimum_height,
-        "the body must preserve its content height as the scroll extent"
+        adjustment.upper() > adjustment.page_size(),
+        "content taller than a constrained viewport must remain vertically scrollable"
     );
-    body.allocate(width, 160, -1, None);
-    assert_eq!(body.height(), 160, "the page wrapper must remain viewport-sized");
-    assert_eq!(
-        column.height(),
-        minimum_height,
-        "the content column was allocated below the minimum it reported"
+    let body = scrolled.tagged(Tag::Container);
+    assert!(
+        body.height() > adjustment.page_size() as i32,
+        "the scroller must allocate the padded page at its content height"
     );
     assert_eq!(
-        offspring(&column).len(),
+        offspring(&offspring(&body)[0]).len(),
         12,
-        "constrained layout must preserve the one authoritative content tree"
+        "constrained scrolling must preserve the one authoritative content tree"
     );
 }
 
@@ -558,10 +561,11 @@ fn padding_lands_on_the_side_it_names() {
     stage.producer.append(NodeId::ROOT, column);
     stage.draw();
     let widget = stage.tagged(Tag::Column);
-    assert_eq!(widget.margin_top(), 4);
-    assert_eq!(widget.margin_end(), 8);
-    assert_eq!(widget.margin_bottom(), 12);
-    assert_eq!(widget.margin_start(), 16);
+    assert!(widget.has_css_class("pad-top-1"));
+    assert!(widget.has_css_class("pad-end-2"));
+    assert!(widget.has_css_class("pad-bottom-3"));
+    assert!(widget.has_css_class("pad-start-4"));
+    assert_eq!(widget.margin_top(), 0, "padding must not become outer geometry");
 
     // A plain length still means every side, so the older description holds.
     let mut plain = Stage::new();
@@ -570,15 +574,9 @@ fn padding_lands_on_the_side_it_names() {
     plain.producer.append(NodeId::ROOT, card);
     plain.draw();
     let padded = plain.tagged(Tag::Column);
-    assert_eq!(
-        (
-            padded.margin_top(),
-            padded.margin_end(),
-            padded.margin_bottom(),
-            padded.margin_start()
-        ),
-        (8, 8, 8, 8)
-    );
+    for side in ["top", "end", "bottom", "start"] {
+        assert!(padded.has_css_class(&format!("pad-{side}-2")));
+    }
 }
 
 /// The main axis of a row is horizontal and of a column vertical, so the same

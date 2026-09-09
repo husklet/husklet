@@ -162,7 +162,12 @@ fn spacing(css: &mut String, theme: &Theme) {
         let pixels = (f32::from(step) * f32::from(Length::STEP_PIXELS) * factor).round() as u16;
         let _ = writeln!(
             css,
-            ".gap-{step} {{ padding: 0; margin: 0; }}\n.pad-{step} {{ padding: {pixels}px; }}\n"
+            ".gap-{step} {{ padding: 0; margin: 0; }}\n\
+             .pad-{step} {{ padding: {pixels}px; }}\n\
+             .pad-top-{step} {{ padding-top: {pixels}px; }}\n\
+             .pad-end-{step} {{ padding-right: {pixels}px; }}\n\
+             .pad-bottom-{step} {{ padding-bottom: {pixels}px; }}\n\
+             .pad-start-{step} {{ padding-left: {pixels}px; }}\n"
         );
     }
 }

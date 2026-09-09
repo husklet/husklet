@@ -202,16 +202,21 @@ fn gap(widget: &gtk::Widget, value: &PropValue) {
 /// Space inside a widget's own edges, per side.
 fn pad(widget: &gtk::Widget, value: &PropValue) {
     let edges = value.as_edges().unwrap_or_default();
-    widget.set_margin_top(margin(edges.top));
-    widget.set_margin_bottom(margin(edges.bottom));
-    widget.set_margin_start(margin(edges.start));
-    widget.set_margin_end(margin(edges.end));
-}
-
-/// A side's space in pixels. A length with no pixel size — `Fill`, `Content`,
-/// a character count — describes no margin, which is no margin at all.
-fn margin(length: Length) -> i32 {
-    i32::from(length.pixels().unwrap_or(0))
+    for class in widget.css_classes() {
+        if class.starts_with("pad-") {
+            widget.remove_css_class(&class);
+        }
+    }
+    for (side, length) in [
+        ("top", edges.top),
+        ("end", edges.end),
+        ("bottom", edges.bottom),
+        ("start", edges.start),
+    ] {
+        if let Length::Step(step) = length {
+            widget.add_css_class(&format!("pad-{side}-{}", Length::clamp(step)));
+        }
+    }
 }
 
 fn grow(widget: &gtk::Widget, value: &PropValue) {
