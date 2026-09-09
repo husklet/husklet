@@ -1059,6 +1059,7 @@ test('an installed catalogue extension exposes its update review without retypin
 });
 
 test('an up-to-date built-in remains discoverable as a catalogue card', async () => {
+  const calls = [];
   const stage = host();
   stage.render(
     h(Extensions, {
@@ -1071,9 +1072,27 @@ test('an up-to-date built-in remains discoverable as a catalogue card', async ()
               version: '2.0.0',
               enabled: true,
               status: 'duty',
+              pane_providers: [{ id: 'playground', title: 'Component playground', icon: null }],
             },
           ],
           catalogue: firstPartyCatalogue,
+        },
+        terminal: {
+          openTabAndWait: async (...args) => {
+            calls.push(['open', ...args]);
+            return {
+              changed: true,
+              tab: 'tab-storybook',
+              pane: { slot: 'pane-storybook', generation: 7, revision: 11 },
+            };
+          },
+          switchOccupantAndWait: async (...args) => {
+            calls.push(['switch', ...args]);
+            return {
+              changed: true,
+              pane: { slot: 'pane-storybook', generation: 7, revision: 12 },
+            };
+          },
         },
         watchExtensions: async () => () => {},
       },
@@ -1088,6 +1107,71 @@ test('an up-to-date built-in remains discoverable as a catalogue card', async ()
   assert.equal(labelled(stage, 'View installed details'), undefined);
   assert.equal(labelled(stage, 'Review access'), undefined);
   assert.equal(labelled(stage, 'Review update'), undefined);
+  assert.ok(labelled(stage, 'Open Component playground'));
+  assert.deepEqual(
+    taggedProperty(stage, 'Open Component playground', 'Button', 'Size'),
+    { ControlSize: 'Small' },
+    'opening an installed extension stays a compact primary card action',
+  );
+  invoke(stage, 'Open Component playground');
+  await settled();
+  await settled();
+  assert.deepEqual(calls, [
+    ['open', 'Component playground'],
+    [
+      'switch',
+      'pane-storybook',
+      7,
+      11,
+      { kind: 'surface', extension: 'storybook', provider: 'playground' },
+    ],
+  ]);
+  assert.ok(labelled(stage, 'Component playground opened in a new tab.'));
+});
+
+test('opening an extension reports a retained tab when occupant switching fails', async () => {
+  const stage = host();
+  stage.render(
+    h(Extensions, {
+      api: {
+        extensions: {
+          list: async () => [
+            {
+              name: 'storybook',
+              image_digest: `sha256:${'a'.repeat(64)}`,
+              version: '2.0.0',
+              enabled: true,
+              status: 'duty',
+              pane_providers: [{ id: 'playground', title: 'Component playground', icon: null }],
+            },
+          ],
+          catalogue: firstPartyCatalogue,
+        },
+        terminal: {
+          openTabAndWait: async () => ({
+            changed: true,
+            tab: 'tab-retained',
+            pane: { slot: 'pane-retained', generation: 3, revision: 9 },
+          }),
+          switchOccupantAndWait: async () => {
+            throw new Error('provider stopped before mounting');
+          },
+        },
+        watchExtensions: async () => () => {},
+      },
+    }),
+  );
+  await settled();
+  await settled();
+  invoke(stage, 'Open Component playground');
+  await settled();
+  await settled();
+  assert.ok(
+    labelled(
+      stage,
+      'Tab tab-retained was created, but Component playground did not open: provider stopped before mounting',
+    ),
+  );
 });
 
 test('reviewing an unchanged installed digest is an explicit no-op', async () => {

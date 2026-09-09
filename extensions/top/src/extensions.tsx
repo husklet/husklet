@@ -28,6 +28,7 @@ import {
   type ExtensionCapability,
   type ExtensionCatalogue,
   type ExtensionCatalogueEntry,
+  type ExtensionPaneProvider,
   type ExtensionSummary,
   type ContainerGrant,
   type ContainerSelector,
@@ -616,6 +617,42 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
       setBusy('');
     }
   };
+  const openProvider = async (extension: ExtensionSummary, provider: ExtensionPaneProvider) => {
+    if (busy) return;
+    const operation = `open:${extension.name}:${provider.id}`;
+    setBusy(operation);
+    setError('');
+    setNotice(null);
+    let openedTab = '';
+    try {
+      const opened = await api.terminal.openTabAndWait(provider.title);
+      openedTab = opened.tab;
+      if (!opened.changed) {
+        throw new Error('the new tab did not publish an observable pane');
+      }
+      const switched = await api.terminal.switchOccupantAndWait(
+        opened.pane.slot,
+        opened.pane.generation,
+        opened.pane.revision,
+        { kind: 'surface', extension: extension.name, provider: provider.id },
+      );
+      if (!switched.changed) {
+        throw new Error('the extension surface did not become the pane occupant');
+      }
+      setNotice({
+        label: `${provider.title} opened in a new tab.`,
+        uncertain: false,
+      });
+    } catch (cause) {
+      setError(
+        openedTab
+          ? `Tab ${openedTab} was created, but ${provider.title} did not open: ${message(cause)}`
+          : `${provider.title} could not be opened: ${message(cause)}`,
+      );
+    } finally {
+      setBusy('');
+    }
+  };
   const requestedContainers = acquisition?.candidate?.requested_containers ?? {
     selectors: [],
     create: false,
@@ -753,6 +790,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                         installedExtension &&
                         newerVersion(entry.version, installedExtension.version),
                       );
+                      const provider = installedExtension?.pane_providers?.[0];
                       return (
                         <Card key={entry.id} grow={false} width="fill" variant="outline">
                           <CardHeader
@@ -770,7 +808,9 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                                     ? `Installed · ${updateAvailable ? 'update available' : 'up to date'}`
                                     : 'Available'
                                 }
-                                tone={updateAvailable || !installedExtension ? 'accent' : 'positive'}
+                                tone={
+                                  updateAvailable || !installedExtension ? 'accent' : 'positive'
+                                }
                               />
                               <Text
                                 label={
@@ -843,6 +883,17 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                                 tone="accent"
                                 enabled={!busy && compatibility.compatible !== false}
                                 onInvoke={() => inspect(entry.reference)}
+                              />
+                            </CardActions>
+                          ) : provider ? (
+                            <CardActions gap={1} align="start" justify="start" width="fill">
+                              <Button
+                                label={`Open ${provider.title}`}
+                                size="small"
+                                variant="filled"
+                                tone="accent"
+                                enabled={!busy}
+                                onInvoke={() => openProvider(installedExtension, provider)}
                               />
                             </CardActions>
                           ) : null}
@@ -1371,6 +1422,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                   const updateCompatibility = update
                     ? catalogueCompatibility(update, workspaceArchitecture)
                     : null;
+                  const provider = extension.pane_providers?.[0];
                   return (
                     <Card
                       key={`${extension.name}:${extension.image_digest}`}
@@ -1389,6 +1441,16 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                       />
                       <CardContent gap={1}>
                         <Row gap={1} wrap>
+                          {provider ? (
+                            <Button
+                              label={`Open ${provider.title}`}
+                              size="small"
+                              variant="filled"
+                              tone="accent"
+                              enabled={!busy}
+                              onInvoke={() => openProvider(extension, provider)}
+                            />
+                          ) : null}
                           <Badge
                             label={capitalize(extensionState(extension))}
                             tone={extension.status.startsWith('fault:') ? 'danger' : 'positive'}

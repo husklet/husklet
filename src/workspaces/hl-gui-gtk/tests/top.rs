@@ -11,8 +11,9 @@ mod unix {
     use gtk::prelude::*;
     use hl_extension::port::{ExtensionCatalogue, ExtensionCatalogueEntry};
     use hl_extension::{
-        codec, Capability, ExtensionName, ExtensionPreferences, ExtensionSummary, Frame, Grant, Hello, PreferenceValue,
-        Reply, Request, Welcome, Wire, WorkspaceConfiguration, WorkspaceInfo, WorkspaceTerminal, PROTOCOL,
+        Capability, ExtensionName, ExtensionPreferences, ExtensionSummary, Frame, Grant, Hello, PROTOCOL, PaneProvider,
+        PreferenceValue, Reply, Request, Welcome, Wire, WorkspaceConfiguration, WorkspaceInfo, WorkspaceTerminal,
+        codec,
     };
     use hl_gui::{Renderer as _, Theme, Tree};
     use hl_gui_gtk::Surface;
@@ -192,9 +193,18 @@ mod unix {
                 has_label(&root, "Workspace settings could not be completed."),
                 "the settings error fixture exposed an editable form instead of its load failure"
             );
-            assert!(has_label(&root, "Technical details"), "the settings failure hid its diagnostics disclosure");
-            assert!(has_label(&root, "Retry"), "the settings load failure had no recovery action");
-            assert!(!has_label(&root, "Up to date"), "untrusted settings were presented as current");
+            assert!(
+                has_label(&root, "Technical details"),
+                "the settings failure hid its diagnostics disclosure"
+            );
+            assert!(
+                has_label(&root, "Retry"),
+                "the settings load failure had no recovery action"
+            );
+            assert!(
+                !has_label(&root, "Up to date"),
+                "untrusted settings were presented as current"
+            );
         }
         let window = gtk::Window::new();
         window.set_child(Some(&root));
@@ -254,7 +264,15 @@ mod unix {
                 status: "running".into(),
                 version: "0.4.0".into(),
                 enabled: true,
-                pane_providers: Vec::new(),
+                pane_providers: if name == "storybook" {
+                    vec![PaneProvider {
+                        id: ExtensionName::new("playground").expect("valid provider id"),
+                        title: "Component playground".into(),
+                        icon: Some("applications-graphics-symbolic".into()),
+                    }]
+                } else {
+                    Vec::new()
+                },
                 granted: Grant::new([Capability::Interface]),
                 images: Default::default(),
                 containers: Default::default(),
