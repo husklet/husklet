@@ -313,6 +313,7 @@ export function Workspace({ api }: { api: WorkspaceApi }) {
                     <ConfirmAction
                       authorityKey={`docker-socket:${configuration.generation}:${configuration.configuration_revision}`}
                       label="Enable Docker socket"
+                      size="small"
                       confirmLabel="Confirm socket access"
                       pendingLabel="Enabling…"
                       question="Allow trusted workspace processes to control this workspace’s container engine after restart?"
