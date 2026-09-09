@@ -2479,7 +2479,7 @@ test('terminal management reads every pane as text and writes against the inspec
     latestPropertyForTag(stage, 'LogView', 'Value')?.Text,
     '<pane><button label="Deploy"/></pane>',
   );
-  assert.ok(labelled(stage, 'Interface · Pane 2'));
+  assert.ok(labelled(stage, 'Interface controls'));
   assert.deepEqual(
     calls.filter(([kind]) => kind === 'write').length,
     1,
@@ -2678,7 +2678,7 @@ test('an unobserved terminal mutation keeps the inspected pane and reports uncer
       'Pane pane-1 did not close before the observation window ended; refresh and try again.',
     ),
   );
-  assert.ok(labelled(stage, 'Terminal · Pane 1'), 'uncertain close retains the inspected pane');
+  assert.ok(labelled(stage, 'Live terminal'), 'uncertain close retains the inspected pane');
 });
 
 test('terminal management opens tabs and spawns exact argv through observed operations', async () => {
