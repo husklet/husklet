@@ -327,19 +327,21 @@ export function Images({
                 </>
               ) : null}
             </CardContent>
-            <CardActions gap={1} justify="start">
-              <Button
-                label={
-                  inspection.id === item.id && inspection.state === 'error'
-                    ? 'Retry inspect'
-                    : 'Inspect'
-                }
-                variant="filled"
-                tone="accent"
-                enabled={!busy}
-                onInvoke={() => inspect(item)}
-              />
-            </CardActions>
+            <CardContent>
+              <Row>
+                <Button
+                  label={
+                    inspection.id === item.id && inspection.state === 'error'
+                      ? 'Retry inspect'
+                      : 'Inspect'
+                  }
+                  variant="filled"
+                  tone="accent"
+                  enabled={!busy}
+                  onInvoke={() => inspect(item)}
+                />
+              </Row>
+            </CardContent>
             <CardContent>
               <Expander label="Danger zone" width="fill" align="start">
                 <Column gap={1}>

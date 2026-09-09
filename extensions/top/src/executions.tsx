@@ -3,7 +3,6 @@ import {
   Badge,
   Button,
   Card,
-  CardActions,
   CardContent,
   CardHeader,
   Column,
@@ -279,7 +278,7 @@ export function Executions({
                 />
               ) : null}
             </CardContent>
-            <CardActions gap={1}>
+            <CardContent>
               <Row gap={1} wrap justify="end">
                 <Button
                   label={selected === item.id ? 'Hide details' : 'Details'}
@@ -299,7 +298,7 @@ export function Executions({
                   onInvoke={() => void wait(item.id)}
                 />
               </Row>
-            </CardActions>
+            </CardContent>
             <CardContent>
               <Expander label="More actions" width="fill" align="start">
                 <Column gap={1}>

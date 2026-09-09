@@ -2,7 +2,6 @@ import React from 'react';
 import {
   Button,
   Card,
-  CardActions,
   CardContent,
   CardHeader,
   Column,
@@ -200,21 +199,23 @@ export function Volumes({
               variant={inspection.name === volume.name ? 'filled' : 'outline'}
             >
               <CardHeader label={volume.name} detail={volume.driver} align="start" width="fill" />
-              <CardActions gap={1} justify="start">
-                <Button
-                  label={
-                    inspectionNeedsAccess
-                      ? 'Access required'
-                      : inspection.name === volume.name && inspection.state === 'error'
-                        ? 'Retry inspect'
-                        : 'Inspect'
-                  }
-                  variant="filled"
-                  tone="accent"
-                  enabled={!inspectionNeedsAccess}
-                  onInvoke={() => inspect(volume)}
-                />
-              </CardActions>
+              <CardContent>
+                <Row>
+                  <Button
+                    label={
+                      inspectionNeedsAccess
+                        ? 'Access required'
+                        : inspection.name === volume.name && inspection.state === 'error'
+                          ? 'Retry inspect'
+                          : 'Inspect'
+                    }
+                    variant="filled"
+                    tone="accent"
+                    enabled={!inspectionNeedsAccess}
+                    onInvoke={() => inspect(volume)}
+                  />
+                </Row>
+              </CardContent>
               {!inspectionNeedsAccess ? (
                 <CardContent>
                   <Expander label="Danger zone" width="fill" align="start">
