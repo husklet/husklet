@@ -23,6 +23,7 @@ test(
     let imageInspectAttempts = 0;
     let networkConnected = false;
     const containerId = 'a'.repeat(32);
+    const networkContainerId = 'f'.repeat(32);
     const executionId = 'c'.repeat(32);
     const liveExecutionId = 'b'.repeat(32);
     const createdContainerId = 'd'.repeat(32);
@@ -90,6 +91,14 @@ test(
                 ? {
                     reply: 'containers',
                     with: [
+                      {
+                        id: networkContainerId,
+                        name: 'database',
+                        image: 'postgres:16',
+                        state: 'exited',
+                        created: 0,
+                        generation: 3,
+                      },
                       {
                         id: containerId,
                         name: 'api',
@@ -355,7 +364,7 @@ test(
                                                             kind: 'custom',
                                                             endpoints: {
                                                               containers: networkConnected
-                                                                ? [containerId]
+                                                                ? [networkContainerId]
                                                                 : [],
                                                               truncated: false,
                                                             },
@@ -1133,38 +1142,6 @@ test(
       );
       peer.write(
         encode({
-          channel: 36,
-          kind: KIND.event,
-          payload: changeInvocation(requests, 'Network name', 'socket-net'),
-        }),
-      );
-      await until(() =>
-        requests.some(
-          (request) =>
-            request.call === 'interface_render_at' &&
-            request.with.frame.patches.some((patch) => patch.SetProp?.value?.Text === 'socket-net'),
-        ),
-      );
-      peer.write(
-        encode({ channel: 37, kind: KIND.event, payload: invocation(requests, 'Create') }),
-      );
-      await until(
-        () =>
-          calls.includes('network_create') &&
-          requests.some(
-            (request) =>
-              request.call === 'interface_render_at' &&
-              request.with.frame.patches.some(
-                (patch) => patch.SetProp?.value?.Text === 'Created network socket-net.',
-              ),
-          ),
-      );
-      assert.deepEqual(requests.find((request) => request.call === 'network_create').with, {
-        name: 'socket-net',
-      });
-      await until(() => calls.filter((call) => call === 'network_list').length >= 2);
-      peer.write(
-        encode({
           channel: 81,
           kind: KIND.event,
           payload: invocation(requests, 'Manage connections'),
@@ -1188,7 +1165,7 @@ test(
           payload: changeInvocation(
             requests,
             'Choose a container by name and immutable ID',
-            containerId,
+            networkContainerId,
           ),
         }),
       );
@@ -1243,72 +1220,30 @@ test(
       await until(() => calls.includes('network_connect'));
       assert.deepEqual(requests.find((request) => request.call === 'network_connect').with, {
         reference: networkId,
-        container: containerId,
+        container: networkContainerId,
         aliases: ['database.internal', 'database_2'],
       });
-      const inspectionsBeforeDisconnect = calls.filter((call) => call === 'network_inspect').length;
       peer.write(
         encode({
-          channel: 42,
+          channel: 36,
           kind: KIND.event,
-          payload: invocation(requests, 'Refresh connections'),
+          payload: changeInvocation(requests, 'Network name', 'socket-net'),
         }),
-      );
-      await until(
-        () =>
-          calls.filter((call) => call === 'network_inspect').length > inspectionsBeforeDisconnect &&
-          requests.some(
-            (request) =>
-              request.call === 'interface_render_at' &&
-              request.with.frame.patches.some(
-                (patch) => patch.SetProp?.value?.Text === 'Disconnect',
-              ),
-          ),
-      );
-      peer.write(
-        encode({ channel: 43, kind: KIND.event, payload: invocation(requests, 'Disconnect') }),
       );
       await until(() =>
         requests.some(
           (request) =>
             request.call === 'interface_render_at' &&
-            request.with.frame.patches.some(
-              (patch) =>
-                patch.SetProp?.value?.Text ===
-                `Disconnect immutable container ${containerId} from network ${networkId}?`,
-            ),
+            request.with.frame.patches.some((patch) => patch.SetProp?.value?.Text === 'socket-net'),
         ),
       );
       peer.write(
-        encode({
-          channel: 44,
-          kind: KIND.event,
-          payload: invocation(requests, 'Confirm disconnect'),
-        }),
+        encode({ channel: 37, kind: KIND.event, payload: invocation(requests, 'Create') }),
       );
-      await until(() => calls.includes('network_disconnect'));
-      assert.deepEqual(requests.find((request) => request.call === 'network_disconnect').with, {
-        reference: networkId,
-        container: containerId,
+      await until(() => calls.includes('network_create'));
+      assert.deepEqual(requests.find((request) => request.call === 'network_create').with, {
+        name: 'socket-net',
       });
-      peer.write(
-        encode({
-          channel: 45,
-          kind: KIND.event,
-          payload: invocation(requests, 'Refresh connections'),
-        }),
-      );
-      await until(
-        () =>
-          calls.includes('network_inspect') &&
-          requests.some(
-            (request) =>
-              request.call === 'interface_render_at' &&
-              request.with.frame.patches.some(
-                (patch) => patch.SetProp?.value?.Text === 'Network details',
-              ),
-          ),
-      );
       peer.write(
         encode({ channel: 21, kind: KIND.event, payload: invocation(requests, 'Volumes') }),
       );

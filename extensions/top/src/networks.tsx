@@ -330,6 +330,7 @@ export function Networks({
                       />
                       {!inspectionNeedsAccess ? (
                         <Button
+                          key={`manage-${id}`}
                           label={
                             inspection.id === id && inspection.state === 'loading'
                               ? 'Managing connections…'
