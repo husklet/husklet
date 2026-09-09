@@ -1506,6 +1506,79 @@ test('real Unix output pages apply backpressure, cancel locally, and fail closed
   }
 });
 
+test('real Unix credential execution rejects oversized and colliding bindings before framing', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-debug-credentials-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const containerId = 'c'.repeat(64);
+  const calls = [];
+  const connections = new Set();
+  const server = net.createServer((socket) => {
+    connections.add(socket);
+    socket.on('close', () => connections.delete(socket));
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.kind !== KIND.request || frame.channel !== 2) continue;
+        calls.push(frame.payload);
+        const payload =
+          frame.payload.call === 'workspace_info'
+            ? {
+                reply: 'workspace',
+                with: { name: 'debug', image: 'toolbox', architecture: 'amd64' },
+              }
+            : { reply: 'identity', with: 'e'.repeat(32) };
+        socket.write(encode({ channel: 2, kind: KIND.response, payload }));
+      }
+    });
+    socket.write(
+      encode({
+        channel: CONTROL,
+        kind: KIND.open,
+        payload: {
+          protocol: 1,
+          peer: 'fixture',
+          granted: ['containers:execute', 'credentials:inject', 'workspaces:read'],
+        },
+      }),
+    );
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    const containers = workspace(session).containers;
+    const oversized = Array.from({ length: 65 }, (_, index) => [
+      `DEBUG_TOKEN_${index}`,
+      `debug.token.${index}`,
+    ]);
+    await assert.rejects(
+      containers.execWithCredentials(containerId, 3, {
+        command: ['debug-helper'],
+        credentials: oversized,
+      }),
+      /at most 64/,
+    );
+    await assert.rejects(
+      containers.execWithCredentials(containerId, 3, {
+        command: ['debug-helper'],
+        environment: [['DEBUG_TOKEN', 'public']],
+        credentials: [['DEBUG_TOKEN', 'debug.token']],
+      }),
+      /environment names must be unique/,
+    );
+    assert.equal(calls.length, 0, 'invalid secret bindings never reach Unix framing');
+    assert.equal((await workspace(session).info()).name, 'debug');
+    assert.deepEqual(
+      calls.map(({ call }) => call),
+      ['workspace_info'],
+    );
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('real Unix streaming abort interrupts a stalled consumer and cancels before another output page', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-stream-abort-'));
   const socketPath = path.join(directory, 'host.sock');

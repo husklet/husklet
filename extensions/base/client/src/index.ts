@@ -435,6 +435,27 @@ function exactExecEnvironment(environment = []) {
   return environment;
 }
 
+function exactExecCredentials(
+  credentials: unknown,
+  environment: [string, string][],
+): [string, string][] {
+  if (!Array.isArray(credentials) || credentials.length > 64) {
+    throw new TypeError('credential environment must contain at most 64 [variable, key] pairs');
+  }
+  const normalized = credentials.map((pair) => {
+    if (
+      !Array.isArray(pair) ||
+      pair.length !== 2 ||
+      pair.some((value) => typeof value !== 'string')
+    ) {
+      throw new TypeError('credential environment entries must be [variable, key] string pairs');
+    }
+    return [pair[0], exactCredentialKey(pair[1])] as [string, string];
+  });
+  exactExecEnvironment([...environment, ...normalized.map(([variable]) => [variable, ''])]);
+  return normalized;
+}
+
 function containerMutation(reference, generation) {
   if (
     typeof reference !== 'string' ||
@@ -1117,22 +1138,21 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
         id,
         generation,
         { command, environment = [], credentials, user, workingDirectory, stdin = false },
-      ) =>
-        expect(
+      ) => {
+        const exactEnvironment = exactExecEnvironment(environment);
+        return expect(
           await session.call('container_exec_credential', {
             ...containerMutation(id, generation),
             command,
-            environment: exactExecEnvironment(environment),
-            credentials: (credentials ?? []).map(([variable, key]) => [
-              variable,
-              exactCredentialKey(key),
-            ]),
+            environment: exactEnvironment,
+            credentials: exactExecCredentials(credentials ?? [], exactEnvironment),
             user: user ?? null,
             working_directory: workingDirectory ?? null,
             ...(stdin ? { stdin: true } : {}),
           }),
           'identity',
-        ),
+        );
+      },
       execAndWait: async (
         id,
         generation,

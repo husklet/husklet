@@ -310,6 +310,21 @@ function exactExecEnvironment(environment = []) {
         throw new RangeError('environment exceeds 65536 UTF-8 bytes');
     return environment;
 }
+function exactExecCredentials(credentials, environment) {
+    if (!Array.isArray(credentials) || credentials.length > 64) {
+        throw new TypeError('credential environment must contain at most 64 [variable, key] pairs');
+    }
+    const normalized = credentials.map((pair) => {
+        if (!Array.isArray(pair) ||
+            pair.length !== 2 ||
+            pair.some((value) => typeof value !== 'string')) {
+            throw new TypeError('credential environment entries must be [variable, key] string pairs');
+        }
+        return [pair[0], exactCredentialKey(pair[1])];
+    });
+    exactExecEnvironment([...environment, ...normalized.map(([variable]) => [variable, ''])]);
+    return normalized;
+}
 function containerMutation(reference, generation) {
     if (typeof reference !== 'string' ||
         reference.length === 0 ||
@@ -834,18 +849,18 @@ export function workspace(session, { signal } = {}) {
                 working_directory: workingDirectory ?? null,
                 ...(stdin ? { stdin: true } : {}),
             }), 'identity'),
-            execWithCredentials: async (id, generation, { command, environment = [], credentials, user, workingDirectory, stdin = false }) => expect(await session.call('container_exec_credential', {
-                ...containerMutation(id, generation),
-                command,
-                environment: exactExecEnvironment(environment),
-                credentials: (credentials ?? []).map(([variable, key]) => [
-                    variable,
-                    exactCredentialKey(key),
-                ]),
-                user: user ?? null,
-                working_directory: workingDirectory ?? null,
-                ...(stdin ? { stdin: true } : {}),
-            }), 'identity'),
+            execWithCredentials: async (id, generation, { command, environment = [], credentials, user, workingDirectory, stdin = false }) => {
+                const exactEnvironment = exactExecEnvironment(environment);
+                return expect(await session.call('container_exec_credential', {
+                    ...containerMutation(id, generation),
+                    command,
+                    environment: exactEnvironment,
+                    credentials: exactExecCredentials(credentials ?? [], exactEnvironment),
+                    user: user ?? null,
+                    working_directory: workingDirectory ?? null,
+                    ...(stdin ? { stdin: true } : {}),
+                }), 'identity');
+            },
             execAndWait: async (id, generation, { command, environment = [], user, workingDirectory, ...waitOptions } = {}) => {
                 const containerId = immutableIdentity(id, [32, 64], 'container');
                 const argv = exactCommand(command);
