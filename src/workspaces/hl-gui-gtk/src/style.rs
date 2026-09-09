@@ -254,12 +254,11 @@ const fn token(tone: Tone) -> Token {
 /// Applies an appearance property by swapping the widget's class, never by
 /// attaching a per-widget provider.
 pub(crate) fn mark(widget: &gtk::Widget, prop: Prop, value: &PropValue) {
-    let (prefix, name) = match (prop, value) {
-        (Prop::Variant, PropValue::Variant(variant)) => ("variant", variant.as_str()),
-        (Prop::Tone, PropValue::Tone(tone)) => ("tone", tone.as_str()),
-        (Prop::Scale, PropValue::Scale(scale)) => ("scale", scale.as_str()),
-        (Prop::Size, PropValue::ControlSize(size)) => ("size", size.as_str()),
-        (Prop::Color, PropValue::Token(token)) => ("tone", token.as_str()),
+    let prefix = match prop {
+        Prop::Variant => "variant",
+        Prop::Tone | Prop::Color => "tone",
+        Prop::Scale => "scale",
+        Prop::Size => "size",
         _ => return,
     };
     for existing in widget.css_classes() {
@@ -267,6 +266,14 @@ pub(crate) fn mark(widget: &gtk::Widget, prop: Prop, value: &PropValue) {
             widget.remove_css_class(&existing);
         }
     }
+    let name = match (prop, value) {
+        (Prop::Variant, PropValue::Variant(variant)) => variant.as_str(),
+        (Prop::Tone, PropValue::Tone(tone)) => tone.as_str(),
+        (Prop::Scale, PropValue::Scale(scale)) => scale.as_str(),
+        (Prop::Size, PropValue::ControlSize(size)) => size.as_str(),
+        (Prop::Color, PropValue::Token(token)) => token.as_str(),
+        _ => return,
+    };
     widget.add_css_class(&format!("{prefix}-{name}"));
 }
 

@@ -54,6 +54,9 @@ pub(crate) fn apply(widget: &gtk::Widget, node: &Node, prop: Prop, value: &PropV
 /// Restores a property to its constructed default.
 pub(crate) fn clear(widget: &gtk::Widget, node: &Node, prop: Prop, reports: &crate::event::Reports) {
     apply(widget, node, prop, &PropValue::Nothing, reports);
+    if prop == Prop::Size && matches!(node.tag, Tag::Button | Tag::IconButton) {
+        widget.add_css_class("size-medium");
+    }
 }
 
 fn tooltip(widget: &gtk::Widget, value: &PropValue) {

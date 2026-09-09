@@ -65,6 +65,7 @@ import { IMAGE_PULL_STORY, ImagePullStory } from './image-pull.js';
 import { RESOURCE_STATE_STORY, ResourceStateStory } from './resource-state.js';
 import { DRAG_REORDER_STORY, DragReorderStory } from './drag-reorder.js';
 import { ButtonWorkbench } from './button.js';
+import { IconButtonWorkbench } from './icon-button.js';
 
 const { useMemo, useRef, useState } = React;
 
@@ -170,6 +171,8 @@ export function Playground({
       <Scroll grow width="fill" height="fill">
         {selected === 'Button' ? (
           <ButtonWorkbench />
+        ) : selected === 'IconButton' ? (
+          <IconButtonWorkbench />
         ) : (
           <Preview
             key={`preview-${selected}`}

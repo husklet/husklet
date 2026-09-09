@@ -38,7 +38,11 @@ test('Button documents every semantic size, variant, and tone as live controls',
       `missing ${tone}`,
     );
   }
-  assert(propsFor(frame.patches, 'IconButton').length > 0, 'missing icon-only example');
+  assert.equal(
+    propsFor(frame.patches, 'IconButton').length,
+    0,
+    'IconButton belongs on its own page',
+  );
 });
 
 test('Button keeps its playground secondary to the component documentation', () => {

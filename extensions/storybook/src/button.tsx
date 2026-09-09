@@ -6,12 +6,10 @@ import {
   Entry,
   Expander,
   Heading,
-  IconButton,
   InlineMessage,
   Row,
   Section,
   Select,
-  Spinner,
   Switch,
   Text,
 } from '@husklet/react';
@@ -71,6 +69,7 @@ export function ButtonWorkbench() {
       <SectionBlock title="Sizes">
         {(['small', 'medium', 'large'] as const).map((controlSize) => (
           <Row key={controlSize} gap={2} wrap align="center">
+            <Text label={title(controlSize)} width={{ chars: 8 }} color="text-dim" />
             {(['filled', 'outline', 'ghost', 'plain'] as const).map((emphasis) => (
               <Button
                 key={emphasis}
@@ -89,12 +88,6 @@ export function ButtonWorkbench() {
           <Button label="Add item" icon="list-add-symbolic" variant="filled" tone="accent" />
           <Button label="Delete" icon="user-trash-symbolic" variant="outline" tone="danger" />
           <Button label="Refresh" icon="view-refresh-symbolic" variant="ghost" />
-          <IconButton
-            icon="document-open-symbolic"
-            label="Open document"
-            tooltip="Open document"
-            variant="outline"
-          />
         </Row>
       </SectionBlock>
       <SectionBlock title="Tones">
@@ -116,11 +109,6 @@ export function ButtonWorkbench() {
             onFocus={() => setEvent('Focus state visible')}
           />
           <Button label="Disabled" enabled={false} />
-          <Row gap={1} align="center">
-            <Button label="Run task" enabled={false} />
-            <Spinner />
-            <Text label="Loading" color="text-dim" />
-          </Row>
         </Row>
         <Text
           label="Hover, pressed, and keyboard focus are rendered by the native host—interact with the live controls above."
@@ -144,16 +132,19 @@ export function ButtonWorkbench() {
           <Row gap={2} wrap>
             <Select
               value={variant}
+              tooltip="Variant"
               choices={choices(['filled', 'outline', 'ghost', 'plain'])}
               onChange={(report) => setVariant(report.value as Variant)}
             />
             <Select
               value={size}
+              tooltip="Size"
               choices={choices(['small', 'medium', 'large'])}
               onChange={(report) => setSize(report.value as Size)}
             />
             <Select
               value={tone}
+              tooltip="Tone"
               choices={choices(['neutral', 'accent', 'danger'])}
               onChange={(report) => setTone(report.value as Tone)}
             />

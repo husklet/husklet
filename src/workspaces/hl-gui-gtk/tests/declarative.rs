@@ -169,8 +169,25 @@ fn a_described_interface_reaches_the_toolkit_and_only_its_changes_do() {
     a_rebound_handler_reports_the_new_identity();
     a_select_follows_its_stable_value();
     button_sizes_allocate_their_semantic_metrics();
+    clearing_button_size_restores_the_default();
     rebinding_a_table_retires_its_previous_source();
     a_theme_installs_before_a_description_is_rendered();
+}
+
+fn clearing_button_size_restores_the_default() {
+    let button = |size| {
+        let element = Element::button("Action", EventId::new("action")).key("action");
+        size.map_or(element, |size| element.prop(Prop::Size, PropValue::ControlSize(size)))
+    };
+    let mut session = Session::new();
+    session.render(&button(Some(ControlSize::Large)));
+    let widget = session.tagged(Tag::Button).unwrap();
+    assert!(widget.has_css_class("size-large"));
+
+    session.render(&button(None));
+    let widget = session.tagged(Tag::Button).unwrap();
+    assert!(!widget.has_css_class("size-large"));
+    assert!(widget.has_css_class("size-medium"));
 }
 
 fn button_sizes_allocate_their_semantic_metrics() {
