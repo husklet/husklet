@@ -669,6 +669,15 @@ mod unix {
             surface.rows(&window).expect("GTK accepts the bounded row window");
             settle_toolkit();
             let view = find::<gtk::ColumnView>(&root, |_| true);
+            let table = view
+                .ancestor(gtk::ScrolledWindow::static_type())
+                .and_then(|widget| widget.downcast::<gtk::ScrolledWindow>().ok())
+                .expect("DataTable ColumnView remains inside its scrolling viewport");
+            assert!(
+                (318..=322).contains(&table.height()),
+                "authored step80 DataTable allocated {}px instead of 320px",
+                table.height(),
+            );
             let model = view.model().expect("ready DataTable keeps a selection model");
             assert!(model.select_item(0, true), "ready DataTable selects a visible row");
             settle_toolkit();
@@ -700,6 +709,11 @@ mod unix {
             root.measure(gtk::Orientation::Vertical, 600);
             root.allocate(600, 800, -1, None);
             settle_toolkit();
+            assert!(
+                (318..=322).contains(&table.height()),
+                "narrow authored DataTable allocated {}px instead of 320px",
+                table.height(),
+            );
             let narrow_columns = view
                 .columns()
                 .iter::<gtk::ColumnViewColumn>()
@@ -739,6 +753,11 @@ mod unix {
             root.measure(gtk::Orientation::Vertical, 1_200);
             root.allocate(1_200, 800, -1, None);
             settle_toolkit();
+            assert!(
+                (318..=322).contains(&table.height()),
+                "wide authored DataTable allocated {}px instead of 320px",
+                table.height(),
+            );
             let wide_columns = view
                 .columns()
                 .iter::<gtk::ColumnViewColumn>()

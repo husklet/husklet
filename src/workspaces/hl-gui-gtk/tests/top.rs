@@ -287,7 +287,9 @@ mod unix {
                 let cards = widgets_with_class(&root, "hl-card");
                 if width == 600 {
                     assert!(
-                        cards.windows(2).all(|pair| pair[0].allocation().y() != pair[1].allocation().y()),
+                        cards
+                            .windows(2)
+                            .all(|pair| pair[0].allocation().y() != pair[1].allocation().y()),
                         "600px Installed cards did not form one full-width row each"
                     );
                 } else {
@@ -366,6 +368,15 @@ mod unix {
             capture(&window, &format!("{capture_fixture}-{name}-{width_name}"), width, 800);
             if fixture == "populated" && name == "processes" {
                 let view = find_column_view(&root).expect("Processes renders its DataTable");
+                let table = view
+                    .ancestor(gtk::ScrolledWindow::static_type())
+                    .and_then(|widget| widget.downcast::<gtk::ScrolledWindow>().ok())
+                    .expect("process DataTable retains its scrolling viewport");
+                assert!(
+                    (318..=322).contains(&table.height()),
+                    "{width_name} process DataTable allocated {}px instead of authored 320px",
+                    table.height(),
+                );
                 let visible = view
                     .columns()
                     .iter::<gtk::ColumnViewColumn>()
@@ -386,7 +397,9 @@ mod unix {
         if fixture == "populated" && name == "extensions" && !catalogue_empty {
             find_toggle(&root, "Discover").set_active(true);
             settle_toolkit();
-            send_report(&surface, &mut wire, 100, |event| matches!(event, hl_gui::Event::Toggle { .. }));
+            send_report(&surface, &mut wire, 100, |event| {
+                matches!(event, hl_gui::Event::Toggle { .. })
+            });
             apply_until(&mut wire, &mut tree, &mut surface, "Find extensions", |request| {
                 panic!("unexpected mode switch request: {request:?}")
             });

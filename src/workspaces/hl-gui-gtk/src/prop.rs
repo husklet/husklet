@@ -282,7 +282,7 @@ fn characters(widget: &gtk::Widget, count: u16) {
 /// never described.
 fn span_across(widget: &gtk::Widget, axis: gtk::Orientation, bounds: hl_gui::Bounds) {
     let horizontal = axis == gtk::Orientation::Horizontal;
-    if let Some(pixels) = bounds.minimum.and_then(Length::pixels) {
+    if let Some(pixels) = bounds.minimum.and_then(|length| dimension_pixels(length, horizontal)) {
         let request = i32::from(pixels);
         // One size request carries both axes, so a floor on one of them must
         // carry the other axis forward or describing a height would erase a
@@ -303,9 +303,19 @@ fn span_across(widget: &gtk::Widget, axis: gtk::Orientation, bounds: hl_gui::Bou
     ceiling_of(widget, horizontal, ceiling);
 }
 
+fn dimension_pixels(length: Length, horizontal: bool) -> Option<u16> {
+    match length {
+        // Step classes clamp because only a bounded CSS vocabulary exists.
+        // Explicit vertical dimensions are values, not class names: step 80
+        // must remain 320px rather than collapsing to the largest padding.
+        Length::Step(step) if !horizontal => Some(u16::from(step) * Length::STEP_PIXELS),
+        _ => length.pixels(),
+    }
+}
+
 fn ceiling_of(widget: &gtk::Widget, horizontal: bool, ceiling: Length) {
     if let Some(window) = widget.downcast_ref::<gtk::ScrolledWindow>() {
-        let pixels = i32::from(ceiling.pixels().unwrap_or(0));
+        let pixels = i32::from(dimension_pixels(ceiling, horizontal).unwrap_or(0));
         if horizontal {
             window.set_max_content_width(pixels);
         } else {
@@ -323,15 +333,24 @@ fn ceiling_of(widget: &gtk::Widget, horizontal: bool, ceiling: Length) {
 
 fn height(widget: &gtk::Widget, value: &PropValue) {
     if let PropValue::Bounds(bounds) = value {
+        widget.set_vexpand(false);
+        widget.set_size_request(widget.width_request(), -1);
         span_across(widget, gtk::Orientation::Vertical, *bounds);
         return;
     }
     match value.as_length() {
-        Some(Length::Fill) => widget.set_vexpand(true),
-        Some(Length::Step(step)) => {
-            widget.set_size_request(-1, i32::from(Length::Step(step).pixels().unwrap_or(0)));
+        Some(Length::Fill) => {
+            widget.set_size_request(widget.width_request(), -1);
+            widget.set_vexpand(true);
         }
-        _ => widget.set_vexpand(false),
+        Some(Length::Step(step)) => {
+            widget.set_vexpand(false);
+            widget.set_size_request(widget.width_request(), i32::from(u16::from(step) * Length::STEP_PIXELS));
+        }
+        _ => {
+            widget.set_vexpand(false);
+            widget.set_size_request(widget.width_request(), -1);
+        }
     }
 }
 
@@ -443,4 +462,40 @@ fn select_value(widget: &gtk::Widget, node: &Node) {
         .and_then(|index| u32::try_from(index).ok())
         .unwrap_or(gtk::INVALID_LIST_POSITION);
     choice::set_selected(widget, (selected != gtk::INVALID_LIST_POSITION).then_some(selected));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{grow, height};
+    use gtk::prelude::*;
+    use hl_gui::{Length, PropValue};
+
+    #[test]
+    fn data_table_height_and_growth_follow_latest_expansion_property() {
+        let _ = crate::test_support::on_the_toolkit_thread(|| {
+            let table: gtk::Widget = gtk::ScrolledWindow::new().upcast();
+            table.set_size_request(123, -1);
+
+            assert!(!table.vexpands(), "DataTable begins without vertical expansion");
+            height(&table, &PropValue::Length(Length::Step(80)));
+            assert_eq!((table.width_request(), table.height_request()), (123, 320));
+            assert!(!table.vexpands(), "a fixed height is not an expansion request");
+
+            height(&table, &PropValue::Length(Length::Fill));
+            assert_eq!(table.height_request(), -1, "Fill clears a stale fixed request");
+            assert!(table.vexpands(), "Fill explicitly opts into expansion");
+            height(&table, &PropValue::Length(Length::Step(80)));
+            assert_eq!(table.height_request(), 320);
+            assert!(!table.vexpands(), "Fill followed by Step becomes fixed again");
+
+            grow(&table, &PropValue::Number(1.0));
+            assert!(table.vexpands(), "Grow explicitly opts into expansion");
+            height(&table, &PropValue::Length(Length::Step(80)));
+            assert!(!table.vexpands(), "Step following Grow clears vertical expansion");
+            grow(&table, &PropValue::Number(1.0));
+            assert!(table.vexpands(), "a later Grow remains an explicit opt-in");
+            grow(&table, &PropValue::Number(0.0));
+            assert!(!table.vexpands(), "clearing Grow clears expansion");
+        });
+    }
 }

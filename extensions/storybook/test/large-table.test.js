@@ -43,6 +43,16 @@ test('one DataTable node represents one million rows without materializing row n
     'the fixed API reference must remain bounded independently of the logical row count',
   );
   assert(created.length < 160, `one million logical rows created ${created.length} React nodes`);
+  const table = frame.patches.find((patch) => patch.Create?.tag === 'DataTable').Create.id;
+  assert(
+    frame.patches.some(
+      (patch) =>
+        patch.SetProp?.id === table &&
+        patch.SetProp.prop === 'Height' &&
+        patch.SetProp.value?.Length?.Step === 80,
+    ),
+    'the live table authors an explicit 320px viewport instead of ambient growth',
+  );
 });
 
 test('DataTable teaches bounded behavior and recovery before the advanced stress contract', () => {
