@@ -32,7 +32,7 @@ const capabilities = [
   'interface:render',
 ];
 
-async function scenario(name, configuration, reply, expectedCode = 0) {
+async function scenario(name, configuration, reply, expectedCode = 0, granted = capabilities) {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-product-scenario-'));
   const socketPath = path.join(directory, 'host.sock');
   const calls = [];
@@ -52,13 +52,15 @@ async function scenario(name, configuration, reply, expectedCode = 0) {
       encode({
         channel: CONTROL,
         kind: KIND.open,
-        payload: { protocol: 1, extension: 'product-scenario', granted: capabilities },
+        payload: { protocol: 1, extension: 'product-scenario', granted },
       }),
     );
   });
   await new Promise((resolve) => server.listen(socketPath, resolve));
   const example =
-    name === 'postgres-inspector.ts' || name === 'embeddings-workbench.ts'
+    name === 'postgres-inspector.ts' ||
+    name === 'embeddings-workbench.ts' ||
+    name === 'git-review-workbench.ts'
       ? path.join(reactExamples, name)
       : path.join(examples, name);
   const child = spawn(
@@ -564,6 +566,176 @@ test('embeddings workbench resumes, indexes changed ranges with an opaque creden
       Uint8Array.from(run.calls.find(({ call }) => call === 'state_write').with.contents),
     ),
     /"revision":6.*"src\/old.ts".*"src\/new.ts"/,
+  );
+});
+
+test('Git review resumes bounded inspection and applies one identity-observed file over Unix framing', async () => {
+  const container = 'c'.repeat(64);
+  const statusExecution = 'a'.repeat(32);
+  const diffExecution = 'b'.repeat(32);
+  const head = 'd'.repeat(40);
+  const source = Buffer.from('export function enabled() {\n  return false;\n}\n');
+  let executions = 0;
+  const granted = [
+    'containers:read',
+    'containers:execute',
+    'filesystem:read',
+    'filesystem:write',
+    'state:read',
+    'state:write',
+    'panes:observe',
+    'terminals:output',
+    'interface:render',
+  ];
+  const run = await scenario(
+    'git-review-workbench.ts',
+    {
+      repository: '/workspace',
+      container,
+      generation: 7,
+      file: 'src/flag.ts',
+      terminal: 'review-shell',
+    },
+    (socket, frame) => {
+      const { call, with: value } = frame.payload;
+      if (call === 'state_read')
+        respond(socket, frame, {
+          reply: 'state',
+          with: {
+            identity: `sha256:${'1'.repeat(64)}`,
+            contents: [
+              ...Buffer.from(JSON.stringify({ version: 1, head: 'c'.repeat(40), reviewed: {} })),
+            ],
+          },
+        });
+      else if (call === 'container_exec') {
+        const id = executions++ === 0 ? statusExecution : diffExecution;
+        respond(socket, frame, { reply: 'identity', with: id });
+      } else if (call === 'execution_output') {
+        const output =
+          value.id === statusExecution
+            ? `# branch.oid ${head}\u0000 1 .M N... src/flag.ts\u0000`
+            : '@@ -1,3 +1,3 @@\n-  return false;\n+  return true;\n';
+        respond(socket, frame, {
+          reply: 'execution_output',
+          with: {
+            entries:
+              value.after === 0
+                ? [
+                    {
+                      sequence: 0,
+                      timestamp_ms: 1,
+                      stream: 'stdout',
+                      bytes: [...Buffer.from(output)],
+                    },
+                  ]
+                : [],
+            next: 1,
+            more: false,
+            eof: true,
+            gap: false,
+          },
+        });
+      } else if (call === 'execution_inspect')
+        respond(socket, frame, {
+          reply: 'execution',
+          with: {
+            id: value.id,
+            container_id: container,
+            running: false,
+            exit_code: 0,
+            pid: 8,
+            command: ['git'],
+            user: 'reviewer',
+          },
+        });
+      else if (call === 'filesystem_stat')
+        respond(socket, frame, {
+          reply: 'entry',
+          with: { path: 'src/flag.ts', directory: false, size: source.length, identity: 'file-v1' },
+        });
+      else if (call === 'filesystem_read_range') {
+        const bytes = source.subarray(value.offset, value.offset + value.limit);
+        respond(socket, frame, {
+          reply: 'file_range',
+          with: {
+            path: value.path,
+            identity: 'file-v1',
+            offset: value.offset,
+            total: source.length,
+            contents: [...bytes],
+            eof: value.offset + bytes.length === source.length,
+            truncated: value.offset + bytes.length !== source.length,
+          },
+        });
+      } else if (call === 'pane_list')
+        respond(socket, frame, {
+          reply: 'panes',
+          with: {
+            panes: [
+              {
+                slot: 'review-shell',
+                generation: 2,
+                revision: 4,
+                kind: 'terminal',
+                provider: null,
+                tab: 'review',
+                title: 'Review shell',
+                focused: true,
+              },
+            ],
+            truncated: false,
+          },
+        });
+      else if (call === 'terminal_read_pane')
+        respond(socket, frame, {
+          reply: 'text',
+          with: {
+            slot: 'review-shell',
+            generation: 2,
+            revision: 4,
+            columns: 80,
+            rows: 24,
+            lines: ['$ git status', 'modified: src/flag.ts'],
+            cursor_column: 0,
+            cursor_row: 1,
+            truncated: false,
+          },
+        });
+      else if (call === 'filesystem_write_observed')
+        respond(socket, frame, { reply: 'identity', with: 'file-v2' });
+      else if (call === 'state_write')
+        respond(socket, frame, { reply: 'identity', with: `sha256:${'2'.repeat(64)}` });
+      else if (call === 'interface_open_tab')
+        respond(socket, frame, { reply: 'identity', with: 'review-pane' });
+      else respond(socket, frame, { reply: 'done' });
+    },
+    0,
+    granted,
+  );
+  assert.deepEqual(run.result, {
+    head,
+    written: 'file-v2',
+    persisted: `sha256:${'2'.repeat(64)}`,
+    resumed: 'c'.repeat(40),
+  });
+  assert.deepEqual(
+    run.calls
+      .filter(({ call }) => call === 'container_exec')
+      .map(({ with: value }) => value.command),
+    [
+      ['git', '-C', '/workspace', 'status', '--porcelain=v2', '--branch', '-z'],
+      ['git', '-C', '/workspace', 'diff', '--no-ext-diff', '--unified=3', '--', 'src/flag.ts'],
+    ],
+  );
+  assert(run.calls.filter(({ call }) => call === 'filesystem_read_range').length >= 3);
+  const write = run.calls.find(({ call }) => call === 'filesystem_write_observed');
+  assert.equal(write.with.path, 'src/flag.ts');
+  assert.equal(write.with.observed, 'file-v1');
+  assert.match(new TextDecoder().decode(Uint8Array.from(write.with.contents)), /return true/);
+  assert(run.calls.some(({ call }) => call === 'terminal_read_pane'));
+  assert(
+    run.calls.some(({ call }) => call === 'interface_render' || call === 'interface_render_at'),
   );
 });
 
