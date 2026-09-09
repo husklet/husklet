@@ -138,7 +138,9 @@ test(
         refreshPatches.some((patch) => 'Remove' in patch),
         'loading unmounts the prior detail table',
       );
-      await until(() => labelled(stage, 'execution inspect unavailable'));
+      await until(() =>
+        labelled(stage, 'Execution details could not be loaded: execution inspect unavailable'),
+      );
       assert.equal(
         lengths(mutations).length,
         1,

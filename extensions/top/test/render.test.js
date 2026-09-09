@@ -5239,7 +5239,14 @@ test('execution details, separate bounded streams, wait and retry are operationa
   invoke(stage, 'Details');
   await settled();
   await settled();
-  assert.ok(labelled(stage, 'execution moved'));
+  assert.ok(
+    labelled(
+      stage,
+      'This execution is no longer available. Refresh executions to see the current records.',
+    ),
+  );
+  assert.equal(labelled(stage, 'This view could not be completed.'), undefined);
+  assert.equal(labelled(stage, 'Technical details'), undefined);
   invoke(stage, 'Retry details');
   await settled();
   await settled();

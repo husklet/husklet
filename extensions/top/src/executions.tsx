@@ -9,6 +9,7 @@ import {
   ConfirmAction,
   Expander,
   Heading,
+  InlineMessage,
   KeyValueTable,
   LogView,
   ResourceState,
@@ -371,6 +372,16 @@ function ExecutionDetail({
       : inspection.state === 'ready' && inspection.count === 0
         ? 'empty'
         : inspection.state;
+  if (inspection.state === 'error') {
+    return (
+      <Column gap={1}>
+        <InlineMessage label={executionFailureSummary(inspection.error)} tone="danger" />
+        <Row justify="start">
+          <Button label="Retry details" variant="outline" tone="accent" onInvoke={onRetry} />
+        </Row>
+      </Column>
+    );
+  }
   return (
     <>
       <ResourceState
@@ -439,6 +450,20 @@ function ExecutionDetail({
       ) : null}
     </>
   );
+}
+
+function executionFailureSummary(error: unknown): string {
+  const detail = boundedMessage(error, 256);
+  if (/denied|permission|capabilit/i.test(detail)) {
+    return 'Top does not have permission to inspect this execution. Review its execution access in Extensions.';
+  }
+  if (/not found|absent|no such|disappeared|moved/i.test(detail)) {
+    return 'This execution is no longer available. Refresh executions to see the current records.';
+  }
+  if (/connection to husklet was interrupted/i.test(detail)) return detail;
+  return detail
+    ? `Execution details could not be loaded: ${detail}`
+    : 'Execution details could not be loaded. Retry the request.';
 }
 
 function Page({
