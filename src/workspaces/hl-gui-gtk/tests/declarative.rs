@@ -175,9 +175,12 @@ fn a_described_interface_reaches_the_toolkit_and_only_its_changes_do() {
 }
 
 fn clearing_button_size_restores_the_default() {
-    let button = |size| {
+    let button = |size: Option<ControlSize>| {
         let element = Element::button("Action", EventId::new("action")).key("action");
-        size.map_or(element, |size| element.prop(Prop::Size, PropValue::ControlSize(size)))
+        match size {
+            Some(size) => element.prop(Prop::Size, PropValue::ControlSize(size)),
+            None => element,
+        }
     };
     let mut session = Session::new();
     session.render(&button(Some(ControlSize::Large)));

@@ -12,7 +12,7 @@ export function IconButtonWorkbench() {
         wrap
       />
       <Block title="Basic">
-        <Row gap={2} wrap align="center">
+        <Row gap={2} wrap>
           <IconButton
             icon="view-refresh-symbolic"
             label="Refresh"
@@ -24,7 +24,7 @@ export function IconButtonWorkbench() {
         </Row>
       </Block>
       <Block title="Sizes">
-        <Row gap={2} wrap align="center">
+        <Row gap={2} wrap>
           {(['small', 'medium', 'large'] as const).map((size) => (
             <Column key={size} gap={1} align="center">
               <IconButton
@@ -32,6 +32,7 @@ export function IconButtonWorkbench() {
                 label={`Open document, ${size}`}
                 tooltip={`Open · ${size}`}
                 size={size}
+                align="center"
                 variant="outline"
               />
               <Text label={title(size)} color="text-dim" />

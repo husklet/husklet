@@ -216,9 +216,9 @@ fn components(css: &mut String, theme: &Theme) {
          .hl-navigationmenuitem {{ background: transparent; color: {dim}; border: 0; border-radius: {radius}px; min-height: 30px; padding: 4px 8px; font-weight: 500; }}\n\
          .hl-navigationmenuitem:hover {{ background: {raised}; color: {text}; }}\n\
          .hl-navigationmenuitem:checked, .hl-navigationmenuitem:checked:hover {{ background: {raised}; color: {text}; box-shadow: inset 2px 0 0 {accent}; }}\n\
-         .hl-listitembutton {{ background: transparent; color: {text}; border: 0; border-radius: 0; min-height: 34px; padding: 5px 10px; box-shadow: none; }}\n\
-         .hl-listitembutton:hover {{ background: {raised}; }}\n\
-         .hl-listitembutton:checked {{ background: {raised}; box-shadow: inset 2px 0 0 {accent}; }}\n\
+         .hl-listitembutton, .hl-listitembutton.variant-ghost {{ background: transparent; color: {dim}; border: 0; border-radius: 4px; min-height: 28px; padding: 3px 8px; box-shadow: none; font-weight: 400; }}\n\
+         .hl-listitembutton:hover, .hl-listitembutton.variant-ghost:hover {{ background: {raised}; color: {text}; }}\n\
+         .hl-listitembutton.variant-filled, .hl-listitembutton.variant-filled:hover {{ background: {raised}; color: {text}; box-shadow: inset 2px 0 0 {accent}; font-weight: 600; }}\n\
          .hl-iconbutton {{ min-width: 30px; min-height: 30px; padding: 3px; border-color: transparent; background: transparent; }}\n\
          .hl-iconbutton:hover {{ background: {raised}; border-color: {line}; }}\n\
          .hl-chip {{ min-height: 24px; padding: 1px 8px; border-radius: {pill}px; background: {raised}; border-color: {line}; }}\n\

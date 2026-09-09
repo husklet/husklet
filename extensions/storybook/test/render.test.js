@@ -128,7 +128,7 @@ test('global navigation finds an unknown-family component without materializing 
   const search = first.patches.find(
     (patch) =>
       patch.SetProp?.prop === 'Placeholder' &&
-      patch.SetProp.value.Text === 'Search flows and components',
+      patch.SetProp.value.Text === 'Search components and patterns',
   )?.SetProp.id;
   assert.ok(search, 'global navigation is not discoverable before the long flow list');
   const beforeSearch = stage.frames.length;

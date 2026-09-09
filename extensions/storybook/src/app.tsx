@@ -213,13 +213,13 @@ export function Sidebar({
       <Column pad={1} gap={1}>
         <ListSubheader
           key={'find'}
-          label={'Find a story'}
-          tooltip={'search every flow and component family'}
+          label={'Components'}
+          tooltip={'search every component and product pattern'}
         />
         <Entry
           key={'search'}
           value={search}
-          placeholder={'Search flows and components'}
+          placeholder={'Search components and patterns'}
           onChange={(event) => setSearch(String(event.value ?? '').slice(0, 80))}
         />
         {query.length > 0
@@ -254,21 +254,8 @@ export function Sidebar({
             ]
           : [
               <ListSubheader
-                key={'flows'}
-                label={'End-user flows'}
-                tooltip={'whole product states composed from the library'}
-              />,
-              ...FLOW_STORIES.map((story) => (
-                <ListItemButton
-                  key={story}
-                  label={story}
-                  variant={selected === story ? 'filled' : 'ghost'}
-                  onInvoke={() => onSelect(story)}
-                />
-              )),
-              <ListSubheader
                 key={'components'}
-                label={'Components'}
+                label={'Component family'}
                 tooltip={'choose one bounded catalogue family'}
               />,
               <Select
@@ -287,6 +274,19 @@ export function Sidebar({
                   label={tag.name}
                   variant={tag.name === selected ? 'filled' : 'ghost'}
                   onInvoke={() => onSelect(tag.name)}
+                />
+              )),
+              <ListSubheader
+                key={'flows'}
+                label={'Product patterns'}
+                tooltip={'complete product states composed from the components'}
+              />,
+              ...FLOW_STORIES.map((story) => (
+                <ListItemButton
+                  key={story}
+                  label={story}
+                  variant={selected === story ? 'filled' : 'ghost'}
+                  onInvoke={() => onSelect(story)}
                 />
               )),
             ]}

@@ -35,7 +35,7 @@ export function ButtonWorkbench() {
         wrap
       />
       <SectionBlock title="Overview">
-        <Row gap={2} wrap align="center">
+        <Row gap={2} wrap>
           <Button
             label={label}
             size={size}
@@ -49,7 +49,7 @@ export function ButtonWorkbench() {
         </Row>
       </SectionBlock>
       <SectionBlock title="Basic">
-        <Row gap={2} wrap align="center">
+        <Row gap={2} wrap>
           <Button label="Save changes" variant="filled" tone="accent" />
           <Button label="Cancel" variant="plain" tone="neutral" />
         </Row>
@@ -68,7 +68,7 @@ export function ButtonWorkbench() {
       </SectionBlock>
       <SectionBlock title="Sizes">
         {(['small', 'medium', 'large'] as const).map((controlSize) => (
-          <Row key={controlSize} gap={2} wrap align="center">
+          <Row key={controlSize} gap={2} wrap>
             <Text label={title(controlSize)} width={{ chars: 8 }} color="text-dim" />
             {(['filled', 'outline', 'ghost', 'plain'] as const).map((emphasis) => (
               <Button
@@ -100,7 +100,7 @@ export function ButtonWorkbench() {
         </Row>
       </SectionBlock>
       <SectionBlock title="States">
-        <Row gap={2} wrap align="center">
+        <Row gap={2} wrap>
           <Button label="Normal" variant="filled" tone="accent" />
           <Button
             label="Focus me"

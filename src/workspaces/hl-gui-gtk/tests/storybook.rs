@@ -12,10 +12,12 @@ mod unix {
     use hl_extension::{
         codec, Capability, ChannelId, ExtensionName, Frame, Grant, Hello, Kind, Reply, Request, Welcome, Wire, PROTOCOL,
     };
-    use hl_gui::{Renderer as _, SourceMutation, Tree, LOG_VIEW_CHARACTER_LIMIT};
+    use hl_gui::{Renderer as _, SourceMutation, Theme, Tree, LOG_VIEW_CHARACTER_LIMIT};
     use hl_gui_gtk::Surface;
 
     const STORIES: &[&str] = &[
+        "Button",
+        "IconButton",
         "Extension acquisition",
         "Validated settings form",
         "Keyboard and semantic actions",
@@ -125,9 +127,13 @@ mod unix {
         let mut ready = false;
         let startup_deadline = Instant::now() + SOCKET_DEADLINE;
         for _ in 0..8 {
-            let request = codec::read_request(
-                &receive_until(&mut wire, startup_deadline).expect("Storybook sends a bounded call"),
-            )
+            let carried = receive_until(&mut wire, startup_deadline).unwrap_or_else(|error| {
+                panic!(
+                    "{story} sends a bounded call: {error:?}; stderr: {}",
+                    child.stop().1
+                )
+            });
+            let request = codec::read_request(&carried)
             .expect("Storybook request decodes through the production codec");
             let reply = match request {
                 Request::InterfaceRender { frame } => {
@@ -164,6 +170,7 @@ mod unix {
         assert!(ready, "{story} never rendered");
         let mut tree = Tree::new();
         let mut surface = Surface::new();
+        surface.theme(&Theme::dark()).expect("Storybook theme installs");
         for frame in rendered {
             tree.apply(&frame, &mut surface)
                 .unwrap_or_else(|error| panic!("{story} failed in GTK: {error:?}"));
@@ -202,6 +209,34 @@ mod unix {
         realized_window.set_child(Some(&root));
         realized_window.present();
         settle_toolkit();
+        if story == "Button" {
+            for (class, expected) in [("size-small", 28), ("size-medium", 36), ("size-large", 44)] {
+                let heights = descendants::<gtk::Button>(&root)
+                    .into_iter()
+                    .filter(|button| button.has_css_class(class) && !button.has_css_class("hl-listitembutton"))
+                    .map(|button| button.height())
+                    .collect::<Vec<_>>();
+                assert!(!heights.is_empty(), "Button has no {class} specimens");
+                assert!(
+                    heights.iter().all(|height| *height == expected),
+                    "Button {class} specimens allocated {heights:?}, expected {expected}px"
+                );
+            }
+        }
+        if story == "IconButton" {
+            for (class, expected) in [("size-small", 28), ("size-medium", 36), ("size-large", 44)] {
+                let sizes = descendants::<gtk::Button>(&root)
+                    .into_iter()
+                    .filter(|button| button.has_css_class(class))
+                    .map(|button| (button.width(), button.height()))
+                    .collect::<Vec<_>>();
+                assert!(!sizes.is_empty(), "IconButton has no {class} specimens");
+                assert!(
+                    sizes.iter().all(|size| *size == (expected, expected)),
+                    "IconButton {class} specimens allocated {sizes:?}, expected {expected}px square"
+                );
+            }
+        }
         capture_story(&realized_window, story);
         for width in [300, 1_200] {
             root.measure(gtk::Orientation::Horizontal, -1);
@@ -599,6 +634,12 @@ mod unix {
 
     fn emit_representative(story: &str, root: &gtk::Widget, surface: &Surface, tree: &Tree) -> hl_gui::Event {
         match story {
+            "Button" => {
+                find::<gtk::Button>(root, |button| button.label().as_deref() == Some("Run task")).emit_clicked();
+            }
+            "IconButton" => {
+                find::<gtk::Button>(root, |button| button.tooltip_text().as_deref() == Some("Refresh")).emit_clicked();
+            }
             "DataTable" => {
                 let entry = find::<gtk::Entry>(root, |entry| entry.text().starts_with("record-"));
                 let authoritative = entry.text();
@@ -770,6 +811,9 @@ mod unix {
         let mut child = parent.first_child();
         while let Some(current) = child {
             child = current.next_sibling();
+            if !current.is_visible() {
+                continue;
+            }
             let allocation = current.allocation();
             assert!(
                 allocation.x() >= 0 && allocation.x() + allocation.width() <= parent.width(),
