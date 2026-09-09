@@ -16,7 +16,7 @@ const ITEM_WIDTH = {
  */
 export function ResourceList({ children }: { children: React.ReactNode }) {
   return (
-    <Row width="fill" gap={2} align="start" wrap>
+    <Row width="fill" gap={2} align="start" justify="start" wrap>
       {React.Children.toArray(children).map((child, index) => (
         <Column key={React.isValidElement(child) ? child.key : index} grow width={ITEM_WIDTH}>
           {child}
