@@ -1,10 +1,11 @@
 import React from 'react';
-import { Column, Expander, Row, Select, Switch, Text } from '@husklet/react';
+import { Column, Expander, FormControlLabel, Select, Switch, Text } from '@husklet/react';
 import {
   ApiReference,
   ComponentDocument,
   DocumentationSection,
   FieldSpecimen,
+  SpecimenGrid,
 } from './component-document.js';
 import { rows } from './editors.js';
 
@@ -62,14 +63,18 @@ export function SelectWorkbench() {
         </Column>
       </DocumentationSection>
       <DocumentationSection title="States">
-        <Row gap={3} wrap>
-          <FieldSpecimen label="Enabled" helper="Changes apply to new panes">
-            <Select value="zsh" choices={shells} />
+        <SpecimenGrid>
+          <FieldSpecimen label="Enabled" helper="Changes apply to new panes" width={{ chars: 30 }}>
+            <Select value="zsh" choices={shells} width={{ chars: 30 }} />
           </FieldSpecimen>
-          <FieldSpecimen label="Disabled" helper="Restart the workspace to change this value">
-            <Select value="bash" choices={shells} enabled={false} />
+          <FieldSpecimen
+            label="Disabled"
+            helper="Restart the workspace to change this value"
+            width={{ chars: 30 }}
+          >
+            <Select value="bash" choices={shells} enabled={false} width={{ chars: 30 }} />
           </FieldSpecimen>
-        </Row>
+        </SpecimenGrid>
         <Text
           label="Keep the selected option visible; explain why an unavailable selector is disabled."
           color="text-dim"
@@ -83,18 +88,22 @@ export function SelectWorkbench() {
         />
       </DocumentationSection>
       <Expander label="Playground" expanded={false} width="fill">
-        <Row gap={3} pad={2} wrap>
-          <Switch
-            checked={enabled}
-            tooltip="Enabled"
-            onToggle={(report) => setEnabled(Boolean(report.value))}
-          />
-          <Switch
-            checked={wide}
-            tooltip="Wide field"
-            onToggle={(report) => setWide(Boolean(report.value))}
-          />
-        </Row>
+        <SpecimenGrid>
+          <FormControlLabel label="Selector enabled" gap={2}>
+            <Switch
+              checked={enabled}
+              tooltip="Selector enabled"
+              onToggle={(report) => setEnabled(Boolean(report.value))}
+            />
+          </FormControlLabel>
+          <FormControlLabel label="Use wide field" gap={2}>
+            <Switch
+              checked={wide}
+              tooltip="Use wide field"
+              onToggle={(report) => setWide(Boolean(report.value))}
+            />
+          </FormControlLabel>
+        </SpecimenGrid>
       </Expander>
       <DocumentationSection title="API">
         <ApiReference

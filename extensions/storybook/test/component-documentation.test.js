@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { createElement as h } from 'react';
 
@@ -113,4 +114,46 @@ test('Select and Switch playgrounds retain their reported values', () => {
       `${tag} did not retain its controlled value`,
     );
   }
+});
+
+test('playground controls keep visible labels in the rendered tree', () => {
+  for (const [Workbench, labels] of [
+    [EntryWorkbench, ['Field width', 'Validation tone', 'Field enabled', 'Hide value']],
+    [SelectWorkbench, ['Selector enabled', 'Use wide field']],
+    [SwitchWorkbench, ['Example context', 'Preview enabled']],
+  ]) {
+    const frame = host().render(h(Workbench));
+    for (const label of labels) {
+      assert.ok(
+        labelled(frame.patches, 'FormLabel', label) ||
+          labelled(frame.patches, 'FormControlLabel', label),
+        `missing persistent playground label: ${label}`,
+      );
+    }
+  }
+});
+
+test('dense state specimens use the shared two-column layout', () => {
+  for (const Workbench of [EntryWorkbench, SelectWorkbench, SwitchWorkbench]) {
+    const frame = host().render(h(Workbench));
+    const grids = new Set(created(frame.patches, 'Grid'));
+    assert.ok(
+      frame.patches.some(
+        (patch) =>
+          grids.has(patch.SetProp?.id) &&
+          patch.SetProp.prop === 'Columns' &&
+          patch.SetProp.value?.Integer === 2,
+      ),
+    );
+  }
+});
+
+test('Select state specimens declare matching bounded widths in source', () => {
+  const source = readFileSync(new URL('../src/select.tsx', import.meta.url), 'utf8');
+  const states = source.match(
+    /<DocumentationSection title="States">([\s\S]*?)<\/DocumentationSection>/,
+  )?.[1];
+  assert.ok(states, 'Select states section is missing');
+  assert.equal(states.match(/width=\{\{ chars: 30 \}\}/g)?.length, 4);
+  assert.doesNotMatch(states, /width="fill"/);
 });

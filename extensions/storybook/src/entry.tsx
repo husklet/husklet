@@ -1,10 +1,11 @@
 import React from 'react';
-import { Column, Entry, Expander, Row, Select, Switch, Text } from '@husklet/react';
+import { Column, Entry, Expander, FormControlLabel, Select, Switch, Text } from '@husklet/react';
 import {
   ApiReference,
   ComponentDocument,
   DocumentationSection,
   FieldSpecimen,
+  SpecimenGrid,
   choices,
 } from './component-document.js';
 import { rows } from './editors.js';
@@ -64,7 +65,7 @@ export function EntryWorkbench() {
         />
       </DocumentationSection>
       <DocumentationSection title="States">
-        <Column gap={2}>
+        <SpecimenGrid>
           <FieldSpecimen label="Default" helper="Ready to edit" width={{ chars: 36 }}>
             <Entry value="workspace-api" width={{ chars: 36 }} />
           </FieldSpecimen>
@@ -85,7 +86,7 @@ export function EntryWorkbench() {
           <FieldSpecimen label="Secret" helper="Value remains concealed" width={{ chars: 36 }}>
             <Entry value="token-value" secret width={{ chars: 36 }} />
           </FieldSpecimen>
-        </Column>
+        </SpecimenGrid>
       </DocumentationSection>
       <DocumentationSection title="Accessibility">
         <Text
@@ -95,30 +96,40 @@ export function EntryWorkbench() {
       </DocumentationSection>
       <Expander label="Playground" expanded={false} width="fill">
         <Column gap={2} pad={2}>
-          <Row gap={2} wrap>
-            <Select
-              value={width}
-              choices={choices(['compact', 'default', 'wide'])}
-              tooltip="Field width"
-              onChange={(report) => setWidth(report.value as Width)}
-            />
-            <Select
-              value={tone}
-              choices={choices(['neutral', 'danger'])}
-              tooltip="Validation tone"
-              onChange={(report) => setTone(report.value as Tone)}
-            />
-            <Switch
-              checked={enabled}
-              tooltip="Enabled"
-              onToggle={(report) => setEnabled(Boolean(report.value))}
-            />
-            <Switch
-              checked={secret}
-              tooltip="Hide value"
-              onToggle={(report) => setSecret(Boolean(report.value))}
-            />
-          </Row>
+          <SpecimenGrid>
+            <FieldSpecimen label="Field width" width={{ chars: 24 }}>
+              <Select
+                value={width}
+                choices={choices(['compact', 'default', 'wide'])}
+                tooltip="Field width"
+                width={{ chars: 24 }}
+                onChange={(report) => setWidth(report.value as Width)}
+              />
+            </FieldSpecimen>
+            <FieldSpecimen label="Validation tone" width={{ chars: 24 }}>
+              <Select
+                value={tone}
+                choices={choices(['neutral', 'danger'])}
+                tooltip="Validation tone"
+                width={{ chars: 24 }}
+                onChange={(report) => setTone(report.value as Tone)}
+              />
+            </FieldSpecimen>
+            <FormControlLabel label="Field enabled" gap={2}>
+              <Switch
+                checked={enabled}
+                tooltip="Field enabled"
+                onToggle={(report) => setEnabled(Boolean(report.value))}
+              />
+            </FormControlLabel>
+            <FormControlLabel label="Hide value" gap={2}>
+              <Switch
+                checked={secret}
+                tooltip="Hide value"
+                onToggle={(report) => setSecret(Boolean(report.value))}
+              />
+            </FormControlLabel>
+          </SpecimenGrid>
         </Column>
       </Expander>
       <DocumentationSection title="API">

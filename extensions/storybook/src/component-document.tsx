@@ -6,6 +6,7 @@ import {
   FormControl,
   FormHelperText,
   FormLabel,
+  Grid,
   Heading,
   Section,
   Table,
@@ -81,6 +82,14 @@ export function DocumentationSection({
       <Heading label={title} scale="title" />
       {children}
     </Section>
+  );
+}
+
+export function SpecimenGrid({ children }: { children: React.ReactNode }) {
+  return (
+    <Grid columns={2} gap={3} width="fill">
+      {children}
+    </Grid>
   );
 }
 

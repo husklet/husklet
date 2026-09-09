@@ -5,6 +5,7 @@ import {
   ComponentDocument,
   DocumentationSection,
   FieldSpecimen,
+  SpecimenGrid,
   choices,
 } from './component-document.js';
 import { rows } from './editors.js';
@@ -44,7 +45,7 @@ export function SwitchWorkbench() {
         </Column>
       </DocumentationSection>
       <DocumentationSection title="States">
-        <Column gap={3}>
+        <SpecimenGrid>
           <FormControlLabel label="Restore panes · on" gap={2}>
             <Switch checked />
           </FormControlLabel>
@@ -56,7 +57,7 @@ export function SwitchWorkbench() {
               <Switch checked enabled={false} />
             </FormControlLabel>
           </FieldSpecimen>
-        </Column>
+        </SpecimenGrid>
       </DocumentationSection>
       <DocumentationSection title="Sizing">
         <Text
@@ -72,17 +73,22 @@ export function SwitchWorkbench() {
       </DocumentationSection>
       <Expander label="Playground" expanded={false} width="fill">
         <Column gap={2} pad={2}>
-          <Select
-            value={context}
-            choices={choices(['setting', 'permission', 'feature'])}
-            tooltip="Example context"
-            onChange={(report) => setContext(report.value as Context)}
-          />
-          <Switch
-            checked={enabled}
-            tooltip="Preview enabled"
-            onToggle={(report) => setEnabled(Boolean(report.value))}
-          />
+          <FieldSpecimen label="Example context" width={{ chars: 30 }}>
+            <Select
+              value={context}
+              choices={choices(['setting', 'permission', 'feature'])}
+              tooltip="Example context"
+              width={{ chars: 30 }}
+              onChange={(report) => setContext(report.value as Context)}
+            />
+          </FieldSpecimen>
+          <FormControlLabel label="Preview enabled" gap={2}>
+            <Switch
+              checked={enabled}
+              tooltip="Preview enabled"
+              onToggle={(report) => setEnabled(Boolean(report.value))}
+            />
+          </FormControlLabel>
         </Column>
       </Expander>
       <DocumentationSection title="API">
