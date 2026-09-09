@@ -60,6 +60,7 @@ const IMAGE_VERBS: { key: ImageVerb; label: string }[] = [
 
 const COPY_WIDTH = { maximum: { chars: 54 } } as const;
 const PAGE_WIDTH = { maximum: { chars: 110 } } as const;
+const CATALOGUE_PAGE_SIZE = 8;
 const FILESYSTEM_VERBS = [
   { key: 'read', label: 'View contents', meaning: 'read' },
   { key: 'write', label: 'Modify existing contents', meaning: 'write' },
@@ -403,6 +404,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
   const [providerFailure, setProviderFailure] = React.useState<ProviderFailure | null>(null);
   const [catalogueQuery, setCatalogueQuery] = React.useState('');
   const [catalogueFilter, setCatalogueFilter] = React.useState<CatalogueFilter>('all');
+  const [catalogueLimit, setCatalogueLimit] = React.useState(CATALOGUE_PAGE_SIZE);
   const [permissionDetailsExpanded, setPermissionDetailsExpanded] = React.useState(false);
   const cancelling = React.useRef(false);
   const cancelledJob = React.useRef('');
@@ -772,6 +774,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
       ),
     [catalogueEntries, catalogueFilter, catalogueQuery, installed, workspaceArchitecture],
   );
+  const renderedCatalogueEntries = visibleCatalogueEntries.slice(0, catalogueLimit);
   const requestedWorkspaceEnvironment = acquisition?.candidate?.requested_workspace_environment ?? {
     read: [],
     write: [],
@@ -869,9 +872,10 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                       placeholder="Search extensions"
                       tooltip="Search by name, identifier, publisher, or description"
                       width={{ minimum: { chars: 18 }, maximum: { chars: 36 } }}
-                      onChange={(event: Change) =>
-                        setCatalogueQuery(String(event.value ?? '').slice(0, 128))
-                      }
+                      onChange={(event: Change) => {
+                        setCatalogueQuery(String(event.value ?? '').slice(0, 128));
+                        setCatalogueLimit(CATALOGUE_PAGE_SIZE);
+                      }}
                     />
                     <Select
                       value={catalogueFilter}
@@ -892,6 +896,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                           )
                         ) {
                           setCatalogueFilter(selected as CatalogueFilter);
+                          setCatalogueLimit(CATALOGUE_PAGE_SIZE);
                         }
                       }}
                     />
@@ -926,13 +931,14 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                       onInvoke={() => {
                         setCatalogueQuery('');
                         setCatalogueFilter('all');
+                        setCatalogueLimit(CATALOGUE_PAGE_SIZE);
                       }}
                     />
                   </Column>
                 ) : null}
                 {visibleCatalogueEntries.length > 0 && (
                   <Row gap={1} width="fill" wrap>
-                    {visibleCatalogueEntries.map((entry) => {
+                    {renderedCatalogueEntries.map((entry) => {
                       const compatibility = catalogueCompatibility(entry, workspaceArchitecture);
                       const trust = catalogueTrust(entry);
                       const installedExtension = installed.find(
@@ -1047,6 +1053,19 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                     })}
                   </Row>
                 )}
+                {visibleCatalogueEntries.length > renderedCatalogueEntries.length ? (
+                  <Row gap={1} width="fill" wrap align="center" justify="start">
+                    <Text
+                      label={`Showing ${renderedCatalogueEntries.length} of ${visibleCatalogueEntries.length} matching extensions`}
+                      color="text-dim"
+                    />
+                    <Button
+                      label={`Show ${Math.min(CATALOGUE_PAGE_SIZE, visibleCatalogueEntries.length - renderedCatalogueEntries.length)} more`}
+                      size="small"
+                      onInvoke={() => setCatalogueLimit((current) => current + CATALOGUE_PAGE_SIZE)}
+                    />
+                  </Row>
+                ) : null}
                 {catalogue && !catalogue.complete && (
                   <InlineMessage label="The built-in catalogue is incomplete." tone="warning" />
                 )}

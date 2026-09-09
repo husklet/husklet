@@ -1061,6 +1061,11 @@ test('extension discovery searches, filters, reports result counts, and clears a
   await settled();
   await settled();
   assert.ok(labelled(stage, '20 of 20 extensions'));
+  assert.ok(labelled(stage, 'Showing 8 of 20 matching extensions'));
+  assert.ok(labelled(stage, 'Show 8 more'));
+  invoke(stage, 'Show 8 more');
+  await settled();
+  assert.ok(labelled(stage, 'Showing 16 of 20 matching extensions'));
   assert.deepEqual(placeholderProperty(stage, 'Search extensions', 'Width'), {
     Bounds: { minimum: { Chars: 18 }, maximum: { Chars: 36 } },
   });
