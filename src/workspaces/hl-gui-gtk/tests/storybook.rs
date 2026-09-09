@@ -221,6 +221,7 @@ mod unix {
                 | "RadioGroup"
                 | "FormControl"
                 | "Slider"
+                | "Switch"
                 | "DataTable"
         );
         realized_window.set_default_size(if narrow_story { 600 } else { 1_200 }, 800);
@@ -441,13 +442,54 @@ mod unix {
             settle_toolkit();
         }
         if story == "Switch" {
-            let focus = find::<gtk::Switch>(&root, |switch| {
-                switch.tooltip_text().as_deref() == Some("Focused restore switch")
-            });
+            let focus = labelled_switch(&root, "Restore panes on launch");
+            let caption = find::<gtk::Label>(&root, |label| label.text() == "Restore panes on launch");
+            assert_eq!(
+                focus.tooltip_text(),
+                None,
+                "visible caption is not duplicated as a tooltip"
+            );
+            assert_eq!(caption.mnemonic_widget(), Some(focus.clone().upcast()));
+            let row = caption.parent().expect("Switch caption remains in its label row");
+            assert!(row.height() >= 44, "Switch label row allocated only {}px", row.height());
+            let gesture = row
+                .observe_controllers()
+                .into_iter()
+                .flatten()
+                .find_map(|controller| controller.downcast::<gtk::GestureClick>().ok())
+                .expect("Switch label row owns pointer activation");
+            let caption_bounds = caption.compute_bounds(&row).expect("caption is allocated in its row");
+            gesture.emit_by_name::<()>(
+                "released",
+                &[
+                    &1_i32,
+                    &f64::from(caption_bounds.center().x()),
+                    &f64::from(caption_bounds.center().y()),
+                ],
+            );
+            settle_toolkit();
+            assert_eq!(surface.reports().drain().len(), 1, "caption click reports exactly once");
             assert!(focus.grab_focus(), "Switch accepts deterministic keyboard focus");
+            let keyboard = focus
+                .observe_controllers()
+                .into_iter()
+                .flatten()
+                .find_map(|controller| controller.downcast::<gtk::EventControllerKey>().ok())
+                .expect("Switch owns Enter activation");
+            keyboard.emit_by_name::<bool>(
+                "key-pressed",
+                &[&gtk::gdk::Key::Return, &36_u32, &gtk::gdk::ModifierType::empty()],
+            );
+            settle_toolkit();
+            assert_eq!(surface.reports().drain().len(), 1, "Enter reports exactly once");
+            keyboard.emit_by_name::<bool>(
+                "key-pressed",
+                &[&gtk::gdk::Key::space, &65_u32, &gtk::gdk::ModifierType::empty()],
+            );
+            settle_toolkit();
+            assert_eq!(surface.reports().drain().len(), 1, "Space reports exactly once");
             focus.set_state_flags(gtk::StateFlags::FOCUSED, false);
             settle_toolkit();
-            let _ = surface.reports().drain();
         }
         if story == "Select" {
             let focus = find::<gtk::ToggleButton>(&root, |button| {
@@ -1119,10 +1161,7 @@ mod unix {
                 assert!(choice.grab_focus(), "Select accepts keyboard focus");
             }
             "Switch" => {
-                find::<gtk::Switch>(root, |switch| {
-                    switch.tooltip_text().as_deref() == Some("Restore panes on launch")
-                })
-                .set_active(false);
+                labelled_switch(root, "Restore panes on launch").set_active(false);
             }
             "ToggleButton" => {
                 find::<gtk::ToggleButton>(root, |button| button.tooltip_text().as_deref() == Some("Pin this tab"))
@@ -1326,6 +1365,13 @@ mod unix {
             .into_iter()
             .find(|label| label.has_css_class("hl-caption"))
             .map(|label| label.text().to_string())
+    }
+
+    fn labelled_switch(root: &gtk::Widget, caption: &str) -> gtk::Switch {
+        find::<gtk::Label>(root, |label| label.text() == caption)
+            .mnemonic_widget()
+            .and_then(|widget| widget.downcast::<gtk::Switch>().ok())
+            .expect("FormControlLabel caption names its Switch")
     }
 
     fn find<T: IsA<gtk::Widget> + gtk::glib::object::Cast + Clone + 'static>(

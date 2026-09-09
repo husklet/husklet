@@ -30,11 +30,10 @@ export function SwitchWorkbench() {
       <DocumentationSection title="Overview">
         <Code value={'<Switch checked={restorePanes} onToggle={setRestorePanes} />'} wrap />
         <Column gap={1}>
-          <FormControlLabel label={labels[context]} gap={2}>
+          <FormControlLabel label={labels[context]} gap={2} width="fill" height={{ minimum: 11 }}>
             <Switch
               checked={checked}
               enabled={enabled}
-              tooltip={labels[context]}
               onToggle={(report) => {
                 const next = Boolean(report.value);
                 setChecked(next);
@@ -47,24 +46,34 @@ export function SwitchWorkbench() {
       </DocumentationSection>
       <DocumentationSection title="States">
         <SpecimenGrid>
-          <FormControlLabel label="Restore panes · on" gap={2}>
+          <FormControlLabel
+            label="Restore panes · on"
+            gap={2}
+            width="fill"
+            height={{ minimum: 11 }}
+          >
             <Switch checked />
           </FormControlLabel>
-          <FormControlLabel label="Restore panes · off" gap={2}>
+          <FormControlLabel
+            label="Restore panes · off"
+            gap={2}
+            width="fill"
+            height={{ minimum: 11 }}
+          >
             <Switch checked={false} />
           </FormControlLabel>
           <FieldSpecimen label="Focused" helper="Keyboard focus remains visible">
-            <FormControlLabel label="Restore panes" gap={2}>
-              <Switch checked tooltip="Focused restore switch" />
+            <FormControlLabel label="Restore panes" gap={2} width="fill" height={{ minimum: 11 }}>
+              <Switch checked />
             </FormControlLabel>
           </FieldSpecimen>
           <FieldSpecimen label="Disabled · off" helper="Controlled by workspace policy">
-            <FormControlLabel label="Restore panes" gap={2}>
+            <FormControlLabel label="Restore panes" gap={2} width="fill" height={{ minimum: 11 }}>
               <Switch checked={false} enabled={false} />
             </FormControlLabel>
           </FieldSpecimen>
           <FieldSpecimen label="Disabled · on" helper="Controlled by workspace policy">
-            <FormControlLabel label="Restore panes" gap={2}>
+            <FormControlLabel label="Restore panes" gap={2} width="fill" height={{ minimum: 11 }}>
               <Switch checked enabled={false} />
             </FormControlLabel>
           </FieldSpecimen>
@@ -103,11 +112,7 @@ export function SwitchWorkbench() {
             />
           </FieldSpecimen>
           <FormControlLabel label="Preview enabled" gap={2}>
-            <Switch
-              checked={enabled}
-              tooltip="Preview enabled"
-              onToggle={(report) => setEnabled(Boolean(report.value))}
-            />
+            <Switch checked={enabled} onToggle={(report) => setEnabled(Boolean(report.value))} />
           </FormControlLabel>
         </Column>
       </Expander>

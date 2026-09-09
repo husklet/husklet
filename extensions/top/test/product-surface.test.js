@@ -14,3 +14,15 @@ test('Top product surfaces never expose the generic ObjectInspector', async () =
   }
   assert.deepEqual(offenders, [], 'known host models require domain-specific product views');
 });
+
+test('workspace Switch captions use one native FormControlLabel click target', async () => {
+  const source = await readFile(new URL('../src/workspace.tsx', import.meta.url), 'utf8');
+  for (const label of ['Cursor blink', 'Read only']) {
+    assert.match(
+      source,
+      new RegExp(`<FormControlLabel label="${label}"[\\s\\S]*?<Switch`),
+      `${label} must label its sole Switch`,
+    );
+  }
+  assert.doesNotMatch(source, /<Switch[\s\S]{0,160}\/>\s*<Text label="(?:Cursor blink|Read only)"/);
+});

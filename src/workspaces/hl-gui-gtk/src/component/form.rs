@@ -43,6 +43,18 @@ fn switch() -> gtk::Switch {
     let widget = gtk::Switch::new();
     widget.set_halign(gtk::Align::Start);
     widget.set_valign(gtk::Align::Center);
+    let enter = gtk::EventControllerKey::new();
+    let target = widget.clone();
+    enter.connect_key_pressed(move |_, key, _, _| {
+        if key == gtk::gdk::Key::Return || key == gtk::gdk::Key::KP_Enter || key == gtk::gdk::Key::space {
+            if target.is_sensitive() {
+                request_switch_toggle(&target);
+            }
+            return gtk::glib::Propagation::Stop;
+        }
+        gtk::glib::Propagation::Proceed
+    });
+    widget.add_controller(enter);
     widget
 }
 
@@ -71,6 +83,21 @@ pub(crate) fn slotted(parent: &gtk::Widget, child: &gtk::Widget, tag: Tag) -> bo
             child.update_relation(&[gtk::accessible::Relation::LabelledBy(&[caption.upcast_ref()])]);
         }
         container.prepend(child);
+        if let Some(choice) = child.downcast_ref::<gtk::Switch>() {
+            let click = gtk::GestureClick::new();
+            let row = container.clone();
+            let choice = choice.clone();
+            click.connect_released(move |_, _, x, y| {
+                let over_choice = choice
+                    .compute_bounds(&row)
+                    .is_some_and(|bounds| bounds.contains_point(&gtk::graphene::Point::new(x as f32, y as f32)));
+                if !over_choice && choice.is_sensitive() {
+                    request_switch_toggle(&choice);
+                    choice.grab_focus();
+                }
+            });
+            container.add_controller(click);
+        }
         return true;
     }
     if tag != Tag::Radio || !super::belongs(parent, Tag::RadioGroup) {
@@ -85,6 +112,10 @@ pub(crate) fn slotted(parent: &gtk::Widget, child: &gtk::Widget, tag: Tag) -> bo
     option.set_group(first(container).as_ref());
     container.append(child);
     true
+}
+
+fn request_switch_toggle(widget: &gtk::Switch) {
+    widget.emit_by_name::<bool>("state-set", &[&!widget.is_active()]);
 }
 
 /// Connects the authored label and helper to the focusable field they explain.

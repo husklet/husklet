@@ -181,6 +181,24 @@ test('Switch distinguishes every state and explains its control boundary before 
   );
   assert(headings.indexOf('States') < headings.indexOf('API'));
   assert(headings.indexOf('Choose the right control') < headings.indexOf('API'));
+  const switches = new Set(created(frame.patches, 'Switch'));
+  assert.equal(
+    frame.patches.filter(
+      (patch) => switches.has(patch.SetProp?.id) && patch.SetProp.prop === 'Tooltip',
+    ).length,
+    0,
+    'visible Switch captions are not duplicated as tooltips',
+  );
+  const labelRows = new Set(created(frame.patches, 'FormControlLabel'));
+  assert(
+    frame.patches.some(
+      (patch) =>
+        labelRows.has(patch.SetProp?.id) &&
+        patch.SetProp.prop === 'Height' &&
+        patch.SetProp.value?.Bounds?.minimum?.Step === 11,
+    ),
+    'Switch label rows preserve a 44px hit target',
+  );
 });
 
 test('playground controls keep visible labels in the rendered tree', () => {

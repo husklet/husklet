@@ -403,11 +403,12 @@ export function Workspace({ api }: { api: WorkspaceApi }) {
                   />
                 </Column>
                 <Row gap={1} align="center" wrap>
-                  <Switch
-                    checked={configuration.terminal.cursor_blink ?? false}
-                    onToggle={(event: Change) => terminal('cursor_blink', Boolean(event.value))}
-                  />
-                  <Text label="Cursor blink" />
+                  <FormControlLabel label="Cursor blink" gap={2}>
+                    <Switch
+                      checked={configuration.terminal.cursor_blink ?? false}
+                      onToggle={(event: Change) => terminal('cursor_blink', Boolean(event.value))}
+                    />
+                  </FormControlLabel>
                   <IconButton
                     icon="edit-clear-symbolic"
                     label="Reset cursor blink"
@@ -587,11 +588,12 @@ function Mounts({
             />
           </Row>
           <Row gap={1} align="center" wrap>
-            <Switch
-              checked={mount.read_only}
-              onToggle={(event: Change) => replace(index, { read_only: Boolean(event.value) })}
-            />
-            <Text label="Read only" />
+            <FormControlLabel label="Read only" gap={2}>
+              <Switch
+                checked={mount.read_only}
+                onToggle={(event: Change) => replace(index, { read_only: Boolean(event.value) })}
+              />
+            </FormControlLabel>
             <IconButton
               icon="user-trash-symbolic"
               label={`Remove mount ${index + 1}`}

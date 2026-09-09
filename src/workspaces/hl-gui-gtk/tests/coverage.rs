@@ -13,7 +13,8 @@
 
 use gtk::prelude::*;
 use hl_gui::{
-    Align, Choice, ControlSize, Fault, Length, NodeId, Orientation, Prop, PropValue, Scale, Tag, Tone, Tree, Variant,
+    Align, Choice, ControlSize, EventId, Fault, Length, NodeId, Orientation, Prop, PropValue, Scale, Tag, Tone, Tree,
+    Trigger, Variant,
 };
 use hl_gui_gtk::{Failure, Surface};
 
@@ -121,6 +122,7 @@ fn form_control_labels_name_their_choice_control() {
     let choice = session.producer.create(Tag::Switch);
     session.producer.append(NodeId::ROOT, labelled);
     session.producer.append(labelled, choice);
+    session.producer.on(choice, Trigger::Toggle, EventId::new("toggle"));
     session
         .producer
         .set(labelled, Prop::Label, PropValue::text("Allow container reads"));
@@ -137,6 +139,35 @@ fn form_control_labels_name_their_choice_control() {
         .find(|candidate| candidate.has_css_class("hl-field"))
         .expect("labelled choice control");
     assert_eq!(caption.mnemonic_widget().as_ref(), Some(choice));
+    assert_eq!(
+        choice.tooltip_text(),
+        None,
+        "visible caption is the sole accessible name"
+    );
+
+    let row = session.tagged(Tag::FormControlLabel).expect("label row");
+    let gesture = row
+        .observe_controllers()
+        .into_iter()
+        .flatten()
+        .find_map(|controller| controller.downcast::<gtk::GestureClick>().ok())
+        .expect("the full label row is clickable");
+    let choice = choice.clone().downcast::<gtk::Switch>().expect("native switch");
+    let keyboard = choice
+        .observe_controllers()
+        .into_iter()
+        .flatten()
+        .find_map(|controller| controller.downcast::<gtk::EventControllerKey>().ok())
+        .expect("Switch owns keyboard activation");
+    choice.set_sensitive(false);
+    let before = choice.is_active();
+    gesture.emit_by_name::<()>("released", &[&1_i32, &100.0_f64, &5.0_f64]);
+    keyboard.emit_by_name::<bool>(
+        "key-pressed",
+        &[&gtk::gdk::Key::Return, &36_u32, &gtk::gdk::ModifierType::empty()],
+    );
+    assert_eq!(choice.is_active(), before, "disabled caption cannot toggle its Switch");
+    assert!(session.canvas.reports().drain().is_empty(), "disabled Switch is silent");
 }
 
 fn every_composite_field_caption_names_its_editable_widget() {
