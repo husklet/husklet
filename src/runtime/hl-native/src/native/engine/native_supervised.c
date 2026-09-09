@@ -1,6 +1,6 @@
 static int hl_native_supervised_selected(const hl_options *options) {
     const char *value = hl_options_get(options, "HL_NATIVE_SUPERVISED");
-    return value != NULL && value[0] != 0 && value[0] != '0';
+    return value != NULL && value[0] != 0 && strcmp(value, "0") != 0 && strcmp(value, "off") != 0;
 }
 
 #if defined(__linux__) && (defined(__x86_64__) || defined(__aarch64__))

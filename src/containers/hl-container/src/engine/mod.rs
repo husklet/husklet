@@ -436,7 +436,7 @@ mod tests {
         launch.execution = crate::Execution::translated(true);
         let spec = Spec::try_from(&launch).unwrap();
         assert_eq!(spec.plan.options.get("HL_TRANSLIT"), Some("1"));
-        assert_eq!(spec.plan.options.get("HL_NATIVE_SUPERVISED"), Some("off"));
+        assert_eq!(spec.plan.options.get("HL_NATIVE_SUPERVISED"), Some("0"));
         assert_eq!(spec.plan.options.get("HL_C_DIAGNOSTICS"), Some("1"));
     }
 
@@ -501,7 +501,7 @@ mod tests {
                     crate::Execution::Native { .. } => Some("1"),
                     crate::Execution::Interpreted
                     | crate::Execution::Translit
-                    | crate::Execution::Translated { .. } => Some("off"),
+                    | crate::Execution::Translated { .. } => Some("0"),
                 }
             );
         }

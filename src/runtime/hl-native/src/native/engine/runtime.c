@@ -429,7 +429,7 @@ static void hl_engine_checkpoint_arena_stop(hl_engine *engine) {
     (void)engine;
 #else
     const char *native = hl_options_get(&engine->options, "HL_NATIVE_SUPERVISED");
-    if (native != NULL && native[0] != '\0' && strcmp(native, "0") != 0) {
+    if (native != NULL && native[0] != '\0' && strcmp(native, "0") != 0 && strcmp(native, "off") != 0) {
         /* Native supervision returns only after namespace PID1 drained every descendant. Retain the
          * control socket authority for the next run, but require that run's fresh control thread to
          * publish its readiness byte before any checkpoint command can be sent. */
@@ -1211,7 +1211,7 @@ static hl_status hl_engine_install_native_fd_bindings(hl_engine *engine, const h
 static int hl_engine_native_supervised_selected(const hl_options *options) {
 #if defined(__linux__) && (defined(__x86_64__) || defined(__aarch64__))
     const char *value = hl_options_get(options, "HL_NATIVE_SUPERVISED");
-    return value != NULL && value[0] != 0 && value[0] != '0';
+    return value != NULL && value[0] != 0 && strcmp(value, "0") != 0 && strcmp(value, "off") != 0;
 #else
     (void)options;
     return 0;
@@ -1444,8 +1444,9 @@ hl_status hl_engine_run(hl_engine *engine, int argc, const char *const argv[], h
         const char *native = hl_options_get(&engine->options, "HL_NATIVE_SUPERVISED");
         /* A native run is synchronous through result publication and complete PID1 descendant drain.
            Only then may the immutable engine authority serve another fresh namespace launch. */
-        engine->state = native != NULL && native[0] != '\0' && strcmp(native, "0") != 0 ? HL_ENGINE_CREATED
-                                                                                         : HL_ENGINE_FINISHED;
+        engine->state = native != NULL && native[0] != '\0' && strcmp(native, "0") != 0 && strcmp(native, "off") != 0
+                            ? HL_ENGINE_CREATED
+                            : HL_ENGINE_FINISHED;
     }
     hl_engine_unlock(engine);
 #if defined(HL_NATIVE_TEST_HOOKS)
@@ -1579,6 +1580,16 @@ HL_API int hl_c_backend_engine_request_state_test(uint32_t scenario) {
         .terminate = hl_engine_finish_test_terminate,
     };
     atomic_flag_clear_explicit(&engine.lock, memory_order_release);
+    if (scenario == 2) {
+        const char *names[] = {"HL_NATIVE_SUPERVISED"};
+        const char *values[] = {"off"};
+        hl_options options;
+        int selected;
+        if (hl_options_init_records(&options, 1, names, values) != 0) return -1;
+        selected = hl_engine_native_supervised_selected(&options);
+        hl_options_destroy(&options);
+        return selected;
+    }
     if (scenario == 0) {
         engine.state = HL_ENGINE_DESTROYING;
     } else if (scenario == 1) {

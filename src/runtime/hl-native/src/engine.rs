@@ -2152,6 +2152,15 @@ right: .skip 134217728
         assert_eq!(unsafe { (api.engine_request_state_test)(1) }, 0);
     }
 
+    #[cfg(feature = "native-test-hooks")]
+    #[test]
+    fn rust_and_native_runtime_agree_that_off_disables_supervision() {
+        let _serial = engine_test_lock();
+        let api = crate::loader::tests().unwrap();
+        // SAFETY: scenario two owns its temporary native options and retains no pointer.
+        assert_eq!(unsafe { (api.engine_request_state_test)(2) }, 0);
+    }
+
     fn create_engine_with_options(
         isa: u32,
         option_names: &[*const std::ffi::c_char],

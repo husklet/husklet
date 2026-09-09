@@ -35,7 +35,7 @@ impl TryFrom<&ProcessConfig> for Spec {
         match launch.execution {
             crate::Execution::Native { .. } => Self::set(&mut options, "HL_NATIVE_SUPERVISED", b"1")?,
             crate::Execution::Interpreted | crate::Execution::Translit | crate::Execution::Translated { .. } => {
-                Self::set(&mut options, "HL_NATIVE_SUPERVISED", b"off")?;
+                Self::set(&mut options, "HL_NATIVE_SUPERVISED", b"0")?;
             }
             crate::Execution::Auto => {}
         }
