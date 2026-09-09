@@ -807,17 +807,19 @@ export function workspace(session, { signal } = {}) {
                     if (page.gap)
                         throw new ExecutionOutputGapError(executionId, cursor, page.next);
                     const sequences = page.entries.map((entry) => entry.sequence);
-                    const ordered = sequences.every((sequence, index) => sequence > cursor && (index === 0 || sequence > sequences[index - 1]));
+                    const contiguous = sequences.every((sequence, index) => sequence === cursor + index + 1);
                     const last = sequences.at(-1);
                     let invalid;
                     if (page.next < cursor)
                         invalid = 'cursor moved backwards';
+                    else if (page.entries.length > limit)
+                        invalid = 'page exceeded its requested entry limit';
                     else if (page.eof && page.more)
                         invalid = 'page is both final and continued';
                     else if (sequences.length === 0 && page.next !== cursor)
                         invalid = 'empty page advanced its cursor';
-                    else if (sequences.length > 0 && (!ordered || last !== page.next))
-                        invalid = 'entry sequence does not match its continuation cursor';
+                    else if (sequences.length > 0 && (!contiguous || last !== page.next))
+                        invalid = 'entry sequence is not contiguous with its continuation cursor';
                     else if (page.more && page.next === cursor)
                         invalid = 'continued page did not advance its cursor';
                     if (invalid)

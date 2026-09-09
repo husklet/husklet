@@ -1654,6 +1654,92 @@ test('real Unix output pages apply backpressure, cancel locally, and fail closed
   }
 });
 
+test('real Unix output iteration rejects oversized pages and unflagged sequence gaps', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-output-integrity-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const executionId = 'd'.repeat(32);
+  const connections = new Set();
+  let outputCalls = 0;
+  const entry = (sequence) => ({
+    sequence,
+    timestamp_ms: sequence,
+    stream: 'stdout',
+    bytes: [sequence],
+  });
+  const server = net.createServer((socket) => {
+    connections.add(socket);
+    socket.on('close', () => connections.delete(socket));
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.kind !== KIND.request || frame.channel !== 2) continue;
+        if (frame.payload.call === 'execution_output') {
+          outputCalls += 1;
+          assert.deepEqual(frame.payload.with, { id: executionId, after: 0, limit: 1 });
+          const entries = outputCalls === 1 ? [entry(1), entry(2)] : [entry(2)];
+          socket.write(
+            encode({
+              channel: 2,
+              kind: KIND.response,
+              payload: {
+                reply: 'execution_output',
+                with: {
+                  entries,
+                  next: entries.at(-1).sequence,
+                  more: false,
+                  eof: false,
+                  gap: false,
+                },
+              },
+            }),
+          );
+        } else if (frame.payload.call === 'workspace_info') {
+          socket.write(
+            encode({
+              channel: 2,
+              kind: KIND.response,
+              payload: {
+                reply: 'workspace',
+                with: { name: 'demo', image: 'alpine', architecture: 'amd64' },
+              },
+            }),
+          );
+        }
+      }
+    });
+    socket.write(
+      encode({
+        channel: CONTROL,
+        kind: KIND.open,
+        payload: {
+          protocol: 1,
+          peer: 'output-integrity',
+          granted: ['containers:read', 'workspaces:read'],
+        },
+      }),
+    );
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    const host = workspace(session);
+    await assert.rejects(
+      host.containers.executionOutputPages(executionId, { limit: 1 }).next(),
+      /exceeded its requested entry limit/,
+    );
+    await assert.rejects(
+      host.containers.executionOutputPages(executionId, { limit: 1 }).next(),
+      /entry sequence is not contiguous/,
+    );
+    assert.equal((await host.info()).name, 'demo', 'semantic rejection leaves the session usable');
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('real Unix credential execution rejects oversized and colliding bindings before framing', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-debug-credentials-'));
   const socketPath = path.join(directory, 'host.sock');
