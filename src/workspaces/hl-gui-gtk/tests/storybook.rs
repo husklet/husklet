@@ -234,12 +234,45 @@ mod unix {
             }
         }
         capture_story(&realized_window, story);
+        let responsive = matches!(story, "Button" | "IconButton").then(|| {
+            let paned = descendants::<gtk::Paned>(&root)
+                .into_iter()
+                .next()
+                .expect("component documentation owns a responsive shell");
+            let body = paned.end_child().expect("wide responsive shell owns the document body");
+            (paned, body)
+        });
         for width in [300, 1_200] {
             root.measure(gtk::Orientation::Horizontal, -1);
             root.measure(gtk::Orientation::Vertical, width);
             root.allocate(width, 1_600, -1, None);
             assert_eq!(root.width(), width, "{story} did not accept the {width}px allocation");
             assert_contained(&root, story);
+            if let Some((paned, body)) = &responsive {
+                let layout = paned.parent().expect("responsive paned remains in its layout");
+                let compact = layout.first_child().expect("responsive shell keeps compact navigation");
+                if width == 300 {
+                    assert!(!paned.is_visible(), "{story} left its desktop sidebar visible at 300px");
+                    assert!(compact.is_visible(), "{story} hid its compact selector at 300px");
+                    assert!(
+                        layout.last_child().is_some_and(|child| child.eq(body)),
+                        "{story} did not give the shared document the compact width"
+                    );
+                } else {
+                    assert!(
+                        paned.is_visible(),
+                        "{story} did not restore its desktop sidebar at 1200px"
+                    );
+                    assert!(
+                        !compact.is_visible(),
+                        "{story} kept duplicate compact navigation at 1200px"
+                    );
+                    assert!(
+                        paned.end_child().is_some_and(|child| child.eq(body)),
+                        "{story} rebuilt or lost its document while changing responsive branches"
+                    );
+                }
+            }
             if story == "DataTable" && width == 1_200 {
                 let panes = descendants::<gtk::ScrolledWindow>(&root)
                     .into_iter()

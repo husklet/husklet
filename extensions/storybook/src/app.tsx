@@ -219,7 +219,7 @@ export function Sidebar({
         <Entry
           key={'search'}
           value={search}
-          placeholder={'Search components and patterns'}
+          placeholder={'Search components'}
           onChange={(event) => setSearch(String(event.value ?? '').slice(0, 80))}
         />
         {query.length > 0

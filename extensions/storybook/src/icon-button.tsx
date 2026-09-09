@@ -23,7 +23,7 @@ export function IconButtonWorkbench() {
   const [tone, setTone] = React.useState<Tone>('accent');
   const [enabled, setEnabled] = React.useState(true);
   return (
-    <Column width={{ maximum: { chars: 106 } }} pad={4} gap={4}>
+    <Column width="fill" pad={4} gap={4}>
       <Heading label="Icon button" scale="display" />
       <Text
         label="Icon buttons expose a familiar action where space is constrained. Every icon still needs a concise accessible label and tooltip."
@@ -125,25 +125,26 @@ export function IconButtonWorkbench() {
       </Block>
       <Expander label="Playground" expanded={false} width="fill">
         <Column gap={2} pad={2}>
-          <Row gap={2} wrap>
+          <Row gap={3} wrap align="end">
+            <Text label="Variant" color="text-dim" />
             <Select
               value={variant}
-              tooltip="Variant"
               choices={choices(['filled', 'outline', 'ghost', 'plain'])}
               onChange={(report) => setVariant(report.value as Variant)}
             />
+            <Text label="Size" color="text-dim" />
             <Select
               value={size}
-              tooltip="Size"
               choices={choices(['small', 'medium', 'large'])}
               onChange={(report) => setSize(report.value as Size)}
             />
+            <Text label="Tone" color="text-dim" />
             <Select
               value={tone}
-              tooltip="Tone"
               choices={choices(['neutral', 'accent', 'positive', 'warning', 'danger'])}
               onChange={(report) => setTone(report.value as Tone)}
             />
+            <Text label="Enabled" color="text-dim" />
             <Switch checked={enabled} onToggle={(report) => setEnabled(Boolean(report.value))} />
           </Row>
           <IconButton
@@ -161,7 +162,7 @@ export function IconButtonWorkbench() {
       <Block title="API">
         <Code
           value={
-            '<IconButton icon="view-refresh-symbolic" label="Refresh" tooltip="Refresh" size="small" onInvoke={refresh} />'
+            '<IconButton\n  icon="view-refresh-symbolic"\n  label="Refresh"\n  tooltip="Refresh"\n  size="small"\n  onInvoke={refresh}\n/>'
           }
           wrap
         />

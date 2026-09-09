@@ -80,6 +80,7 @@ export function ButtonWorkbench() {
               <Button
                 key={emphasis}
                 label="Action"
+                width={{ chars: 10 }}
                 size={controlSize}
                 variant={emphasis}
                 tone="accent"
@@ -135,25 +136,26 @@ export function ButtonWorkbench() {
             placeholder="Button label"
             onChange={(report) => setLabel(String(report.value ?? '').slice(0, 48))}
           />
-          <Row gap={2} wrap>
+          <Row gap={3} wrap align="end">
+            <Text label="Variant" color="text-dim" />
             <Select
               value={variant}
-              tooltip="Variant"
               choices={choices(['filled', 'outline', 'ghost', 'plain'])}
               onChange={(report) => setVariant(report.value as Variant)}
             />
+            <Text label="Size" color="text-dim" />
             <Select
               value={size}
-              tooltip="Size"
               choices={choices(['small', 'medium', 'large'])}
               onChange={(report) => setSize(report.value as Size)}
             />
+            <Text label="Tone" color="text-dim" />
             <Select
               value={tone}
-              tooltip="Tone"
               choices={choices(['neutral', 'accent', 'danger'])}
               onChange={(report) => setTone(report.value as Tone)}
             />
+            <Text label="Enabled" color="text-dim" />
             <Switch checked={enabled} onToggle={(report) => setEnabled(Boolean(report.value))} />
           </Row>
         </Column>
@@ -175,7 +177,7 @@ export function ButtonWorkbench() {
 
 function ScrollDocument({ children }: { children: React.ReactNode }) {
   return (
-    <Column width={{ maximum: { chars: 106 } }} pad={4} gap={4}>
+    <Column width="fill" pad={4} gap={4}>
       {children}
     </Column>
   );
