@@ -712,8 +712,13 @@ mod unix {
                 }
             },
         );
+        drain_extension_renders(wire, tree, surface);
         let success_root = surface.widget().clone().upcast::<gtk::Widget>();
         assert!(!has_label(&success_root, "Installed · update available"));
+        assert!(
+            find_tooltip_button(&success_root, "Review access requested by Developer Tool 02").is_sensitive(),
+            "success restores catalogue actions"
+        );
         capture_update_surface(window, &success_root, "update-success");
     }
 
@@ -773,6 +778,30 @@ mod unix {
             has_label(surface.widget().upcast_ref(), wanted),
             "extension update never rendered {wanted:?}"
         );
+    }
+
+    fn drain_extension_renders(wire: &mut Wire<UnixStream>, tree: &mut Tree, surface: &mut Surface) {
+        let deadline = Instant::now() + DEADLINE;
+        let mut quiet = 0;
+        while Instant::now() < deadline && quiet < 2 {
+            match receive_until(wire, (Instant::now() + Duration::from_millis(80)).min(deadline)) {
+                Ok(frame) if frame.kind == hl_extension::Kind::Credit => {}
+                Ok(frame) => {
+                    quiet = 0;
+                    match codec::read_request(&frame).expect("settled extension request decodes") {
+                        Request::InterfaceRender { frame } | Request::InterfaceRenderAt { frame, .. } => {
+                            tree.apply(&frame, surface).expect("settled extension frame applies");
+                            wire.send(&codec::reply(&Reply::Done).expect("render reply encodes"))
+                                .expect("render reply sends");
+                        }
+                        other => panic!("unexpected request while settling extension success: {other:?}"),
+                    }
+                }
+                Err(hl_extension::Transit::Pending) => quiet += 1,
+                Err(error) => panic!("extension success settle failed: {error:?}"),
+            }
+            settle_toolkit();
+        }
     }
 
     fn capture_update_surface(window: &gtk::Window, root: &gtk::Widget, state: &str) {
