@@ -67,6 +67,12 @@ export function ButtonWorkbench() {
         </Row>
       </SectionBlock>
       <SectionBlock title="Sizes">
+        <Row gap={2}>
+          <Text label="Size" width={{ chars: 8 }} color="text-dim" />
+          {(['filled', 'outline', 'ghost', 'plain'] as const).map((emphasis) => (
+            <Text key={emphasis} label={title(emphasis)} width={{ chars: 10 }} color="text-dim" />
+          ))}
+        </Row>
         {(['small', 'medium', 'large'] as const).map((controlSize) => (
           <Row key={controlSize} gap={2} wrap>
             <Text label={title(controlSize)} width={{ chars: 8 }} color="text-dim" />

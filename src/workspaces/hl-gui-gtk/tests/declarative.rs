@@ -166,6 +166,7 @@ fn a_described_interface_reaches_the_toolkit_and_only_its_changes_do() {
     a_keyed_reorder_moves_widgets_rather_than_rebuilding_them();
     a_described_handler_is_wired_to_the_real_signal();
     an_icon_button_keeps_its_icon_when_accessibly_labelled();
+    a_button_keeps_its_label_beside_its_icon();
     a_rebound_handler_reports_the_new_identity();
     a_select_follows_its_stable_value();
     button_sizes_allocate_their_semantic_metrics();
@@ -228,6 +229,33 @@ fn an_icon_button_keeps_its_icon_when_accessibly_labelled() {
     assert_eq!(button.icon_name().as_deref(), Some("edit-clear-symbolic"));
     assert_eq!(button.label(), None, "the accessible label must not replace the icon");
     assert_eq!(button.tooltip_text().as_deref(), Some("Reset foreground"));
+}
+
+fn a_button_keeps_its_label_beside_its_icon() {
+    let mut session = Session::new();
+    session.render(
+        &Element::button("Add item", EventId::new("add")).prop(Prop::Icon, PropValue::text("list-add-symbolic")),
+    );
+
+    let button = session
+        .tagged(Tag::Button)
+        .expect("the button is reachable")
+        .downcast::<gtk::Button>()
+        .expect("a button is a button");
+    let children = offspring(button.upcast_ref());
+    let content = children.first().expect("the button has composed content");
+    let content = offspring(content);
+    let icon = content
+        .iter()
+        .find_map(|child| child.clone().downcast::<gtk::Image>().ok())
+        .expect("the icon slot remains present");
+    let label = content
+        .iter()
+        .find_map(|child| child.clone().downcast::<gtk::Label>().ok())
+        .expect("the caption slot remains present");
+    assert_eq!(icon.icon_name().as_deref(), Some("list-add-symbolic"));
+    assert!(icon.is_visible());
+    assert_eq!(label.text(), "Add item");
 }
 
 fn a_select_follows_its_stable_value() {

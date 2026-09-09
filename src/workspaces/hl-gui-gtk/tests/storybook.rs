@@ -10,9 +10,9 @@ mod unix {
 
     use gtk::prelude::*;
     use hl_extension::{
-        codec, Capability, ChannelId, ExtensionName, Frame, Grant, Hello, Kind, Reply, Request, Welcome, Wire, PROTOCOL,
+        Capability, ChannelId, ExtensionName, Frame, Grant, Hello, Kind, PROTOCOL, Reply, Request, Welcome, Wire, codec,
     };
-    use hl_gui::{Renderer as _, SourceMutation, Theme, Tree, LOG_VIEW_CHARACTER_LIMIT};
+    use hl_gui::{LOG_VIEW_CHARACTER_LIMIT, Renderer as _, SourceMutation, Theme, Tree};
     use hl_gui_gtk::Surface;
 
     const STORIES: &[&str] = &[
@@ -127,14 +127,10 @@ mod unix {
         let mut ready = false;
         let startup_deadline = Instant::now() + SOCKET_DEADLINE;
         for _ in 0..8 {
-            let carried = receive_until(&mut wire, startup_deadline).unwrap_or_else(|error| {
-                panic!(
-                    "{story} sends a bounded call: {error:?}; stderr: {}",
-                    child.stop().1
-                )
-            });
-            let request = codec::read_request(&carried)
-            .expect("Storybook request decodes through the production codec");
+            let carried = receive_until(&mut wire, startup_deadline)
+                .unwrap_or_else(|error| panic!("{story} sends a bounded call: {error:?}; stderr: {}", child.stop().1));
+            let request =
+                codec::read_request(&carried).expect("Storybook request decodes through the production codec");
             let reply = match request {
                 Request::InterfaceRender { frame } => {
                     assert!(
@@ -635,7 +631,8 @@ mod unix {
     fn emit_representative(story: &str, root: &gtk::Widget, surface: &Surface, tree: &Tree) -> hl_gui::Event {
         match story {
             "Button" => {
-                find::<gtk::Button>(root, |button| button.label().as_deref() == Some("Run task")).emit_clicked();
+                find::<gtk::Button>(root, |button| button_caption(button).as_deref() == Some("Run task"))
+                    .emit_clicked();
             }
             "IconButton" => {
                 find::<gtk::Button>(root, |button| button.tooltip_text().as_deref() == Some("Refresh")).emit_clicked();
@@ -663,14 +660,18 @@ mod unix {
                 entry.set_text("storybook");
             }
             "Drag and keyboard reorder" => {
-                find::<gtk::Button>(root, |button| button.label().as_deref() == Some("↓ Build")).emit_clicked();
+                find::<gtk::Button>(root, |button| button_caption(button).as_deref() == Some("↓ Build")).emit_clicked();
             }
             "Workspace layout control" => {
-                find::<gtk::Button>(root, |button| button.label().as_deref() == Some("Open pane chooser"))
-                    .emit_clicked();
+                find::<gtk::Button>(root, |button| {
+                    button_caption(button).as_deref() == Some("Open pane chooser")
+                })
+                .emit_clicked();
             }
             "Extension acquisition" => {
-                let cancel = find::<gtk::Button>(root, |button| button.label().as_deref() == Some("Cancel download"));
+                let cancel = find::<gtk::Button>(root, |button| {
+                    button_caption(button).as_deref() == Some("Cancel download")
+                });
                 assert_eq!(
                     cancel.accessible_role(),
                     gtk::AccessibleRole::Button,
@@ -685,15 +686,20 @@ mod unix {
                 find::<gtk::Expander>(root, |_| true).set_expanded(false);
             }
             "Bounded streaming log" => {
-                find::<gtk::Button>(root, |button| button.label().as_deref() == Some("Append batch")).emit_clicked();
+                find::<gtk::Button>(root, |button| button_caption(button).as_deref() == Some("Append batch"))
+                    .emit_clicked();
             }
             "Virtual event timeline" => {
-                find::<gtk::Button>(root, |button| button.label().as_deref() == Some("Acknowledge newest"))
-                    .emit_clicked();
+                find::<gtk::Button>(root, |button| {
+                    button_caption(button).as_deref() == Some("Acknowledge newest")
+                })
+                .emit_clicked();
             }
             "Bounded key/value inspector" => {
-                find::<gtk::Button>(root, |button| button.label().as_deref() == Some("Refresh metadata"))
-                    .emit_clicked();
+                find::<gtk::Button>(root, |button| {
+                    button_caption(button).as_deref() == Some("Refresh metadata")
+                })
+                .emit_clicked();
             }
             _ => unreachable!(),
         }
@@ -759,6 +765,16 @@ mod unix {
             };
         }
         event
+    }
+
+    fn button_caption(button: &gtk::Button) -> Option<String> {
+        if let Some(label) = button.label() {
+            return Some(label.to_string());
+        }
+        descendants::<gtk::Label>(button.upcast_ref())
+            .into_iter()
+            .find(|label| label.has_css_class("hl-caption"))
+            .map(|label| label.text().to_string())
     }
 
     fn find<T: IsA<gtk::Widget> + gtk::glib::object::Cast + Clone + 'static>(

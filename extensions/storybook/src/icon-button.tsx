@@ -1,8 +1,27 @@
 import React from 'react';
-import { Code, Column, Heading, IconButton, Row, Section, Text } from '@husklet/react';
+import {
+  Code,
+  Column,
+  Expander,
+  Heading,
+  IconButton,
+  Row,
+  Section,
+  Select,
+  Switch,
+  Text,
+} from '@husklet/react';
+
+type Size = 'small' | 'medium' | 'large';
+type Variant = 'filled' | 'outline' | 'ghost' | 'plain';
+type Tone = 'neutral' | 'accent' | 'positive' | 'warning' | 'danger';
 
 export function IconButtonWorkbench() {
   const [event, setEvent] = React.useState('No interaction yet.');
+  const [size, setSize] = React.useState<Size>('medium');
+  const [variant, setVariant] = React.useState<Variant>('outline');
+  const [tone, setTone] = React.useState<Tone>('accent');
+  const [enabled, setEnabled] = React.useState(true);
   return (
     <Column width={{ maximum: { chars: 106 } }} pad={4} gap={4}>
       <Heading label="Icon button" scale="display" />
@@ -44,33 +63,58 @@ export function IconButtonWorkbench() {
       <Block title="Variants">
         <Row gap={2} wrap>
           {(['filled', 'outline', 'ghost', 'plain'] as const).map((variant) => (
-            <IconButton
-              key={variant}
-              icon="edit-copy-symbolic"
-              label={`Copy, ${variant}`}
-              tooltip={`Copy · ${variant}`}
-              variant={variant}
-              tone="accent"
-            />
+            <Column key={variant} gap={1} align="center">
+              <IconButton
+                icon="edit-copy-symbolic"
+                label={`Copy, ${variant}`}
+                tooltip={`Copy · ${variant}`}
+                variant={variant}
+                tone="accent"
+                align="center"
+              />
+              <Text label={title(variant)} color="text-dim" />
+            </Column>
           ))}
         </Row>
       </Block>
-      <Block title="Tones and states">
+      <Block title="Tones">
         <Row gap={2} wrap>
-          <IconButton icon="emblem-ok-symbolic" label="Approve" tooltip="Approve" tone="positive" />
-          <IconButton
-            icon="dialog-warning-symbolic"
-            label="Review warning"
-            tooltip="Review warning"
-            tone="warning"
-          />
-          <IconButton icon="user-trash-symbolic" label="Delete" tooltip="Delete" tone="danger" />
-          <IconButton
-            icon="view-refresh-symbolic"
-            label="Refresh unavailable"
-            tooltip="Refresh unavailable"
-            enabled={false}
-          />
+          {(['neutral', 'accent', 'positive', 'warning', 'danger'] as const).map((value) => (
+            <Column key={value} gap={1} align="center">
+              <IconButton
+                icon="edit-copy-symbolic"
+                label={`Copy, ${value}`}
+                tooltip={title(value)}
+                tone={value}
+                align="center"
+              />
+              <Text label={title(value)} color="text-dim" />
+            </Column>
+          ))}
+        </Row>
+      </Block>
+      <Block title="States">
+        <Row gap={4} wrap>
+          <Column gap={1} align="center">
+            <IconButton
+              icon="view-refresh-symbolic"
+              label="Refresh enabled"
+              tooltip="Refresh enabled"
+              tone="accent"
+              align="center"
+            />
+            <Text label="Enabled" color="text-dim" />
+          </Column>
+          <Column gap={1} align="center">
+            <IconButton
+              icon="view-refresh-symbolic"
+              label="Refresh unavailable"
+              tooltip="Refresh unavailable"
+              enabled={false}
+              align="center"
+            />
+            <Text label="Disabled" color="text-dim" />
+          </Column>
         </Row>
       </Block>
       <Block title="Accessibility">
@@ -79,6 +123,41 @@ export function IconButtonWorkbench() {
           wrap
         />
       </Block>
+      <Expander label="Playground" expanded={false} width="fill">
+        <Column gap={2} pad={2}>
+          <Row gap={2} wrap>
+            <Select
+              value={variant}
+              tooltip="Variant"
+              choices={choices(['filled', 'outline', 'ghost', 'plain'])}
+              onChange={(report) => setVariant(report.value as Variant)}
+            />
+            <Select
+              value={size}
+              tooltip="Size"
+              choices={choices(['small', 'medium', 'large'])}
+              onChange={(report) => setSize(report.value as Size)}
+            />
+            <Select
+              value={tone}
+              tooltip="Tone"
+              choices={choices(['neutral', 'accent', 'positive', 'warning', 'danger'])}
+              onChange={(report) => setTone(report.value as Tone)}
+            />
+            <Switch checked={enabled} onToggle={(report) => setEnabled(Boolean(report.value))} />
+          </Row>
+          <IconButton
+            icon="view-refresh-symbolic"
+            label="Preview refresh"
+            tooltip="Preview refresh"
+            size={size}
+            variant={variant}
+            tone={tone}
+            enabled={enabled}
+            align="center"
+          />
+        </Column>
+      </Expander>
       <Block title="API">
         <Code
           value={
@@ -102,4 +181,8 @@ function Block({ title: label, children }: { title: string; children: React.Reac
 
 function title(value: string) {
   return `${value[0].toUpperCase()}${value.slice(1)}`;
+}
+
+function choices(values: readonly string[]) {
+  return values.map((value) => ({ value, label: title(value) }));
 }
