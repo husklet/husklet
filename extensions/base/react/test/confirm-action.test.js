@@ -56,19 +56,21 @@ test('confirmation is separate and only its final action is destructive', () => 
   const stage = host();
   stage.render(h(ConfirmAction, {
     authorityKey: 'volume:cache:g7', label: 'Remove volume', confirmLabel: 'Confirm removal',
-    question: 'Remove cache generation 7?', onConfirm: (key) => calls.push(key),
+    question: 'Remove cache generation 7?', size: 'small', onConfirm: (key) => calls.push(key),
   }));
   const initial = stage.since(0);
   const reveal = labelled(initial, 'Remove volume');
   assert.equal(reveal.tag, 'Button');
   assert.equal(prop(initial, reveal.id, 'Destructive'), undefined);
   assert.deepEqual(prop(initial, reveal.id, 'Variant'), { Variant: 'Outline' });
+  assert.deepEqual(prop(initial, reveal.id, 'Size'), { ControlSize: 'Small' });
 
   const before = stage.frames.length;
   invoke(stage, initial, 'Remove volume');
   const confirmation = stage.since(before);
   const final = labelled(confirmation, 'Confirm removal');
   assert.deepEqual(prop(confirmation, final.id, 'Destructive'), { Flag: true });
+  assert.deepEqual(prop(confirmation, final.id, 'Size'), { ControlSize: 'Small' });
   assert.ok(labelled(confirmation, 'Remove cache generation 7?'));
   const created = confirmation.filter((patch) => patch.Create).map((patch) => patch.Create.tag);
   assert.ok(created.length <= 8, `confirmation materialized ${created.length} nodes`);

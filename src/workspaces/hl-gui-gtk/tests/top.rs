@@ -172,7 +172,7 @@ mod unix {
         let root = surface.widget().clone().upcast::<gtk::Widget>();
         let heading = match name {
             "workspace" => "Workspace",
-            "settings" => "Workspace",
+            "settings" => "Workspace settings",
             "extensions" => "Extensions",
             "networks" => "Networks",
             _ => unreachable!(),
@@ -186,6 +186,14 @@ mod unix {
                 ),
                 "the error fixture did not reach its actionable recovery state"
             );
+        }
+        if fixture == "error" && name == "settings" {
+            assert!(
+                has_label(&root, "Workspace settings could not be loaded from the extension host."),
+                "the settings error fixture exposed an editable form instead of its load failure"
+            );
+            assert!(has_label(&root, "Retry"), "the settings load failure had no recovery action");
+            assert!(!has_label(&root, "Up to date"), "untrusted settings were presented as current");
         }
         let window = gtk::Window::new();
         window.set_child(Some(&root));

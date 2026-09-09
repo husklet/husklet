@@ -759,6 +759,64 @@ test('workspace save rotates environment through the explicit revision-bound pat
   );
 });
 
+test('workspace save failure retains edits and offers an explicit retry', async () => {
+  const configuration = {
+    generation: 'a'.repeat(32),
+    configuration_revision: 'b'.repeat(32),
+    name: 'daily',
+    architecture: 'amd64',
+    image: 'alpine:3.20',
+    storage: null,
+    shell: '/bin/sh',
+    cpus: 2,
+    memory_mb: 1024,
+    environment: [],
+    mounts: [],
+    docker_socket: false,
+    scrollback: 10000,
+    vpn: null,
+    execution_lifetime: 'live',
+    terminal: {
+      font_family: null,
+      font_size: null,
+      foreground: null,
+      background: null,
+      cursor_shape: null,
+      cursor_blink: false,
+    },
+  };
+  let attempts = 0;
+  const managed = {
+    ...api,
+    info: async () => ({ name: 'daily', architecture: 'amd64', image: 'alpine:3.20' }),
+    inspect: async () => configuration,
+    update: async () => {
+      attempts += 1;
+      throw new Error('host rejected settings write');
+    },
+  };
+  const stage = host();
+  stage.render(h(Workspace, { api: managed }));
+  await settled();
+  await settled();
+  change(stage, 'Automatic when empty', '/bin/zsh');
+  invoke(stage, 'Save changes');
+  await settled();
+  await settled();
+  assert.ok(labelled(stage, 'Unsaved changes'));
+  assert.ok(
+    labelled(
+      stage,
+      'No successful save was confirmed. Your edits are retained: host rejected settings write',
+    ),
+  );
+  assert.ok(labelled(stage, 'Retry save'));
+  invoke(stage, 'Retry save');
+  await settled();
+  await settled();
+  assert.equal(attempts, 2);
+});
+
 test('workspace patch conflict reloads authority and keeps the partial-save warning visible', async () => {
   const generation = 'a'.repeat(32);
   const revision = 'b'.repeat(32);
@@ -2216,10 +2274,9 @@ test('overview refreshes every authoritative inventory in one action', async () 
     }),
   );
   assert.ok(labelled(stage, 'Refresh workspace inventory'));
-  assert.deepEqual(
-    taggedProperty(stage, 'Refresh workspace inventory', 'IconButton', 'Icon'),
-    { Text: 'view-refresh-symbolic' },
-  );
+  assert.deepEqual(taggedProperty(stage, 'Refresh workspace inventory', 'IconButton', 'Icon'), {
+    Text: 'view-refresh-symbolic',
+  });
   invoke(stage, 'Refresh workspace inventory');
   await settled();
   assert.deepEqual(calls.sort(), [

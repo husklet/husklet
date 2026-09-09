@@ -149,7 +149,7 @@ export function Workspace({ api }: { api: WorkspaceApi }) {
         'Workspace settings saved. Reopen panes or restart the workspace for runtime changes.',
       );
     } catch (cause) {
-      setError(message(cause));
+      setError(`No successful save was confirmed. Your edits are retained: ${message(cause)}`);
     } finally {
       setSaving(false);
     }
@@ -229,7 +229,14 @@ export function Workspace({ api }: { api: WorkspaceApi }) {
           wrap
         />
         {invalid && <InlineMessage label={invalid} tone="danger" />}
-        {error && <RecoveryState operation="Saving workspace settings" error={error} />}
+        {error && (
+          <RecoveryState
+            operation="Saving workspace settings"
+            error={error}
+            retryLabel="Retry save"
+            onRetry={dirty && !invalid ? save : undefined}
+          />
+        )}
         {saved && <InlineMessage label={saved} tone="positive" />}
       </Container>
       <Scroll grow width="fill" height="fill">

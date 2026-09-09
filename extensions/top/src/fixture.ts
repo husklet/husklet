@@ -78,6 +78,11 @@ export function fixtureApi(api: WorkspaceApi, mode = 'populated'): WorkspaceApi 
   let catalogueAttempts = 0;
   return {
     ...api,
+    inspect: unavailable
+      ? async () => {
+          throw new Error('Workspace settings could not be loaded from the extension host.');
+        }
+      : api.inspect,
     subscribe: async () => {},
     unsubscribe: async () => {},
     watchExecutions: async () => async () => {},

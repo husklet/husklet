@@ -43,6 +43,7 @@ interface ConfirmActionProps extends Record<string, unknown> {
   enabled?: boolean;
   cancelLabel?: string;
   pendingLabel?: string;
+  size?: 'small' | 'medium' | 'large';
   onCancel?: (authorityKey: string) => void;
 }
 export function ConfirmAction({
@@ -54,6 +55,7 @@ export function ConfirmAction({
   enabled = true,
   cancelLabel = 'Cancel',
   pendingLabel = 'Working…',
+  size,
   onCancel,
   ...props
 }: ConfirmActionProps) {
@@ -101,6 +103,7 @@ export function ConfirmAction({
       ...props,
       label: bounded(label, LABEL_BYTE_LIMIT),
       enabled: Boolean(enabled),
+      size,
       tone: 'danger',
       variant: 'outline',
       onInvoke: open,
@@ -123,6 +126,7 @@ export function ConfirmAction({
           ? bounded(pendingLabel, LABEL_BYTE_LIMIT)
           : bounded(confirmLabel, LABEL_BYTE_LIMIT),
         enabled: !pending,
+        size,
         tone: 'danger',
         destructive: true,
         onInvoke: confirm,
@@ -130,6 +134,7 @@ export function ConfirmAction({
       React.createElement(Button, {
         label: bounded(cancelLabel, LABEL_BYTE_LIMIT),
         enabled: !pending,
+        size,
         onInvoke: cancel,
       }),
     ),

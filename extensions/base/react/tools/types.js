@@ -242,6 +242,7 @@ export interface ConfirmActionProps {
   enabled?: boolean;
   cancelLabel?: string;
   pendingLabel?: string;
+  size?: 'small' | 'medium' | 'large';
   onCancel?: (authorityKey: string) => void;
 }
 export const ConfirmAction: ComponentType<ConfirmActionProps>;
