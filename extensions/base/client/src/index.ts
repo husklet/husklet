@@ -2020,8 +2020,16 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
           values.some(
             (value, index) =>
               value.path !== exact[index].path ||
+              !value.identity ||
+              new TextEncoder().encode(value.identity).byteLength > 256 ||
+              (exact[index].observed !== null && value.identity !== exact[index].observed) ||
               value.offset !== exact[index].offset ||
-              value.contents.length > exact[index].limit,
+              value.contents.length > exact[index].limit ||
+              value.eof !==
+                (value.offset >= value.total ||
+                  value.contents.length >= value.total - value.offset) ||
+              value.truncated === value.eof ||
+              (!value.eof && value.contents.length === 0),
           )
         )
           throw new TypeError('host returned an inconsistent filesystem range batch');

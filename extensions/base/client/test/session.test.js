@@ -109,6 +109,19 @@ test('real Unix range batch preserves ordered paths and one bounded frame', asyn
       for (const frame of reader.take(chunk)) {
         if (frame.kind !== KIND.request) continue;
         calls.push(frame.payload);
+        if (frame.payload.call === 'filesystem_stat') {
+          socket.write(
+            encode({
+              channel: frame.channel,
+              kind: KIND.response,
+              payload: {
+                reply: 'entry',
+                with: { path: 'src/a.rs', directory: false, size: 1, identity: 'id:src/a.rs' },
+              },
+            }),
+          );
+          continue;
+        }
         const ranges = frame.payload.with.ranges.map((range) => ({
           path: range.path,
           identity: `id:${range.path}`,
@@ -160,6 +173,15 @@ test('real Unix range batch preserves ordered paths and one bounded frame', asyn
         ],
       },
     });
+    await assert.rejects(
+      workspace(session).files.readRanges([
+        { path: 'src/a.rs', limit: 1, observed: 'review-snapshot-v1' },
+      ]),
+      /inconsistent filesystem range batch/,
+    );
+    assert.equal(calls[1].with.ranges[0].observed, 'review-snapshot-v1');
+    assert.equal((await workspace(session).files.stat('src/a.rs')).identity, 'id:src/a.rs');
+    assert.equal(calls[2].call, 'filesystem_stat');
     await session.close();
   } finally {
     for (const connection of connections) connection.destroy();
