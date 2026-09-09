@@ -741,14 +741,14 @@ test('Git review resumes bounded inspection and applies one identity-observed fi
 
 test('Postgres GUI stays live and serves a scrolled database window before host shutdown', async () => {
   const id = 'c'.repeat(64);
-  const password = 'sentinel-password-never-in-replies';
+  const credentialKey = 'postgres.password';
   const executionId = 'e'.repeat(32);
   let outputCalls = 0;
   const run = await scenario(
     'postgres-inspector.ts',
     {
       container: id,
-      credentialPath: 'secrets/postgres.password',
+      credentialKey,
       query: 'select id,name from widgets',
     },
     (socket, frame) => {
@@ -820,9 +820,7 @@ test('Postgres GUI stays live and serves a scrolled database window before host 
             truncated: false,
           },
         });
-      else if (call === 'filesystem_read')
-        respond(socket, frame, { reply: 'contents', with: [...Buffer.from(`${password}\n`)] });
-      else if (call === 'container_exec')
+      else if (call === 'container_exec_credential')
         respond(socket, frame, { reply: 'identity', with: executionId });
       else if (call === 'execution_output') {
         outputCalls += 1;
@@ -900,7 +898,7 @@ test('Postgres GUI stays live and serves a scrolled database window before host 
     range: { start: 999999, count: 1 },
     rows: [{ key: 999999, cells: [{ Text: '1' }, { Text: 'alpha' }] }],
   });
-  const execs = run.calls.filter(({ call }) => call === 'container_exec');
+  const execs = run.calls.filter(({ call }) => call === 'container_exec_credential');
   assert.equal(execs.length, 3);
   assert.equal(run.calls.filter(({ call }) => call === 'execution_inspect').length, 3);
   assert.equal(run.calls.filter(({ call }) => call === 'execution_remove').length, 3);
@@ -912,7 +910,13 @@ test('Postgres GUI stays live and serves a scrolled database window before host 
   ]);
   assert.match(execs[1].with.command[4], /LIMIT 128 OFFSET 0$/);
   assert.match(execs[2].with.command[4], /LIMIT 1 OFFSET 999999$/);
-  assert.deepEqual(execs[1].with.environment, [['PGPASSWORD', password]]);
-  for (const call of run.calls.filter(({ call }) => call !== 'container_exec'))
-    assert(!JSON.stringify(call).includes(password), `credential leaked through ${call.call}`);
+  assert.deepEqual(execs[1].with.credentials, [['PGPASSWORD', credentialKey]]);
+  assert.equal(
+    run.calls.some(({ call }) => call === 'filesystem_read'),
+    false,
+  );
+  assert.equal(
+    run.calls.some(({ call }) => call === 'credential_read'),
+    false,
+  );
 });

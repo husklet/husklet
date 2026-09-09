@@ -896,7 +896,7 @@ export function workspace(session, { signal } = {}) {
                 if (onStarted !== undefined && typeof onStarted !== 'function')
                     throw new TypeError('streaming execution onStarted must be a function');
                 requireOutputActive(signal);
-                const executionId = credentials
+                const executionId = credentials?.length
                     ? await api.containers.execWithCredentials(id, generation, {
                         command,
                         environment,

@@ -1823,6 +1823,83 @@ test('real Unix helper EOF releases an idle dynamic input iterator without cance
   }
 });
 
+test('real Unix empty credential bindings retain least-privilege execution and session health', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-empty-credentials-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const containerId = 'c'.repeat(64);
+  const executionId = 'e'.repeat(32);
+  const calls = [];
+  const connections = new Set();
+  const server = net.createServer((socket) => {
+    connections.add(socket);
+    socket.on('close', () => connections.delete(socket));
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.kind !== KIND.request || frame.channel !== 2) continue;
+        calls.push(frame.payload.call);
+        const payload =
+          frame.payload.call === 'container_exec'
+            ? { reply: 'identity', with: executionId }
+            : frame.payload.call === 'execution_output'
+              ? {
+                  reply: 'execution_output',
+                  with: { entries: [], next: 0, more: false, eof: true, gap: false },
+                }
+              : frame.payload.call === 'execution_inspect'
+                ? {
+                    reply: 'execution',
+                    with: {
+                      id: executionId,
+                      container_id: containerId,
+                      running: false,
+                      exit_code: 0,
+                      pid: 3,
+                      command: ['psql'],
+                      user: 'postgres',
+                    },
+                  }
+                : {
+                    reply: 'workspace',
+                    with: { name: 'database', image: 'postgres:17', architecture: 'amd64' },
+                  };
+        socket.write(encode({ channel: 2, kind: KIND.response, payload }));
+      }
+    });
+    socket.write(
+      encode({
+        channel: CONTROL,
+        kind: KIND.open,
+        payload: {
+          protocol: 1,
+          peer: 'fixture',
+          granted: ['containers:execute', 'containers:read', 'workspaces:read'],
+        },
+      }),
+    );
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    const host = workspace(session);
+    const result = await host.containers.execStreaming(
+      containerId,
+      2,
+      { command: ['psql'], credentials: [] },
+      async () => {},
+    );
+    assert.equal(result.execution.exit_code, 0);
+    assert.deepEqual(calls, ['container_exec', 'execution_output', 'execution_inspect']);
+    assert.equal(calls.includes('container_exec_credential'), false);
+    assert.equal((await host.info()).name, 'database');
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('real Unix output iteration rejects a stalled continuation without looping or poisoning the session', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-output-stall-'));
   const socketPath = path.join(directory, 'host.sock');

@@ -22,13 +22,13 @@ declare const process: { argv: string[]; stdout: { write(value: string): void } 
 type Configuration = {
   path: string;
   container?: string;
-  credentialPath: string;
+  credentialKey: string;
   query: string;
   outputMaxBytes?: number;
 };
 const configuration = JSON.parse(process.argv[2] ?? 'null') as Configuration | null;
-if (!configuration?.path || !configuration.credentialPath || !configuration.query) {
-  throw new TypeError('usage: postgres-inspector.ts JSON(path, credentialPath, query, container?)');
+if (!configuration?.path || !configuration.credentialKey || !configuration.query) {
+  throw new TypeError('usage: postgres-inspector.ts JSON(path, credentialKey, query, container?)');
 }
 
 function csv(input: string): string[][] {
@@ -76,13 +76,11 @@ try {
       : undefined;
   if (!selected)
     throw new Error('select a unique running PostgreSQL container by immutable ID or name');
-  const [container, processes, networks, credentialBytes] = await Promise.all([
+  const [container, processes, networks] = await Promise.all([
     host.containers.inspect(selected.id),
     host.containers.processes(selected.id),
     host.networks.list(),
-    host.files.read(configuration.credentialPath),
   ]);
-  const credential = new TextDecoder().decode(Uint8Array.from(credentialBytes)).trimEnd();
 
   const executeCsv = async (statement: string, signal?: AbortSignal): Promise<string[][]> => {
     let executionId: string | undefined;
@@ -90,7 +88,7 @@ try {
       const result = await host.containers.execText(container.id, container.generation, {
         // Exact argv: query whitespace and metacharacters never become shell syntax.
         command: ['psql', '--csv', '--no-psqlrc', '--command', statement],
-        environment: [['PGPASSWORD', credential]],
+        credentials: [['PGPASSWORD', configuration.credentialKey]],
         signal,
         // A viewport query remains bounded even when one PostgreSQL value is unexpectedly huge.
         maxBytes: configuration.outputMaxBytes ?? 4 * 1024 * 1024,
