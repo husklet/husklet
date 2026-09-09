@@ -22,7 +22,17 @@ test('Slider clamps and advances in exact declared steps', () => {
   assert(
     stage.surface.dispatch({ trigger: 'Change', node: slider, id: `${slider}:Change`, value: 45 }),
   );
-  assert(labels(stage.since(before)).includes('Current value: 45%'));
+  const changed = stage.since(before);
+  assert(labels(changed).includes('Build cache · 45%'));
+  assert(labels(changed).includes('Current value: 45%'));
+  assert(
+    changed.some(
+      (patch) =>
+        patch.SetProp?.id === slider &&
+        patch.SetProp.prop === 'Value' &&
+        patch.SetProp.value?.Integer === 45,
+    ),
+  );
 });
 
 test('Slider documents bounds, steps, disabled silence, and keyboard behavior before API', () => {
@@ -41,6 +51,11 @@ test('Slider documents bounds, steps, disabled silence, and keyboard behavior be
   assert(text.some((label) => label?.includes('Home selects minimum')));
   assert(text.some((label) => label?.includes('neither move nor report changes')));
   assert(text.indexOf('Range states') < text.indexOf('API'));
+  const source = frame.patches.find(
+    (patch) => patch.SetProp?.prop === 'Value' && patch.SetProp.value?.Text?.includes('<Slider'),
+  )?.SetProp.value.Text;
+  assert(source.includes('onChange={(report) =>'));
+  assert(source.includes('setValue(boundedStep(report.value))'));
   const sliders = frame.patches
     .filter((patch) => patch.Create?.tag === 'Slider')
     .map((patch) => patch.Create.id);

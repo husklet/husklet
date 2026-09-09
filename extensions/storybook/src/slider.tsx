@@ -47,7 +47,19 @@ export function SliderWorkbench() {
         </FormControl>
         <InlineMessage label={`Current value: ${value}%`} tone="neutral" />
         <Code
-          value="<Slider value={value} minimum={0} maximum={100} step={5} onChange={setValue} />"
+          value={
+            'const boundedStep = (next) =>\n' +
+            '  Math.min(100, Math.max(0, Math.round(next / 5) * 5));\n\n' +
+            '<Slider\n' +
+            '  value={value}\n' +
+            '  minimum={0}\n' +
+            '  maximum={100}\n' +
+            '  step={5}\n' +
+            '  onChange={(report) =>\n' +
+            '    setValue(boundedStep(report.value))\n' +
+            '  }\n' +
+            '/>'
+          }
           wrap
         />
       </DocumentationSection>
