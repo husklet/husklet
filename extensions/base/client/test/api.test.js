@@ -3481,6 +3481,62 @@ test('pane change observation subscribes over the live transport, filters metada
   stage.server.close();
 });
 
+test('pane change iterator withholds credit for slow consumers and surfaces replacement, abort, and disconnect', async () => {
+  const stage = await pair();
+  const next = frames(stage.host);
+  await next();
+  const controller = new AbortController();
+  const changes = workspace(stage.session).paneChanges({ signal: controller.signal });
+  const first = changes.next();
+  assert.deepEqual((await next()).payload, {
+    call: 'event_subscribe',
+    with: { topic: 'pane-changes' },
+  });
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  const original = { slot: 'shell', kind: 'terminal', revision: 7, generation: 3, coalesced: 0 };
+  stage.host.write(
+    encode({ channel: 19, kind: KIND.event, payload: { snapshot: 'pane_changes', of: original } }),
+  );
+  assert.deepEqual((await first).value, original);
+
+  const second = changes.next();
+  const credit = await next();
+  assert.deepEqual([credit.channel, credit.kind, credit.payload], [19, KIND.credit, 1]);
+  const replacement = {
+    slot: 'shell',
+    kind: 'surface',
+    revision: 1,
+    generation: 4,
+    coalesced: 2,
+  };
+  stage.host.write(
+    encode({
+      channel: 19,
+      kind: KIND.event,
+      payload: { snapshot: 'pane_changes', of: replacement },
+    }),
+  );
+  assert.deepEqual((await second).value, replacement);
+
+  const stopped = changes.next();
+  assert.equal((await next()).kind, KIND.credit);
+  controller.abort('agent stopped');
+  assert.deepEqual((await next()).payload, {
+    call: 'event_unsubscribe',
+    with: { topic: 'pane-changes' },
+  });
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  await assert.rejects(stopped, (error) => error.name === 'AbortError');
+
+  const disconnected = workspace(stage.session).paneChanges();
+  const pending = disconnected.next();
+  assert.equal((await next()).payload.call, 'event_subscribe');
+  stage.host.destroy();
+  await assert.rejects(pending, /connection closed/);
+  stage.session.close();
+  stage.server.close();
+});
+
 test('terminal topology, bounded input, grid resize and retitle use exact typed calls', async () => {
   const stage = await pair();
   const next = frames(stage.host);

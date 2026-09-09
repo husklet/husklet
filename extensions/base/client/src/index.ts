@@ -35,6 +35,7 @@ import type {
   ExtensionSummary,
   FileEntry,
   JsonState,
+  PaneChange,
   Session as ClientSession,
   StateCodec,
   WorkspaceApi,
@@ -2432,6 +2433,49 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
   api.watchTerminal = (listener) => watch('terminal', 'terminal', listener, 'terminal');
   api.watchPaneChanges = (listener) =>
     watch('pane-changes', 'pane_changes', listener, 'pane change');
+  api.paneChanges = async function* ({ signal: iteratorSignal } = {}) {
+    if (iteratorSignal?.aborted) throw outputAbort(iteratorSignal);
+    let pending: { value: PaneChange; acknowledge: () => void } | undefined;
+    let wake: (() => void) | undefined;
+    let subscribed = false;
+    const off = hostSession.onEvent((event) => {
+      if (!('snapshot' in event) || event.snapshot !== 'pane_changes') return;
+      return new Promise<void>((acknowledge) => {
+        pending = { value: event.of, acknowledge };
+        wake?.();
+      });
+    });
+    let abortIterator: (() => void) | undefined;
+    const aborted = new Promise<never>((_, reject) => {
+      abortIterator = () => reject(outputAbort(iteratorSignal));
+      iteratorSignal?.addEventListener('abort', abortIterator, { once: true });
+    });
+    try {
+      await subscribe('pane-changes');
+      subscribed = true;
+      for (;;) {
+        if (!pending) {
+          await Promise.race([
+            new Promise<void>((resolve) => {
+              wake = resolve;
+            }),
+            hostSession.closed.then((error) => Promise.reject(error)),
+            aborted,
+          ]);
+          wake = undefined;
+        }
+        const delivery = pending;
+        pending = undefined;
+        yield delivery.value;
+        delivery.acknowledge();
+      }
+    } finally {
+      pending?.acknowledge();
+      iteratorSignal?.removeEventListener('abort', abortIterator!);
+      off();
+      if (subscribed) await unsubscribe('pane-changes').catch(() => {});
+    }
+  };
   api.terminal.waitForText = async (slot, after, { lines, timeoutMs = 30_000, signal } = {}) => {
     if (typeof slot !== 'string' || slot.length === 0)
       throw new TypeError('pane text wait requires a nonempty slot');

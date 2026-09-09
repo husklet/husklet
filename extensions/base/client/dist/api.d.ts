@@ -1574,6 +1574,10 @@ export interface WorkspaceApi {
     subscribe(topic: Topic): Promise<void>;
     unsubscribe(topic: Topic): Promise<void>;
     watchPaneChanges(listener: (change: PaneChange) => void): Promise<() => Promise<void>>;
+    /** Consumer-driven pane changes; event credit remains withheld until the consumer advances. */
+    paneChanges(options?: {
+        signal?: AbortSignal;
+    }): AsyncGenerator<PaneChange, void, void>;
     watchContainers(listener: (containers: ContainerSummary[]) => void): Promise<() => Promise<void>>;
     watchContainerInventory(listener: (inventory: ContainerInventory) => void): Promise<() => Promise<void>>;
     watchImages(listener: (images: ImageSummary[]) => void): Promise<() => Promise<void>>;

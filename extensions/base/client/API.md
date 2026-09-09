@@ -149,6 +149,7 @@ order; the JavaScript client's checks are never treated as a security boundary.
 - `host.terminal.ratioObserved(...)` — `terminal_ratio_observed`, requires `terminals:layout-control`.
 - `host.terminal.switchOccupant(...)` — `terminal_switch_occupant`, requires `terminals:process-control`.
 - `host.terminal.switchOccupantObserved(...)` — `terminal_switch_occupant_observed`, requires `terminals:process-control`.
+- `host.paneChanges(...)` — consumes pane replacement/layout revisions as an async generator; protocol event credit remains withheld until the consumer advances, and abort or disconnect rejects the pending iteration.
 - Process-lifetime layout operations are compound authority: opening or splitting a pane, closing a pane, and switching its occupant require both `terminals:layout-control` and `terminals:process-control`, even when the protocol table names the operation's primary capability.
 - `host.terminal.toText(...)` — discovers a pane and returns visible terminal screen text or bounded semantic XML; requires `panes:observe` and the corresponding `terminals:output` or `panes:semantic-read` grant.
 - `host.terminal.readAll(...)` — discovers panes once and converts each to terminal transcript or bounded semantic XML, reports incomplete discovery, and refuses cursor races; requires `panes:observe`, `terminals:output`, and `panes:semantic-read` for mixed workspaces.
