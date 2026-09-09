@@ -318,6 +318,8 @@ export function Top({
 }
 
 function sectionTitle(value: Section): string {
+  if (value === 'overview') return 'Workspace';
+  if (value === 'workspace') return 'Settings';
   return value.charAt(0).toUpperCase() + value.slice(1);
 }
 

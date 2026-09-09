@@ -54,7 +54,7 @@ export function Navigation({
   onSelect: (section: Section) => void;
 }) {
   const groups: { label: string; sections: Section[] }[] = [
-    { label: 'Workspace', sections: ['overview', 'workspace', 'extensions'] },
+    { label: 'Manage', sections: ['overview', 'workspace', 'extensions'] },
     { label: 'Runtime', sections: ['containers', 'processes', 'executions'] },
     { label: 'Resources', sections: ['images', 'volumes', 'networks'] },
     { label: 'Interface', sections: ['terminals'] },
@@ -70,12 +70,12 @@ export function Navigation({
                 {group.sections.map((name) => (
                   <NavigationMenuItem
                     key={name}
-                    label={title(name)}
+                    label={navigationTitle(name)}
                     icon={navigationIcon(name)}
                     selected={section === name}
                     variant={section === name ? 'filled' : 'ghost'}
                     tone={section === name ? 'accent' : 'neutral'}
-                    tooltip={`Open ${title(name)}`}
+                    tooltip={`Open ${navigationTitle(name)}`}
                     onInvoke={() => onSelect(name)}
                   />
                 ))}
@@ -99,6 +99,12 @@ function navigationIcon(section: Section): string {
   if (section === 'volumes') return 'folder-symbolic';
   if (section === 'networks') return 'network-workgroup-symbolic';
   return 'view-more-symbolic';
+}
+
+function navigationTitle(section: Section): string {
+  if (section === 'overview') return 'Workspace';
+  if (section === 'workspace') return 'Settings';
+  return title(section);
 }
 
 export function Overview({
@@ -152,7 +158,7 @@ export function Overview({
     <Scroll grow width="fill" height="fill">
       <Column width="fill" pad={4} gap={3}>
         <Row gap={1} align="center" wrap>
-          <Heading label="Workspace overview" scale="title" align="start" grow={false} />
+          <Heading label="Workspace" scale="title" align="start" grow={false} />
           {refreshing ? <Spinner /> : null}
           <Button
             label={refreshing ? 'Refreshing…' : 'Refresh all'}

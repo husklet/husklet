@@ -164,8 +164,8 @@ test('Top presents workspace, extensions, and every resource navigation choice',
     .filter((patch) => 'SetProp' in patch && patch.SetProp.prop === 'Label')
     .map((patch) => patch.SetProp.value.Text);
   for (const label of [
-    'Workspace overview',
     'Workspace',
+    'Settings',
     'Extensions',
     'Containers',
     'Processes',
@@ -181,11 +181,11 @@ test('Top presents workspace, extensions, and every resource navigation choice',
     true,
   );
   assert.equal(
-    taggedProperty(stageFromFrame(frame), 'Overview', 'NavigationMenuItem', 'Selected')?.Flag,
+    taggedProperty(stageFromFrame(frame), 'Workspace', 'NavigationMenuItem', 'Selected')?.Flag,
     true,
   );
   assert.equal(
-    taggedProperty(stageFromFrame(frame), 'Workspace', 'NavigationMenuItem', 'Selected')?.Flag,
+    taggedProperty(stageFromFrame(frame), 'Settings', 'NavigationMenuItem', 'Selected')?.Flag,
     false,
   );
   assert.equal(
@@ -194,8 +194,8 @@ test('Top presents workspace, extensions, and every resource navigation choice',
     'every destination exposes its selected state to keyboard and assistive users',
   );
   const icons = [
-    'Overview',
     'Workspace',
+    'Settings',
     'Extensions',
     'Containers',
     'Processes',
@@ -208,7 +208,7 @@ test('Top presents workspace, extensions, and every resource navigation choice',
     (label) => taggedProperty(stageFromFrame(frame), label, 'NavigationMenuItem', 'Icon')?.Text,
   );
   assert.equal(new Set(icons).size, 10, 'every destination has a distinguishable icon');
-  for (const group of ['Workspace', 'Runtime', 'Resources', 'Interface'])
+  for (const group of ['Manage', 'Runtime', 'Resources', 'Interface'])
     assert.ok(labels.includes(group), group);
   assert.ok(
     labels.includes('0 enabled'),
@@ -223,7 +223,12 @@ test('Top presents workspace, extensions, and every resource navigation choice',
     'every compact overview summary is one full-card navigation target',
   );
   assert.deepEqual(
-    outerAncestorProperty(stageFromFrame(frame), 'Workspace overview', 'Column', 'Pad'),
+    outerAncestorProperty(
+      stageFromFrame(frame),
+      'Current inventory and reported runtime attention.',
+      'Column',
+      'Pad',
+    ),
     { Length: { Step: 4 } },
     'the overview keeps a 16px inset instead of touching the viewport edge',
   );
@@ -505,11 +510,11 @@ test('Top owns workspace settings and extension management in the same tab', asy
       },
     }),
   );
-  invoke(stage, 'Workspace');
+  invoke(stage, 'Settings');
   await settled();
   await settled();
-  assert.equal(taggedProperty(stage, 'Overview', 'NavigationMenuItem', 'Selected')?.Flag, false);
-  assert.equal(taggedProperty(stage, 'Workspace', 'NavigationMenuItem', 'Selected')?.Flag, true);
+  assert.equal(taggedProperty(stage, 'Workspace', 'NavigationMenuItem', 'Selected')?.Flag, false);
+  assert.equal(taggedProperty(stage, 'Settings', 'NavigationMenuItem', 'Selected')?.Flag, true);
   assert.ok(labelled(stage, 'Runtime'));
   assert.ok(labelled(stage, 'Resources & connectivity'));
   assert.ok(labelled(stage, 'Terminal appearance'));
