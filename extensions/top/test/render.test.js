@@ -26,6 +26,7 @@ import {
   acquisitionFailure,
   acquisitionLabel,
   filterCatalogueEntries,
+  filterInstalledExtensions,
 } from '../dist/app.js';
 import {
   ContainerDetailsSource,
@@ -209,6 +210,46 @@ const largeCatalogueInstalled = [
     enabled: true,
     status: 'running',
   },
+];
+
+const largeInstalledExtensions = [
+  {
+    name: 'faulted-agent',
+    version: '1.0.0',
+    image_digest: `sha256:${'f'.repeat(64)}`,
+    enabled: true,
+    status: 'fault:extension process exited',
+  },
+  {
+    name: 'database',
+    version: '1.0.0',
+    image_digest: `sha256:${'d'.repeat(64)}`,
+    enabled: true,
+    status: 'running',
+  },
+  {
+    name: 'disabled-linter',
+    version: '1.0.0',
+    image_digest: `sha256:${'e'.repeat(64)}`,
+    enabled: false,
+    status: 'standby',
+  },
+  {
+    name: 'storybook',
+    version: '2.0.0',
+    image_digest: `sha256:${'s'.repeat(64)}`,
+    enabled: true,
+    status: 'running',
+  },
+  ...Array.from({ length: 46 }, (_, index) => ({
+    name: `installed-${String(index + 1).padStart(2, '0')}`,
+    version: '1.0.0',
+    image_digest: `sha256:${String((index % 9) + 1).repeat(64)}`,
+    enabled: true,
+    status: 'running',
+    pane_providers:
+      index === 6 ? [{ id: 'observability', title: 'Observability dashboard', icon: null }] : [],
+  })),
 ];
 
 test('Top presents workspace, extensions, and every resource navigation choice', () => {
@@ -1093,6 +1134,81 @@ test('extension discovery searches, filters, reports result counts, and clears a
   await settled();
   assert.ok(labelled(stage, '1 of 20 extensions'));
   assert.ok(labelled(stage, 'Future debugger'));
+});
+
+test('installed extension projections prioritize faults and updates and search provider names', () => {
+  assert.deepEqual(
+    filterInstalledExtensions(largeInstalledExtensions, largeCatalogueEntries, '', 'all')
+      .slice(0, 4)
+      .map((extension) => extension.name),
+    ['faulted-agent', 'database', 'disabled-linter', 'installed-01'],
+    'faults, updates, and disabled entries lead deterministic name ordering',
+  );
+  assert.deepEqual(
+    filterInstalledExtensions(largeInstalledExtensions, largeCatalogueEntries, '', 'faulted').map(
+      (extension) => extension.name,
+    ),
+    ['faulted-agent'],
+  );
+  assert.deepEqual(
+    filterInstalledExtensions(largeInstalledExtensions, largeCatalogueEntries, '', 'updates').map(
+      (extension) => extension.name,
+    ),
+    ['database'],
+  );
+  assert.deepEqual(
+    filterInstalledExtensions(
+      largeInstalledExtensions,
+      largeCatalogueEntries,
+      'observability dashboard',
+      'running',
+    ).map((extension) => extension.name),
+    ['installed-07'],
+  );
+});
+
+test('installed extension management searches, filters, pages, and clears fifty entries', async () => {
+  const stage = host();
+  stage.render(
+    h(Extensions, {
+      api: {
+        info: async () => ({ name: 'daily', architecture: 'amd64', image: 'alpine' }),
+        extensions: {
+          list: async () => largeInstalledExtensions,
+          catalogue: async () => ({ entries: largeCatalogueEntries, complete: true }),
+        },
+        watchExtensions: async () => () => {},
+      },
+    }),
+  );
+  await settled();
+  await settled();
+  assert.ok(labelled(stage, '50 of 50 installed extensions'));
+  assert.ok(labelled(stage, 'Showing 20 of 50 matching installed extensions'));
+  assert.ok(labelled(stage, 'Show 20 more installed'));
+  assert.deepEqual(taggedProperty(stage, 'Disabled', 'Badge', 'Tone'), { Tone: 'Neutral' });
+  invoke(stage, 'Show 20 more installed');
+  await settled();
+  assert.ok(labelled(stage, 'Showing 40 of 50 matching installed extensions'));
+
+  changeByTooltip(stage, 'Filter installed extensions by status', 'faulted');
+  await settled();
+  assert.ok(labelled(stage, '1 of 50 installed extensions'));
+  assert.ok(labelled(stage, 'faulted-agent'));
+
+  change(stage, 'Search installed', 'no such extension');
+  await settled();
+  assert.ok(labelled(stage, '0 of 50 installed extensions'));
+  assert.ok(labelled(stage, 'No installed extensions match this search and status filter.'));
+  invoke(stage, 'Clear installed filters');
+  await settled();
+  assert.ok(labelled(stage, '50 of 50 installed extensions'));
+  assert.equal(fieldValue(stage, 'Search installed'), '');
+
+  change(stage, 'Search installed', 'observability dashboard');
+  await settled();
+  assert.ok(labelled(stage, '1 of 50 installed extensions'));
+  assert.ok(labelled(stage, 'installed-07'));
 });
 
 test('extension discovery keeps unknown compatibility reviewable and blocks known mismatches', async () => {

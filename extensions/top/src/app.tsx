@@ -55,6 +55,7 @@ export {
   acquisitionFailure,
   acquisitionLabel,
   filterCatalogueEntries,
+  filterInstalledExtensions,
 } from './extensions.js';
 
 const { useCallback, useEffect, useRef, useState } = React;

@@ -65,13 +65,18 @@ mod unix {
         );
         for fixture in ["populated", "error"] {
             for (name, section) in CASES {
-                render_case(&repository, fixture, name, section);
+                render_case(&repository, fixture, name, section, false);
             }
         }
+        render_case(&repository, "populated", "extensions", "extensions", true);
     }
 
-    fn render_case(repository: &Path, fixture: &str, name: &str, section: &str) {
-        let socket = std::env::temp_dir().join(format!("husklet-top-{}-{fixture}-{name}.sock", std::process::id()));
+    fn render_case(repository: &Path, fixture: &str, name: &str, section: &str, catalogue_empty: bool) {
+        let capture_fixture = if catalogue_empty { "installed" } else { fixture };
+        let socket = std::env::temp_dir().join(format!(
+            "husklet-top-{}-{capture_fixture}-{name}.sock",
+            std::process::id()
+        ));
         let _ = std::fs::remove_file(&socket);
         let listener = UnixListener::bind(&socket).expect("Top test socket binds");
         listener.set_nonblocking(true).expect("listener is deadline-bound");
@@ -154,7 +159,14 @@ mod unix {
                         Request::WorkspaceInfo => Reply::Workspace(workspace_info()),
                         Request::WorkspaceInspect { .. } => Reply::WorkspaceConfiguration(workspace_configuration()),
                         Request::ExtensionList => Reply::Extensions(extensions()),
-                        Request::ExtensionCatalogue => Reply::ExtensionCatalogue(catalogue()),
+                        Request::ExtensionCatalogue => Reply::ExtensionCatalogue(if catalogue_empty {
+                            ExtensionCatalogue {
+                                entries: Vec::new(),
+                                complete: true,
+                            }
+                        } else {
+                            catalogue()
+                        }),
                         Request::SourceResize { .. }
                         | Request::SourceResizeAt { .. }
                         | Request::EventSubscribe { .. }
@@ -206,7 +218,7 @@ mod unix {
                 "untrusted settings were presented as current"
             );
         }
-        if fixture == "populated" && name == "extensions" {
+        if fixture == "populated" && name == "extensions" && !catalogue_empty {
             assert!(
                 has_placeholder(&root, "Search extensions"),
                 "the scalable catalogue omitted its search control"
@@ -214,6 +226,20 @@ mod unix {
             assert!(
                 has_label(&root, "20 of 20 extensions"),
                 "the scalable catalogue omitted its bounded result count"
+            );
+        }
+        if fixture == "populated" && name == "extensions" {
+            assert!(
+                has_placeholder(&root, "Search installed"),
+                "installed management omitted its search control"
+            );
+            assert!(
+                has_label(&root, "50 of 50 installed extensions"),
+                "installed management omitted its bounded result count"
+            );
+            assert!(
+                has_label(&root, "Showing 20 of 50 matching installed extensions"),
+                "installed management materialized an unbounded card wall"
             );
         }
         let window = gtk::Window::new();
@@ -228,7 +254,7 @@ mod unix {
             root.allocate(width, 1_600, -1, None);
             assert_eq!(root.width(), width, "{fixture}/{name} rejected {width}px");
             assert_contained(&root, &format!("{fixture}/{name}/{width_name}"));
-            capture(&window, &format!("{fixture}-{name}-{width_name}"), width, 800);
+            capture(&window, &format!("{capture_fixture}-{name}-{width_name}"), width, 800);
         }
         let stderr = child.stop();
         assert!(stderr.is_empty(), "{fixture}/{name} wrote to stderr: {stderr}");
@@ -266,19 +292,44 @@ mod unix {
     }
 
     fn extensions() -> Vec<ExtensionSummary> {
-        ["top", "storybook"]
+        let mut names = vec![
+            "top".to_owned(),
+            "storybook".to_owned(),
+            "faulted-agent".to_owned(),
+            "disabled-linter".to_owned(),
+            "developer-tool-01".to_owned(),
+        ];
+        names.extend((5..50).map(|index| format!("installed-{index:02}")));
+        names
             .into_iter()
-            .map(|name| ExtensionSummary {
-                name: name.into(),
-                image_digest: format!("sha256:{}", if name == "top" { "a" } else { "b" }.repeat(64)),
-                status: "running".into(),
-                version: "0.4.0".into(),
-                enabled: true,
+            .enumerate()
+            .map(|(index, name)| ExtensionSummary {
+                name: name.clone(),
+                image_digest: format!("sha256:{}", format!("{:x}", index % 16).repeat(64)),
+                status: if name == "faulted-agent" {
+                    "fault:extension process exited".into()
+                } else if name == "disabled-linter" {
+                    "standby".into()
+                } else {
+                    "running".into()
+                },
+                version: if name == "developer-tool-01" {
+                    "0.9.0".into()
+                } else {
+                    "0.4.0".into()
+                },
+                enabled: name != "disabled-linter",
                 pane_providers: if name == "storybook" {
                     vec![PaneProvider {
                         id: ExtensionName::new("playground").expect("valid provider id"),
                         title: "Component playground".into(),
                         icon: Some("applications-graphics-symbolic".into()),
+                    }]
+                } else if name == "installed-07" {
+                    vec![PaneProvider {
+                        id: ExtensionName::new("observability").expect("valid provider id"),
+                        title: "Observability dashboard".into(),
+                        icon: None,
                     }]
                 } else {
                     Vec::new()
