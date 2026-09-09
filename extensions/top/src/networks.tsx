@@ -33,6 +33,7 @@ import {
   shortId,
 } from './model.js';
 import type { Resource } from './overview.js';
+import { AuthorityRecovery } from './authority-recovery.js';
 
 type Inspection = {
   id: string;
@@ -58,10 +59,12 @@ export function Networks({
   api,
   resource,
   containers,
+  onOpenExtensions,
 }: {
   api: WorkspaceApi;
   resource: Resource<NetworkSummary>;
   containers: Resource<ContainerSummary>;
+  onOpenExtensions: () => void;
 }) {
   const [name, setName] = React.useState('');
   const [container, setContainer] = React.useState('');
@@ -327,18 +330,17 @@ export function Networks({
                   ) : null}
                   <CardContent gap={1}>
                     <Row>
-                      <Button
-                        label={
-                          inspectionNeedsAccess
-                            ? 'Access required'
-                            : inspection.id === id && inspection.state === 'error'
+                      {!inspectionNeedsAccess ? (
+                        <Button
+                          label={
+                            inspection.id === id && inspection.state === 'error'
                               ? 'Retry inspect'
                               : 'Inspect'
-                        }
-                        variant="outline"
-                        enabled={!inspectionNeedsAccess}
-                        onInvoke={() => inspect(network)}
-                      />
+                          }
+                          variant="outline"
+                          onInvoke={() => inspect(network)}
+                        />
+                      ) : null}
                     </Row>
                   </CardContent>
                   {network.kind !== 'builtin' ? (
@@ -374,7 +376,7 @@ export function Networks({
                   ) : null}
                   {inspection.id === id ? (
                     <>
-                      <NetworkDetail inspection={inspection} />
+                      <NetworkDetail inspection={inspection} onOpenExtensions={onOpenExtensions} />
                       {inspection.state === 'ready' ? (
                         <CardContent gap={1}>
                           <Heading label="Container attachment" scale="caption" />
@@ -524,7 +526,13 @@ function DisconnectConsent({
   );
 }
 
-function NetworkDetail({ inspection }: { inspection: Inspection }) {
+function NetworkDetail({
+  inspection,
+  onOpenExtensions,
+}: {
+  inspection: Inspection;
+  onOpenExtensions: () => void;
+}) {
   return (
     <CardContent>
       {inspection.state === 'loading' ? (
@@ -534,10 +542,7 @@ function NetworkDetail({ inspection }: { inspection: Inspection }) {
         </Row>
       ) : inspection.state === 'error' ? (
         isAuthorityDenial(inspection.error) ? (
-          <InlineMessage
-            label="This extension was not granted access to inspect this network. Change its exact network access from Extensions, then inspect again."
-            tone="warning"
-          />
+          <AuthorityRecovery resource="network" onOpenExtensions={onOpenExtensions} />
         ) : (
           <Text label={boundedMessage(inspection.error)} color="danger" wrap />
         )

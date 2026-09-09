@@ -20,6 +20,7 @@ import {
   type WorkspaceApi,
 } from '@husklet/react';
 import { LOG_LIMIT, boundedMessage, logText, shortId } from './model.js';
+import { AuthorityRecovery } from './authority-recovery.js';
 
 const { useState } = React;
 
@@ -150,6 +151,7 @@ type ContainerDetailProps = {
   inspection: Inspection;
   onRetry: () => void | Promise<void>;
   onOpenExecution?: (id: string) => void | Promise<void>;
+  onOpenExtensions: () => void;
 };
 
 export function ContainerDetail({
@@ -159,6 +161,7 @@ export function ContainerDetail({
   inspection,
   onRetry,
   onOpenExecution,
+  onOpenExtensions,
 }: ContainerDetailProps) {
   const [command, setCommand] = useState({
     program: '',
@@ -235,10 +238,7 @@ export function ContainerDetail({
         <StructuredDetail value={inspection.detail} />
       </ResourceState>
       {accessRequired ? (
-        <InlineMessage
-          label="This extension was not granted access to inspect this container. Change its exact container access from Extensions, then inspect again."
-          tone="warning"
-        />
+        <AuthorityRecovery resource="container" onOpenExtensions={onOpenExtensions} />
       ) : null}
       {inspected && container.state !== 'running' ? (
         <InlineMessage

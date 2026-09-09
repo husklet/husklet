@@ -570,25 +570,35 @@ export function Terminals({
                           />
                         ) : null}
                         {readable.kind === 'terminal' ? (
-                          <Row gap={1} wrap>
-                            <Entry
-                              value={input}
-                              placeholder="Type a line"
-                              width="fill"
-                              enabled={Boolean(cursor)}
-                              onChange={(event) => setInput(String(event.value ?? ''))}
-                              onSubmit={() => {
-                                void sendLine();
-                              }}
+                          <Column gap={1}>
+                            <Heading label="Send text to terminal" scale="caption" />
+                            <Text
+                              label="Writes these characters to the interactive terminal and adds Enter."
+                              color="text-dim"
+                              wrap
                             />
-                            <Button
-                              label="Send"
-                              enabled={busy === '' && input.length > 0 && Boolean(cursor)}
-                              onInvoke={() => {
-                                void sendLine();
-                              }}
-                            />
-                          </Row>
+                            <Row gap={1} wrap>
+                              <Entry
+                                value={input}
+                                placeholder="Text to send"
+                                width="fill"
+                                enabled={Boolean(cursor)}
+                                onChange={(event) => setInput(String(event.value ?? ''))}
+                                onSubmit={() => {
+                                  void sendLine();
+                                }}
+                              />
+                              <Button
+                                label="Send text"
+                                variant="filled"
+                                tone="accent"
+                                enabled={busy === '' && input.length > 0 && Boolean(cursor)}
+                                onInvoke={() => {
+                                  void sendLine();
+                                }}
+                              />
+                            </Row>
+                          </Column>
                         ) : (
                           <Text
                             label="Interface actions are available in Advanced."
@@ -596,32 +606,35 @@ export function Terminals({
                           />
                         )}
                         {readable.kind === 'terminal' ? (
-                          <Row gap={1} wrap>
-                            <Entry
-                              value={command}
-                              placeholder="Run a command, e.g. make test"
-                              width="fill"
-                              enabled={busy === '' && Boolean(cursor)}
-                              onChange={(event) => setCommand(String(event.value ?? ''))}
-                              onSubmit={() => {
-                                void spawnCommand();
-                              }}
+                          <Column gap={1}>
+                            <Heading label="Execute argv" scale="caption" />
+                            <Text
+                              label="Starts a separate process. Arguments support quotes and backslashes; shell operators are not interpreted."
+                              color="text-dim"
+                              wrap
                             />
-                            <Button
-                              label="Run"
-                              enabled={busy === '' && Boolean(cursor) && command.trim().length > 0}
-                              onInvoke={() => {
-                                void spawnCommand();
-                              }}
-                            />
-                          </Row>
-                        ) : null}
-                        {readable.kind === 'terminal' ? (
-                          <Text
-                            label="Commands are parsed as argv: spaces separate arguments, while quotes and backslashes preserve spaces. No shell is added."
-                            color="text-dim"
-                            wrap
-                          />
+                            <Row gap={1} wrap>
+                              <Entry
+                                value={command}
+                                placeholder="Program and arguments, e.g. make test"
+                                width="fill"
+                                enabled={busy === '' && Boolean(cursor)}
+                                onChange={(event) => setCommand(String(event.value ?? ''))}
+                                onSubmit={() => {
+                                  void spawnCommand();
+                                }}
+                              />
+                              <Button
+                                label="Execute"
+                                enabled={
+                                  busy === '' && Boolean(cursor) && command.trim().length > 0
+                                }
+                                onInvoke={() => {
+                                  void spawnCommand();
+                                }}
+                              />
+                            </Row>
+                          </Column>
                         ) : null}
                       </Column>
                     </Expander>

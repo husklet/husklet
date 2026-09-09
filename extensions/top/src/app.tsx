@@ -248,6 +248,7 @@ export function Top({
           await executions.reload();
           setSection('executions');
         }}
+        onOpenExtensions={() => setSection('extensions')}
       />
     ) : section === 'processes' ? (
       <Processes
@@ -269,7 +270,12 @@ export function Top({
     ) : section === 'volumes' ? (
       <Volumes api={api} resource={volumes} volumeDetails={volumeDetails} />
     ) : section === 'networks' ? (
-      <Networks api={api} resource={networks} containers={containers} />
+      <Networks
+        api={api}
+        resource={networks}
+        containers={containers}
+        onOpenExtensions={() => setSection('extensions')}
+      />
     ) : (
       <Terminals api={api} resource={terminals} />
     );

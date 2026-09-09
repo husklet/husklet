@@ -2459,19 +2459,19 @@ test('terminal management reads every pane as text and writes against the inspec
     0,
     'the transcript keeps a compact viewport instead of consuming the full window height',
   );
-  assert.ok(placeholderProperty(stage, 'Type a line', 'Width'));
+  assert.ok(placeholderProperty(stage, 'Text to send', 'Width'));
   assert.equal(
-    placeholderProperty(stage, 'Type a line', 'Grow'),
+    placeholderProperty(stage, 'Text to send', 'Grow'),
     undefined,
     'single-line input expands horizontally without requesting vertical growth',
   );
-  change(stage, 'Type a line', 'printf hello');
-  invoke(stage, 'Send');
+  change(stage, 'Text to send', 'printf hello');
+  invoke(stage, 'Send text');
   await settled();
   await settled();
   assert.deepEqual(calls[1], ['write', 'pane-1', 7, 11, 'printf hello\n', { lines: 200 }]);
   assert.equal(latestPropertyForTag(stage, 'LogView', 'Value')?.Text, '$ ready\nhello');
-  assert.equal(fieldValue(stage, 'Type a line'), '');
+  assert.equal(fieldValue(stage, 'Text to send'), '');
   invoke(stage, 'View pane 2');
   await settled();
   await settled();
@@ -2529,7 +2529,7 @@ test('terminal input stays unavailable without a host-issued revision cursor', a
       'Input is unavailable until this pane provides a writable revision. Refresh the pane to try again.',
     ),
   );
-  assert.equal(isEnabled(stage, 'Send'), false);
+  assert.equal(isEnabled(stage, 'Send text'), false);
   assert.deepEqual(
     calls,
     [],
@@ -2754,8 +2754,8 @@ test('terminal management opens tabs and spawns exact argv through observed oper
   invoke(stage, 'View pane 1');
   await settled();
   await settled();
-  change(stage, 'Run a command, e.g. make test', 'make test');
-  invoke(stage, 'Run');
+  change(stage, 'Program and arguments, e.g. make test', 'make test');
+  invoke(stage, 'Execute');
   await settled();
   await settled();
   change(stage, 'Columns', '120');
@@ -2770,7 +2770,7 @@ test('terminal management opens tabs and spawns exact argv through observed oper
     ['resize', 'pane-1', 7, 12, 120, 40, { lines: 200 }],
   ]);
   assert.equal(latestPropertyForTag(stage, 'LogView', 'Value')?.Text, '$ make test\nok');
-  assert.equal(fieldValue(stage, 'Run a command, e.g. make test'), '');
+  assert.equal(fieldValue(stage, 'Program and arguments, e.g. make test'), '');
 });
 
 test('terminal command input preserves quoted arguments and rejects unfinished syntax', async () => {
@@ -2821,13 +2821,13 @@ test('terminal command input preserves quoted arguments and rejects unfinished s
   invoke(stage, 'View pane 1');
   await settled();
   await settled();
-  change(stage, 'Run a command, e.g. make test', 'printf "hello world"');
-  invoke(stage, 'Run');
+  change(stage, 'Program and arguments, e.g. make test', 'printf "hello world"');
+  invoke(stage, 'Execute');
   await settled();
   await settled();
   assert.deepEqual(calls[0]?.slice(0, 4), ['pane-1', 7, 11, ['printf', 'hello world']]);
-  change(stage, 'Run a command, e.g. make test', 'printf "unfinished');
-  invoke(stage, 'Run');
+  change(stage, 'Program and arguments, e.g. make test', 'printf "unfinished');
+  invoke(stage, 'Execute');
   await settled();
   await settled();
   assert.equal(calls.length, 1);
@@ -4055,7 +4055,23 @@ test('container creation groups its compact form and uses a human label editor',
     placeholders.some((value) => value.includes('JSON')),
     false,
   );
-  assert.ok(labelled(stage, 'Labels'));
+  for (const label of [
+    'Image reference · required',
+    'Container name · required',
+    'Working directory',
+    'Labels',
+  ])
+    assert.ok(labelled(stage, label), `${label} remains visible independently of input content`);
+  assert.ok(labelled(stage, 'Required: image and name.'));
+  assert.equal(
+    ancestorTags(stage, 'Create and start')[0],
+    'Row',
+    'the primary action stays beside the required-field status',
+  );
+  assert.ok(
+    placeholderProperty(stage, 'Working directory (optional)', 'Width'),
+    'the working-directory control has an explicit readable width',
+  );
   const wrappingRows = frame.patches.filter(
     (patch) => patch.SetProp?.prop === 'Wrap' && patch.SetProp.value?.Flag === true,
   );

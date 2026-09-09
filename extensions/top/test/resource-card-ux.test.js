@@ -70,6 +70,7 @@ test('container authority refusal explains recovery and withholds detail operati
     kind: 'denied',
   });
   const stage = host();
+  let openedExtensions = 0;
   stage.render(
     h(Containers, {
       api: {
@@ -88,19 +89,30 @@ test('container authority refusal explains recovery and withholds detail operati
           generation: 4,
         },
       ]),
+      onOpenExtensions: () => {
+        openedExtensions += 1;
+      },
     }),
   );
 
   invoke(stage, 'Details');
   await settled();
   await settled();
-  assert.ok(labelled(stage, 'Access required'));
+  assert.equal(currentLabels(stage).includes('Access required'), false);
   assert.ok(
     labelled(
       stage,
-      'This extension was not granted access to inspect this container. Change its exact container access from Extensions, then inspect again.',
+      'Top does not have permission to inspect this container. Review its exact container access in Extensions, then inspect again.',
     ),
   );
+  assert.equal(
+    currentLabels(stage).filter((label) => label.includes('permission to inspect this container'))
+      .length,
+    1,
+    'the refusal is explained once',
+  );
+  invoke(stage, 'Open Extensions');
+  assert.equal(openedExtensions, 1, 'the recovery action invokes application navigation');
   assert.equal(currentLabels(stage).includes('Retry details'), false);
   assert.equal(currentLabels(stage).includes('Load logs'), false);
   assert.equal(currentLabels(stage).includes('Kill'), false);

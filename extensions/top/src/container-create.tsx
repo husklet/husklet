@@ -2,7 +2,6 @@ import React from 'react';
 import {
   Button,
   Card,
-  CardActions,
   CardContent,
   CardHeader,
   Column,
@@ -23,6 +22,35 @@ import {
 import { boundedMessage } from './model.js';
 
 const { useState } = React;
+
+function EntryField({
+  label,
+  value,
+  placeholder,
+  enabled,
+  width = { chars: 32 },
+  onChange,
+}: {
+  label: string;
+  value: string;
+  placeholder?: string;
+  enabled: boolean;
+  width?: { chars: number } | 'fill';
+  onChange: (value: string) => void;
+}) {
+  return (
+    <FormControl gap={1} width={width}>
+      <FormLabel label={label} />
+      <Entry
+        value={value}
+        placeholder={placeholder}
+        enabled={enabled}
+        width="fill"
+        onChange={(event) => onChange(String(event.value ?? ''))}
+      />
+    </FormControl>
+  );
+}
 
 function ArgumentEditor({
   label,
@@ -583,6 +611,15 @@ export function ContainerCreate({
   } catch (cause: unknown) {
     configurationError = boundedMessage(cause);
   }
+  const missingRequired = [
+    draft.image.trim() ? '' : 'image',
+    draft.name.trim() ? '' : 'name',
+  ].filter(Boolean);
+  const requirements = configurationError
+    ? configurationError
+    : missingRequired.length > 0
+      ? `Required: ${missingRequired.join(' and ')}.`
+      : 'Ready to create and start.';
   const update = <K extends keyof ContainerCreateDraft>(
     field: K,
     value: ContainerCreateDraft[K],
@@ -645,33 +682,65 @@ export function ContainerCreate({
           <CardContent gap={1}>
             <Heading label={'Identity and image'} scale={'body'} />
             <Row gap={1} wrap={true}>
-              <Entry
+              <EntryField
+                label="Image reference · required"
                 value={draft.image}
                 placeholder={'Image reference'}
                 enabled={editable}
-                onChange={(event) => update('image', String(event.value ?? ''))}
+                onChange={(value) => update('image', value)}
               />
-              <Entry
+              <EntryField
+                label="Container name · required"
                 value={draft.name}
                 placeholder={'Container name'}
                 enabled={editable}
-                onChange={(event) => update('name', String(event.value ?? ''))}
+                onChange={(value) => update('name', value)}
               />
             </Row>
+            <Row gap={1} wrap align="center" justify="start">
+              {blocked ? <Spinner /> : null}
+              <Button
+                label={created ? 'Retry start' : blocked ? 'Creating…' : 'Create and start'}
+                enabled={
+                  !blocked &&
+                  (created !== null || (missingRequired.length === 0 && !configurationError))
+                }
+                onInvoke={createAndStart}
+              />
+              <Text
+                label={
+                  created
+                    ? `Container ${created.name} was created; start can be retried.`
+                    : requirements
+                }
+                color={
+                  configurationError
+                    ? 'danger'
+                    : missingRequired.length > 0
+                      ? 'text-dim'
+                      : 'positive'
+                }
+                wrap
+              />
+            </Row>
+            {error ? <Text label={boundedMessage(error)} color={'danger'} wrap={true} /> : null}
+            {notice ? <Text label={notice} color={'positive'} wrap={true} /> : null}
             <Expander label="Advanced identity">
               <Column gap={1}>
                 <Row gap={1} wrap>
-                  <Entry
+                  <EntryField
+                    label="Hostname"
                     value={draft.hostname}
                     placeholder={'Hostname (optional)'}
                     enabled={editable}
-                    onChange={(event) => update('hostname', String(event.value ?? ''))}
+                    onChange={(value) => update('hostname', value)}
                   />
-                  <Entry
+                  <EntryField
+                    label="Run as user"
                     value={draft.user}
                     placeholder={'Run as user (optional)'}
                     enabled={editable}
-                    onChange={(event) => update('user', String(event.value ?? ''))}
+                    onChange={(value) => update('user', value)}
                   />
                 </Row>
                 <EnvironmentEditor
@@ -685,59 +754,67 @@ export function ContainerCreate({
                 />
               </Column>
             </Expander>
-            <Heading label={'Process'} scale={'body'} />
-            <Row gap={1} wrap={true}>
-              <ArgumentEditor
-                label="Entrypoint"
-                value={draft.entrypoint}
+            <Column gap={1} width="fill">
+              <Heading label={'Process'} scale={'body'} />
+              <Row gap={1} wrap={true}>
+                <ArgumentEditor
+                  label="Entrypoint"
+                  value={draft.entrypoint}
+                  enabled={editable}
+                  onChange={(value) => update('entrypoint', value)}
+                />
+                <ArgumentEditor
+                  label="Command"
+                  value={draft.command}
+                  enabled={editable}
+                  onChange={(value) => update('command', value)}
+                />
+              </Row>
+              <EntryField
+                label="Working directory"
+                value={draft.workingDirectory}
+                placeholder={'Working directory (optional)'}
                 enabled={editable}
-                onChange={(value) => update('entrypoint', value)}
-              />
-              <ArgumentEditor
-                label="Command"
-                value={draft.command}
-                enabled={editable}
-                onChange={(value) => update('command', value)}
+                width={{ chars: 36 }}
+                onChange={(value) => update('workingDirectory', value)}
               />
               <EnvironmentEditor
                 value={draft.environment}
                 enabled={editable}
                 onChange={(value) => update('environment', value)}
               />
-              <Entry
-                value={draft.workingDirectory}
-                placeholder={'Working directory (optional)'}
-                enabled={editable}
-                onChange={(event) => update('workingDirectory', String(event.value ?? ''))}
-              />
-            </Row>
+            </Column>
             <Expander label="Advanced resources and networking">
               <Column gap={1}>
                 <Heading label={'Resources and connectivity'} scale={'body'} />
                 <Row gap={1} wrap={true}>
-                  <Entry
+                  <EntryField
+                    label="Memory limit"
                     value={draft.memoryMb}
                     placeholder={'Memory limit MiB (optional)'}
                     enabled={editable}
-                    onChange={(event) => update('memoryMb', String(event.value ?? ''))}
+                    onChange={(value) => update('memoryMb', value)}
                   />
-                  <Entry
+                  <EntryField
+                    label="CPU limit"
                     value={draft.cpus}
                     placeholder={'CPU limit (optional)'}
                     enabled={editable}
-                    onChange={(event) => update('cpus', String(event.value ?? ''))}
+                    onChange={(value) => update('cpus', value)}
                   />
-                  <Entry
+                  <EntryField
+                    label="PID limit"
                     value={draft.pidsLimit}
                     placeholder={'PID limit (optional)'}
                     enabled={editable}
-                    onChange={(event) => update('pidsLimit', String(event.value ?? ''))}
+                    onChange={(value) => update('pidsLimit', value)}
                   />
-                  <Entry
+                  <EntryField
+                    label="Initial network"
                     value={draft.network}
                     placeholder={'Initial network (optional)'}
                     enabled={editable}
-                    onChange={(event) => update('network', String(event.value ?? ''))}
+                    onChange={(value) => update('network', value)}
                   />
                   <MountEditor
                     value={draft.mounts}
@@ -758,25 +835,6 @@ export function ContainerCreate({
               </Column>
             </Expander>
           </CardContent>
-          <CardActions>
-            {blocked ? <Spinner /> : null}
-            <Button
-              label={created ? 'Retry start' : blocked ? 'Creating…' : 'Create and start'}
-              enabled={
-                !blocked &&
-                (created !== null ||
-                  (draft.image.trim().length > 0 &&
-                    draft.name.trim().length > 0 &&
-                    !configurationError))
-              }
-              onInvoke={createAndStart}
-            />
-          </CardActions>
-          {configurationError ? (
-            <Text label={configurationError} color={'danger'} wrap={true} />
-          ) : null}
-          {error ? <Text label={boundedMessage(error)} color={'danger'} wrap={true} /> : null}
-          {notice ? <Text label={notice} color={'positive'} wrap={true} /> : null}
         </Card>
       </Expander>
     </Column>

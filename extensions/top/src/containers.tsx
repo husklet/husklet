@@ -36,8 +36,15 @@ type ContainersProps = {
   resource: Resource<ContainerSummary>;
   containerDetails?: ContainerDetailsSource;
   onOpenExecution?: (id: string) => void | Promise<void>;
+  onOpenExtensions: () => void;
 };
-export function Containers({ api, resource, containerDetails, onOpenExecution }: ContainersProps) {
+export function Containers({
+  api,
+  resource,
+  containerDetails,
+  onOpenExecution,
+  onOpenExtensions,
+}: ContainersProps) {
   const localDetails = useMemo(() => new ContainerDetailsSource(), []);
   const detailsSource = containerDetails ?? localDetails;
   const [selected, setSelected] = useState<string | null>(null);
@@ -216,30 +223,25 @@ export function Containers({ api, resource, containerDetails, onOpenExecution }:
               </CardContent>
               <CardActions gap={1} align="start" justify="start" width="fill">
                 <Row gap={1} wrap justify="start">
-                  <Button
-                    label={
-                      selected === item.id
-                        ? inspection.state === 'loading'
-                          ? 'Reading details…'
-                          : inspection.state === 'error' && isAuthorityDenial(inspection.error)
-                            ? 'Access required'
+                  {selected === item.id &&
+                  inspection.state === 'error' &&
+                  isAuthorityDenial(inspection.error) ? null : (
+                    <Button
+                      label={
+                        selected === item.id
+                          ? inspection.state === 'loading'
+                            ? 'Reading details…'
                             : inspection.state === 'error'
                               ? 'Retry details'
                               : 'Hide details'
-                        : 'Details'
-                    }
-                    variant="filled"
-                    tone="accent"
-                    enabled={
-                      busy === '' &&
-                      !(
-                        selected === item.id &&
-                        inspection.state === 'error' &&
-                        isAuthorityDenial(inspection.error)
-                      )
-                    }
-                    onInvoke={() => toggleDetails(item)}
-                  />
+                          : 'Details'
+                      }
+                      variant="filled"
+                      tone="accent"
+                      enabled={busy === ''}
+                      onInvoke={() => toggleDetails(item)}
+                    />
+                  )}
                   {startable(item.state) ? (
                     <Button
                       label="Start"
@@ -266,6 +268,7 @@ export function Containers({ api, resource, containerDetails, onOpenExecution }:
                   inspection={inspection}
                   onRetry={() => inspect(item)}
                   onOpenExecution={onOpenExecution}
+                  onOpenExtensions={onOpenExtensions}
                 />
               ) : null}
             </Card>
