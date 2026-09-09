@@ -51,9 +51,9 @@ export { Extensions, acquisitionFailure, acquisitionLabel } from './extensions.j
 
 const { useCallback, useEffect, useRef, useState } = React;
 export const SIDEBAR_WIDTH_KEY = 'sidebar.width';
-export const SIDEBAR_WIDTH_MIN = 160;
-export const SIDEBAR_WIDTH_MAX = 320;
-export const SIDEBAR_WIDTH_DEFAULT = 176;
+export const SIDEBAR_WIDTH_MIN = 144;
+export const SIDEBAR_WIDTH_MAX = 240;
+export const SIDEBAR_WIDTH_DEFAULT = 160;
 export const SIDEBAR_SAVE_DELAY_MS = 250;
 
 export function boundedSidebarWidth(value: unknown): number | null {
@@ -284,7 +284,7 @@ export function Top({
         }
       }}
     >
-      <Row width={{ minimum: { chars: 21 }, maximum: { chars: 42 } }} height="fill">
+      <Row width={{ minimum: { chars: 18 }, maximum: { chars: 30 } }} height="fill">
         <Navigation section={section} onSelect={setSection} />
       </Row>
       {body}

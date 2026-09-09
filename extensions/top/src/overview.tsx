@@ -65,7 +65,7 @@ export function Navigation({
         <Column gap={1}>
           {groups.map((group) => (
             <Column key={group.label} gap={0}>
-              <Text label={group.label.toUpperCase()} color="text-dim" />
+              <Text label={group.label} color="text-dim" />
               <NavigationMenu gap={0}>
                 {group.sections.map((name) => (
                   <NavigationMenuItem
@@ -151,9 +151,9 @@ export function Overview({
   return (
     <Scroll grow width="fill" height="fill">
       <Column width="fill" pad={2} gap={2}>
-        <Heading label="Workspace overview" scale="title" />
-        <Text label="Current inventory and reported runtime attention." color="text-dim" wrap />
-        <Row gap={1} align="center">
+        <Row width="fill" gap={1} align="center" wrap>
+          <Heading label="Workspace overview" scale="title" />
+          <Spacer />
           {refreshing ? <Spinner /> : null}
           <Button
             label={refreshing ? 'Refreshing…' : 'Refresh all'}
@@ -161,6 +161,7 @@ export function Overview({
             onInvoke={refreshAll}
           />
         </Row>
+        <Text label="Current inventory and reported runtime attention." color="text-dim" wrap />
         <Row width="fill" gap={2} wrap>
           <Summary title="Containers" {...containersSummary} onOpen={() => onOpen('containers')} />
           <Summary
@@ -213,7 +214,7 @@ function Summary({
   onOpen: () => void;
 }) {
   return (
-    <Card grow={false} width={{ minimum: { chars: 18 } }} variant="outline">
+    <Card grow={false} width={{ minimum: { chars: 20 } }} variant="outline">
       <CardActionArea tooltip={`Open ${label}`} onInvoke={onOpen}>
         <CardContent gap={1} pad={1}>
           <Row gap={1} align="center" width="fill">

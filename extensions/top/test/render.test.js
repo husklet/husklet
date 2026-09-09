@@ -13,6 +13,9 @@ import {
   Volumes,
   Workspace,
   Top,
+  SIDEBAR_WIDTH_DEFAULT,
+  SIDEBAR_WIDTH_MAX,
+  SIDEBAR_WIDTH_MIN,
   SIDEBAR_SAVE_DELAY_MS,
   boundedSidebarWidth,
   persistSidebarWidth,
@@ -100,9 +103,12 @@ function chooseContainer(stage, id) {
 
 test('Top sidebar preference is narrowly bounded and retried with fresh CAS authority', async () => {
   assert.equal(SIDEBAR_SAVE_DELAY_MS, 250);
-  assert.equal(boundedSidebarWidth(159), 160);
-  assert.equal(boundedSidebarWidth(240), 240);
-  assert.equal(boundedSidebarWidth(321), 320);
+  assert.equal(SIDEBAR_WIDTH_MIN, 144);
+  assert.equal(SIDEBAR_WIDTH_DEFAULT, 160);
+  assert.equal(SIDEBAR_WIDTH_MAX, 240);
+  assert.equal(boundedSidebarWidth(143), 144);
+  assert.equal(boundedSidebarWidth(192), 192);
+  assert.equal(boundedSidebarWidth(241), 240);
   assert.equal(boundedSidebarWidth(1.5), null);
   const calls = [];
   let revision = 4;
@@ -117,10 +123,10 @@ test('Top sidebar preference is narrowly bounded and retried with fresh CAS auth
       return 6;
     },
   };
-  assert.equal(await persistSidebarWidth({ preferences }, 240), 6);
+  assert.equal(await persistSidebarWidth({ preferences }, 192), 6);
   assert.deepEqual(calls, [
-    [4, 'sidebar.width', { kind: 'number', value: 240 }],
-    [5, 'sidebar.width', { kind: 'number', value: 240 }],
+    [4, 'sidebar.width', { kind: 'number', value: 192 }],
+    [5, 'sidebar.width', { kind: 'number', value: 192 }],
   ]);
 });
 
@@ -201,7 +207,7 @@ test('Top presents workspace, extensions, and every resource navigation choice',
     (label) => taggedProperty(stageFromFrame(frame), label, 'NavigationMenuItem', 'Icon')?.Text,
   );
   assert.equal(new Set(icons).size, 10, 'every destination has a distinguishable icon');
-  for (const group of ['WORKSPACE', 'RUNTIME', 'RESOURCES', 'INTERFACE'])
+  for (const group of ['Workspace', 'Runtime', 'Resources', 'Interface'])
     assert.ok(labels.includes(group), group);
   assert.ok(
     labels.includes('0 enabled'),
@@ -313,7 +319,7 @@ test('Top sidebar divider reports and bounds its retained position', () => {
       .flatMap((frame) => frame.patches)
       .filter((patch) => patch.SetProp?.id === splitter && patch.SetProp.prop === 'Position')
       .at(-1)?.SetProp.value,
-    { Number: 176 },
+    { Number: 160 },
     'the default leaves daily-driver content room at the 520px launch width',
   );
   assert.ok(
@@ -329,7 +335,18 @@ test('Top sidebar divider reports and bounds its retained position', () => {
       .flatMap((frame) => frame.patches)
       .filter((patch) => patch.SetProp?.id === splitter && patch.SetProp.prop === 'Position')
       .at(-1).SetProp.value,
-    { Number: 320 },
+    { Number: 240 },
+  );
+  const sidebar = stage.frames
+    .flatMap((frame) => frame.patches)
+    .find((patch) => patch.Create?.tag === 'Row').Create.id;
+  assert.deepEqual(
+    stage.frames
+      .flatMap((frame) => frame.patches)
+      .filter((patch) => patch.SetProp?.id === sidebar && patch.SetProp.prop === 'Width')
+      .at(-1)?.SetProp.value,
+    { Bounds: { minimum: { Chars: 18 }, maximum: { Chars: 30 } } },
+    'the navigation width follows the compact splitter range instead of colliding with it',
   );
 });
 
@@ -374,7 +391,7 @@ test('a developer drag wins over a late stored sidebar width and is persisted', 
       trigger: 'Change',
       node: splitter,
       id: `${splitter}:Change`,
-      value: 240,
+      value: 208,
     }),
   );
   resolveRead({
@@ -388,8 +405,8 @@ test('a developer drag wins over a late stored sidebar width and is persisted', 
   const positions = stage.frames
     .flatMap((frame) => frame.patches)
     .filter((patch) => patch.SetProp?.id === splitter && patch.SetProp.prop === 'Position');
-  assert.deepEqual(positions.at(-1).SetProp.value, { Number: 240 });
-  assert.deepEqual(writes, [[7, 'sidebar.width', { kind: 'number', value: 240 }]]);
+  assert.deepEqual(positions.at(-1).SetProp.value, { Number: 208 });
+  assert.deepEqual(writes, [[7, 'sidebar.width', { kind: 'number', value: 208 }]]);
 });
 
 test('Top owns workspace settings and extension management in the same tab', async () => {
