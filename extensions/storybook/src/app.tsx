@@ -80,6 +80,7 @@ import { CheckboxWorkbench } from './checkbox.js';
 import { RadioWorkbench } from './radio.js';
 import { RadioGroupWorkbench } from './radio-group.js';
 import { FormControlWorkbench } from './form-control.js';
+import { SliderWorkbench } from './slider.js';
 
 const { useMemo, useRef, useState } = React;
 
@@ -218,6 +219,8 @@ export function Playground({
           <RadioGroupWorkbench />
         ) : selected === 'FormControl' ? (
           <FormControlWorkbench />
+        ) : selected === 'Slider' ? (
+          <SliderWorkbench />
         ) : (
           <Preview
             key={`preview-${selected}`}

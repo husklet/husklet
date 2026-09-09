@@ -26,6 +26,7 @@ mod unix {
         "Radio",
         "RadioGroup",
         "FormControl",
+        "Slider",
         "Extension acquisition",
         "Validated settings form",
         "Keyboard and semantic actions",
@@ -211,7 +212,15 @@ mod unix {
         let realized_window = gtk::Window::new();
         let narrow_story = matches!(
             story,
-            "Button" | "Entry" | "Select" | "Checkbox" | "Radio" | "RadioGroup" | "FormControl" | "DataTable"
+            "Button"
+                | "Entry"
+                | "Select"
+                | "Checkbox"
+                | "Radio"
+                | "RadioGroup"
+                | "FormControl"
+                | "Slider"
+                | "DataTable"
         );
         realized_window.set_default_size(if narrow_story { 600 } else { 1_200 }, 800);
         realized_window.set_child(Some(&root));
@@ -298,6 +307,17 @@ mod unix {
             assert!(entry.grab_focus(), "FormControl Entry accepts deterministic focus");
             settle_toolkit();
             let _ = surface.reports().drain();
+        }
+        if story == "Slider" {
+            let slider = find::<gtk::Scale>(&root, |scale| {
+                scale.tooltip_text().as_deref() == Some("Build cache allocation")
+            });
+            assert_eq!(slider.adjustment().lower(), 0.0);
+            assert_eq!(slider.adjustment().upper(), 100.0);
+            assert_eq!(slider.adjustment().step_increment(), 5.0);
+            assert_eq!(slider.value(), 40.0);
+            assert!(slider.grab_focus(), "Slider accepts deterministic keyboard focus");
+            settle_toolkit();
         }
         if story == "Switch" {
             let focus = find::<gtk::Switch>(&root, |switch| {
@@ -581,6 +601,15 @@ mod unix {
             let entry = find::<gtk::Entry>(&root, |entry| entry.tooltip_text().as_deref() == Some("Extension name"));
             assert!(entry.grab_focus(), "controlled FormControl restores child focus");
             capture_story(&realized_window, "FormControl focused");
+        }
+        if story == "Slider" {
+            settle_toolkit();
+            let slider = find::<gtk::Scale>(&root, |scale| {
+                scale.tooltip_text().as_deref() == Some("Build cache allocation")
+            });
+            assert_eq!(slider.value(), 45.0, "controlled Slider retains the emitted value");
+            assert!(slider.grab_focus(), "controlled Slider restores native focus");
+            capture_story(&realized_window, "Slider focused");
         }
         if story == "Extension acquisition" {
             assert!(
@@ -897,6 +926,12 @@ mod unix {
             "FormControl" => {
                 let entry = find::<gtk::Entry>(root, |entry| entry.tooltip_text().as_deref() == Some("Extension name"));
                 entry.set_text("rendered-form-control");
+            }
+            "Slider" => {
+                let slider = find::<gtk::Scale>(root, |scale| {
+                    scale.tooltip_text().as_deref() == Some("Build cache allocation")
+                });
+                slider.set_value(45.0);
             }
             "Select" => {
                 let choice =

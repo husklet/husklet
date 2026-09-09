@@ -56,6 +56,8 @@ fn controls(css: &mut String, theme: &Theme) {
          switch:disabled {{ opacity: .55; }}\n\
          scale trough {{ background: {line}; }}\n\
          scale highlight {{ background: {accent}; }}\n\
+         scale:focus slider, scale:focus-visible slider {{ outline: 2px solid {accent}; outline-offset: 2px; }}\n\
+         scale:disabled {{ opacity: .55; }}\n\
          progressbar trough {{ background: {line}; }}\n\
          progressbar progress {{ background: {accent}; }}\n\
          checkbutton check {{ background: {ground}; border: 1px solid {line}; }}\n\
@@ -386,6 +388,10 @@ mod tests {
         assert!(css.contains(".hl-select:focus-within { border-color: #559df7; box-shadow: 0 0 0 1px #559df7;"));
         assert!(css.contains(".hl-select:disabled, .hl-select button:disabled { border-color: #87909f;"));
         assert!(css.contains("switch:disabled { opacity: .55;"));
+        assert!(css.contains(
+            "scale:focus slider, scale:focus-visible slider { outline: 2px solid #559df7; outline-offset: 2px;"
+        ));
+        assert!(css.contains("scale:disabled { opacity: .55;"));
         assert!(css.contains(
             "checkbutton:focus, checkbutton:focus-visible { outline: 2px solid #559df7; outline-offset: 2px;"
         ));
