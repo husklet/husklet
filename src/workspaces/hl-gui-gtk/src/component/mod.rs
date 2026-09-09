@@ -11,6 +11,7 @@ pub(crate) mod axis;
 pub(crate) mod button;
 pub(crate) mod card;
 pub(crate) mod choice;
+pub(crate) mod color;
 pub(crate) mod content;
 pub(crate) mod dialog;
 pub(crate) mod drawer;

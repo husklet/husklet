@@ -682,8 +682,8 @@ fn shown(value: &gtk::glib::Value) -> String {
 /// property of its own: what a view's buffer holds, and where a control's
 /// adjustment stands.
 fn held(widget: &gtk::Widget) -> String {
-    if let Some(picker) = widget.downcast_ref::<gtk::ColorDialogButton>() {
-        return format!("color {}", color_text(&picker.rgba()));
+    if widget.find_property("color").is_some() {
+        return format!("color {}", widget.property::<String>("color"));
     }
     if let Some(view) = widget.downcast_ref::<gtk::TextView>() {
         let buffer = view.buffer();
@@ -701,15 +701,6 @@ fn held(widget: &gtk::Widget) -> String {
         adjustment.upper(),
         adjustment.value(),
         adjustment.step_increment()
-    )
-}
-
-fn color_text(color: &gtk::gdk::RGBA) -> String {
-    format!(
-        "#{:02x}{:02x}{:02x}",
-        (color.red().clamp(0.0, 1.0) * 255.0).round() as u8,
-        (color.green().clamp(0.0, 1.0) * 255.0).round() as u8,
-        (color.blue().clamp(0.0, 1.0) * 255.0).round() as u8,
     )
 }
 
@@ -953,8 +944,8 @@ fn honoured(widget: &gtk::Widget, aspect: Aspect) -> bool {
         Aspect::Date => dated(widget),
         Aspect::Time => timed(widget),
         Aspect::ColorValue => widget
-            .downcast_ref::<gtk::ColorDialogButton>()
-            .is_some_and(|picker| color_text(&picker.rgba()) == "#336699"),
+            .find_property("color")
+            .is_some_and(|_| widget.property::<String>("color") == "#336699"),
     }
 }
 

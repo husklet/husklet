@@ -392,12 +392,12 @@ fn splitter(widget: &gtk::Widget, node: NodeId, slot: &Slot, reports: &Reports) 
 }
 
 fn color(widget: &gtk::Widget, node: NodeId, slot: &Slot, reports: &Reports) -> bool {
-    let Some(picker) = widget.downcast_ref::<gtk::ColorDialogButton>() else {
+    let Some(picker) = widget.downcast_ref::<crate::component::color::ColorChoice>() else {
         return false;
     };
     let reports = reports.clone();
     let slot = slot.clone();
-    picker.connect_rgba_notify(move |picker| {
+    picker.connect_notify_local(Some("color"), move |picker, _| {
         identified(&reports, &slot, |id| Event::Change {
             node,
             id,

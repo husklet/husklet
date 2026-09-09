@@ -702,7 +702,15 @@ impl<'a> Tabs<'a> {
     pub(crate) fn overview(&self) {
         let tw = self.window;
         let dash = Overview::new(&tw.ws, tw.overview_page).within(tw).view();
-        self.add(&tw.ws.name, Some("◧"), &dash, false);
+        let viewport = gtk::ScrolledWindow::builder()
+            .hscrollbar_policy(gtk::PolicyType::Automatic)
+            .vscrollbar_policy(gtk::PolicyType::Never)
+            .hexpand(true)
+            .vexpand(true)
+            .child(&dash)
+            .build();
+        viewport.set_propagate_natural_width(false);
+        self.add(&tw.ws.name, Some("◧"), &viewport, false);
     }
 
     /// Opens a shell tab and hands back its identity.

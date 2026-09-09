@@ -287,6 +287,10 @@ fn worked(widget: &gtk::Widget, trigger: Trigger) {
         return;
     }
     if trigger == Trigger::Change {
+        if widget.has_css_class("hl-colorpicker") {
+            widget.set_property("color", "#336699");
+            return;
+        }
         if let Some(choice) = widget.downcast_ref::<gtk::ToggleButton>() {
             choice_option(choice, 1).emit_clicked();
             return;
@@ -402,8 +406,8 @@ fn valued(widget: &gtk::Widget) {
         splitter.set_position(splitter.position().saturating_add(17));
         return;
     }
-    if let Some(picker) = widget.downcast_ref::<gtk::ColorDialogButton>() {
-        picker.set_rgba(&gtk::gdk::RGBA::new(0.2, 0.4, 0.6, 1.0));
+    if widget.has_css_class("hl-colorpicker") {
+        widget.set_property("color", "#336699");
         return;
     }
     if let Some(menu) = widget.downcast_ref::<gtk::ToggleButton>() {

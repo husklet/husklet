@@ -30,14 +30,18 @@ pub(crate) fn widget(tag: Tag) -> gtk::Widget {
         Tag::DatePicker => gtk::Calendar::new().upcast(),
         Tag::TimePicker => clock().upcast(),
         // ColorPicker is the last field tag routed here.
-        _ => gtk::ColorDialogButton::new(Some(gtk::ColorDialog::new())).upcast(),
+        _ => super::color::widget().upcast(),
     }
 }
 
 pub(crate) fn set_color(widget: &gtk::Widget, value: &str) -> bool {
-    let Some(picker) = widget.downcast_ref::<gtk::ColorDialogButton>() else { return false };
-    let Ok(color) = gtk::gdk::RGBA::parse(value) else { return true };
-    picker.set_rgba(&color);
+    let Some(picker) = widget.downcast_ref::<super::color::ColorChoice>() else {
+        return false;
+    };
+    let Ok(color) = gtk::gdk::RGBA::parse(value) else {
+        return true;
+    };
+    picker.set_rgba(color);
     true
 }
 
