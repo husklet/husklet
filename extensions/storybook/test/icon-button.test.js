@@ -37,4 +37,10 @@ test('IconButton owns a focused document with square semantic sizes and accessib
     0,
     'Button examples belong on the Button page',
   );
+  const cellLabels = frame.patches
+    .filter((patch) => patch.SetProp?.prop === 'Label')
+    .map((patch) => patch.SetProp.value?.Text);
+  for (const heading of ['Property', 'Type', 'Default', 'Description']) {
+    assert(cellLabels.includes(heading), `IconButton API is missing ${heading}`);
+  }
 });

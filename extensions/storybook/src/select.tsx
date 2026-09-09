@@ -49,6 +49,12 @@ export function SelectWorkbench() {
           />
         </FieldSpecimen>
       </DocumentationSection>
+      <DocumentationSection title="API">
+        <ApiReference
+          example={`<Select value={shell} choices={shells} onChange={setShell} />`}
+          rows={rows('Select')}
+        />
+      </DocumentationSection>
       <DocumentationSection title="Widths">
         <Column gap={2}>
           <FieldSpecimen label="Compact · 18ch" width={{ chars: 18 }}>
@@ -105,12 +111,6 @@ export function SelectWorkbench() {
           </FormControlLabel>
         </SpecimenGrid>
       </Expander>
-      <DocumentationSection title="API">
-        <ApiReference
-          example={`<Select value={shell} choices={shells} onChange={setShell} />`}
-          rows={rows('Select')}
-        />
-      </DocumentationSection>
     </ComponentDocument>
   );
 }

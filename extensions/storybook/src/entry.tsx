@@ -47,6 +47,12 @@ export function EntryWorkbench() {
           />
         </FieldSpecimen>
       </DocumentationSection>
+      <DocumentationSection title="API">
+        <ApiReference
+          example={`<Entry value={name} placeholder="Extension name" onChange={updateName} />`}
+          rows={rows('Entry')}
+        />
+      </DocumentationSection>
       <DocumentationSection title="Widths">
         <Column gap={2}>
           <FieldSpecimen label="Compact · 18ch" width={{ chars: 18 }}>
@@ -132,12 +138,6 @@ export function EntryWorkbench() {
           </SpecimenGrid>
         </Column>
       </Expander>
-      <DocumentationSection title="API">
-        <ApiReference
-          example={`<Entry value={name} placeholder="Extension name" onChange={updateName} />`}
-          rows={rows('Entry')}
-        />
-      </DocumentationSection>
     </ComponentDocument>
   );
 }

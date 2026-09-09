@@ -45,11 +45,11 @@ test('Button documents every semantic size, variant, and tone as live controls',
   );
 });
 
-test('Button keeps its playground secondary to the component documentation', () => {
+test('Button puts its API beside the overview and keeps the playground secondary', () => {
   const frame = host().render(h(ButtonWorkbench));
   const headings = propsFor(frame.patches, 'Heading').map((props) => props.Label?.Text);
   const expanders = propsFor(frame.patches, 'Expander').map((props) => props.Label?.Text);
 
-  assert.deepEqual(headings.slice(0, 3), ['Button', 'Overview', 'Basic']);
+  assert.deepEqual(headings.slice(0, 3), ['Button', 'Overview', 'API']);
   assert(expanders.includes('Playground'));
 });

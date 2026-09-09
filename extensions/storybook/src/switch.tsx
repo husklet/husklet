@@ -44,6 +44,12 @@ export function SwitchWorkbench() {
           <Text label={event} color="text-dim" />
         </Column>
       </DocumentationSection>
+      <DocumentationSection title="API">
+        <ApiReference
+          example={`<Switch checked={restorePanes} onToggle={setRestorePanes} />`}
+          rows={rows('Switch')}
+        />
+      </DocumentationSection>
       <DocumentationSection title="States">
         <SpecimenGrid>
           <FormControlLabel label="Restore panes · on" gap={2}>
@@ -91,12 +97,6 @@ export function SwitchWorkbench() {
           </FormControlLabel>
         </Column>
       </Expander>
-      <DocumentationSection title="API">
-        <ApiReference
-          example={`<Switch checked={restorePanes} onToggle={setRestorePanes} />`}
-          rows={rows('Switch')}
-        />
-      </DocumentationSection>
     </ComponentDocument>
   );
 }

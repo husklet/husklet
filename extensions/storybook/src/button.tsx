@@ -1,7 +1,6 @@
 import React from 'react';
 import {
   Button,
-  Code,
   Column,
   Entry,
   Expander,
@@ -13,6 +12,12 @@ import {
   Switch,
   Text,
 } from '@husklet/react';
+import {
+  ApiReference,
+  ComponentDocument,
+  DocumentationSection,
+  SpecimenGrid,
+} from './component-document.js';
 import { rows } from './editors.js';
 
 type Size = 'small' | 'medium' | 'large';
@@ -27,13 +32,10 @@ export function ButtonWorkbench() {
   const [enabled, setEnabled] = React.useState(true);
   const [event, setEvent] = React.useState('No interaction yet.');
   return (
-    <ScrollDocument>
-      <Heading label="Button" scale="display" />
-      <Text
-        label="Buttons start an immediate action. Use semantic size, emphasis, and tone; keep labels short and specific."
-        color="text-dim"
-        wrap
-      />
+    <ComponentDocument
+      name="Button"
+      summary="Buttons start an immediate action. Use semantic size, emphasis, and tone; keep labels short and specific."
+    >
       <SectionBlock title="Overview">
         <Row gap={2} wrap>
           <Button
@@ -50,24 +52,32 @@ export function ButtonWorkbench() {
           <InlineMessage label={event} tone="neutral" />
         </Row>
       </SectionBlock>
-      <SectionBlock title="Basic">
-        <Row gap={2} wrap>
-          <Button label="Save changes" variant="filled" tone="accent" />
-          <Button label="Cancel" variant="plain" tone="neutral" />
-        </Row>
-        <Text
-          label="Pair one clear primary action with a lower-emphasis alternative."
-          color="text-dim"
-          wrap
+      <DocumentationSection title="API">
+        <ApiReference
+          example={`<Button label="${label}" size="${size}" variant="${variant}" tone="${tone}" onInvoke={runTask} />`}
+          rows={rows('Button')}
         />
-      </SectionBlock>
-      <SectionBlock title="Variants">
-        <Row gap={2} wrap>
-          {(['filled', 'outline', 'ghost', 'plain'] as const).map((value) => (
-            <Button key={value} label={title(value)} variant={value} tone="accent" />
-          ))}
-        </Row>
-      </SectionBlock>
+      </DocumentationSection>
+      <SpecimenGrid>
+        <SectionBlock title="Basic">
+          <Row gap={2} wrap>
+            <Button label="Save changes" variant="filled" tone="accent" />
+            <Button label="Cancel" variant="plain" tone="neutral" />
+          </Row>
+          <Text
+            label="Pair one clear primary action with a lower-emphasis alternative."
+            color="text-dim"
+            wrap
+          />
+        </SectionBlock>
+        <SectionBlock title="Variants">
+          <Row gap={2} wrap>
+            {(['filled', 'outline', 'ghost', 'plain'] as const).map((value) => (
+              <Button key={value} label={title(value)} variant={value} tone="accent" />
+            ))}
+          </Row>
+        </SectionBlock>
+      </SpecimenGrid>
       <SectionBlock title="Sizes">
         <Row gap={2}>
           <Text label="Size" width={{ chars: 8 }} color="text-dim" />
@@ -92,22 +102,24 @@ export function ButtonWorkbench() {
         ))}
         <Text label="28px · 36px · 44px control heights" color="text-dim" />
       </SectionBlock>
-      <SectionBlock title="Icons">
-        <Row gap={2} wrap>
-          <Button label="Add item" icon="list-add-symbolic" variant="filled" tone="accent" />
-          <Button label="Delete" icon="user-trash-symbolic" variant="outline" tone="danger" />
-          <Button label="Refresh" icon="view-refresh-symbolic" variant="ghost" />
-        </Row>
-      </SectionBlock>
-      <SectionBlock title="Tones">
-        <Row gap={2} wrap>
-          <Button label="Neutral" variant="filled" tone="neutral" />
-          <Button label="Accent" variant="filled" tone="accent" />
-          <Button label="Danger" variant="filled" tone="danger" />
-          <Button label="Positive" variant="filled" tone="positive" />
-          <Button label="Warning" variant="filled" tone="warning" />
-        </Row>
-      </SectionBlock>
+      <SpecimenGrid>
+        <SectionBlock title="Icons">
+          <Row gap={2} wrap>
+            <Button label="Add item" icon="list-add-symbolic" variant="filled" tone="accent" />
+            <Button label="Delete" icon="user-trash-symbolic" variant="outline" tone="danger" />
+            <Button label="Refresh" icon="view-refresh-symbolic" variant="ghost" />
+          </Row>
+        </SectionBlock>
+        <SectionBlock title="Tones">
+          <Row gap={2} wrap>
+            <Button label="Neutral" variant="filled" tone="neutral" />
+            <Button label="Accent" variant="filled" tone="accent" />
+            <Button label="Danger" variant="filled" tone="danger" />
+            <Button label="Positive" variant="filled" tone="positive" />
+            <Button label="Warning" variant="filled" tone="warning" />
+          </Row>
+        </SectionBlock>
+      </SpecimenGrid>
       <SectionBlock title="States">
         <Row gap={2} wrap>
           <Button label="Normal" variant="filled" tone="accent" />
@@ -162,26 +174,7 @@ export function ButtonWorkbench() {
           </Row>
         </Column>
       </Expander>
-      <SectionBlock title="API">
-        <Code
-          value={`<Button label="${label}" size="${size}" variant="${variant}" tone="${tone}" onInvoke={runTask} />`}
-          wrap
-        />
-        <Column gap={1}>
-          {rows('Button').map((row) => (
-            <Text key={row.name} label={`${row.name} · ${row.note}`} color="text-dim" wrap />
-          ))}
-        </Column>
-      </SectionBlock>
-    </ScrollDocument>
-  );
-}
-
-function ScrollDocument({ children }: { children: React.ReactNode }) {
-  return (
-    <Column width="fill" pad={4} gap={4}>
-      {children}
-    </Column>
+    </ComponentDocument>
   );
 }
 
