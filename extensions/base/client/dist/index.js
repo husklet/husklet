@@ -77,6 +77,24 @@ function outputPoll(ms, signal) {
         signal?.addEventListener('abort', abort, { once: true });
     });
 }
+function outputStep(step, signal) {
+    requireOutputActive(signal);
+    return new Promise((resolve, reject) => {
+        let settled = false;
+        const finish = (complete, value) => {
+            if (settled)
+                return;
+            settled = true;
+            signal?.removeEventListener('abort', abort);
+            complete(value);
+        };
+        const abort = () => finish(reject, outputAbort(signal));
+        signal?.addEventListener('abort', abort, { once: true });
+        Promise.resolve()
+            .then(step)
+            .then((value) => finish(resolve, value), (error) => finish(reject, error));
+    });
+}
 /** A terminal authority succeeded, but its bounded observation could not be completed. */
 export class TerminalOperationError extends Error {
     operation;
@@ -882,7 +900,7 @@ export function workspace(session, { signal } = {}) {
                 try {
                     requireOutputActive(streaming.signal);
                     if (onStarted)
-                        await onStarted(executionId);
+                        await outputStep(() => onStarted(executionId), streaming.signal);
                     const consumeOutput = async () => {
                         try {
                             for await (const page of api.containers.executionOutputPages(executionId, {
@@ -890,7 +908,7 @@ export function workspace(session, { signal } = {}) {
                                 pollIntervalMs,
                                 signal: streaming.signal,
                             })) {
-                                await onPage(page);
+                                await outputStep(() => onPage(page), streaming.signal);
                             }
                         }
                         catch (cause) {

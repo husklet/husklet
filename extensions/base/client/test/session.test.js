@@ -1506,6 +1506,98 @@ test('real Unix output pages apply backpressure, cancel locally, and fail closed
   }
 });
 
+test('real Unix streaming abort interrupts a stalled consumer and cancels before another output page', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-stream-abort-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const containerId = 'c'.repeat(64);
+  const executionId = 'e'.repeat(32);
+  const calls = [];
+  const connections = new Set();
+  const server = net.createServer((socket) => {
+    connections.add(socket);
+    socket.on('close', () => connections.delete(socket));
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.kind !== KIND.request || frame.channel !== 2) continue;
+        calls.push(frame.payload.call);
+        const payload =
+          frame.payload.call === 'container_exec'
+            ? { reply: 'identity', with: executionId }
+            : frame.payload.call === 'execution_output'
+              ? {
+                  reply: 'execution_output',
+                  with: {
+                    entries: [
+                      { sequence: 1, timestamp_ms: 1, stream: 'stdout', bytes: [111, 107] },
+                    ],
+                    next: 1,
+                    more: true,
+                    eof: false,
+                    gap: false,
+                  },
+                }
+              : frame.payload.call === 'execution_cancel'
+                ? { reply: 'done' }
+                : {
+                    reply: 'workspace',
+                    with: { name: 'tests', image: 'alpine', architecture: 'amd64' },
+                  };
+        socket.write(encode({ channel: 2, kind: KIND.response, payload }));
+      }
+    });
+    socket.write(
+      encode({
+        channel: CONTROL,
+        kind: KIND.open,
+        payload: {
+          protocol: 1,
+          peer: 'fixture',
+          granted: ['containers:execute', 'containers:read', 'workspaces:read'],
+        },
+      }),
+    );
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    const host = workspace(session);
+    const controller = new AbortController();
+    let entered;
+    const consuming = new Promise((resolve) => (entered = resolve));
+    const running = host.containers.execStreaming(
+      containerId,
+      4,
+      { command: ['npm', 'test'], signal: controller.signal },
+      async () => {
+        entered();
+        await new Promise(() => {});
+      },
+    );
+    await consuming;
+    controller.abort('source changed');
+    await assert.rejects(running, (error) => {
+      assert(error instanceof ExecutionOperationError);
+      assert.equal(error.executionId, executionId);
+      assert.equal(error.phase, 'output');
+      assert.equal(error.cause.name, 'AbortError');
+      return true;
+    });
+    assert.deepEqual(calls.slice(0, 3), ['container_exec', 'execution_output', 'execution_cancel']);
+    assert.equal(
+      calls.filter((call) => call === 'execution_output').length,
+      1,
+      'abort cannot prefetch behind stalled consumer backpressure',
+    );
+    assert.equal((await host.info()).name, 'tests');
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('real Unix output iteration rejects a stalled continuation without looping or poisoning the session', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-output-stall-'));
   const socketPath = path.join(directory, 'host.sock');
