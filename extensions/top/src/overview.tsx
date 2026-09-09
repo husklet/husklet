@@ -148,10 +148,6 @@ export function Overview({
     extensions,
     (records) => `${records.filter((extension) => extension.enabled).length} enabled`,
   );
-  const processesSummary = resourceSummary(
-    containers,
-    (records) => `${records.filter((item) => item.state === 'running').length} running`,
-  );
   return (
     <Scroll grow width="fill" height="fill">
       <Column width="fill" pad={4} gap={3}>
@@ -173,8 +169,8 @@ export function Overview({
           <Summary title="Containers" {...containersSummary} onOpen={() => onOpen('containers')} />
           <Summary
             title="Processes"
-            {...processesSummary}
-            value={!containers.loading && !containers.error ? 'On demand' : processesSummary.value}
+            value="Inspect"
+            detail="Per-container snapshots"
             onOpen={() => onOpen('processes')}
           />
           <Summary title="Executions" {...executionsSummary} onOpen={() => onOpen('executions')} />

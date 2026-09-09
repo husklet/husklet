@@ -214,7 +214,8 @@ test('Top presents workspace, extensions, and every resource navigation choice',
     labels.includes('0 enabled'),
     'the overview exposes extension inventory alongside the other workspace resources',
   );
-  assert.ok(labels.includes('On demand'), 'process snapshots remain concise at narrow widths');
+  assert.ok(labels.includes('Inspect'), 'process navigation does not fabricate an inventory count');
+  assert.ok(labels.includes('Per-container snapshots'));
   assert.ok(labels.includes('Local storage'), 'volume summaries remain compact');
   assert.ok(labels.includes('Workspace network'), 'network summaries remain compact');
   assert.equal(
