@@ -29,17 +29,15 @@ test('API references expose public types and defaults and collapse inherited pro
     ),
     'API table has no public string type',
   );
-  assert.ok(
-    created(frame.patches, 'Expander').some((id) =>
-      frame.patches.some(
-        (patch) =>
-          patch.SetProp?.id === id &&
-          patch.SetProp.prop === 'Label' &&
-          String(patch.SetProp.value?.Text).startsWith('Inherited layout and automation props'),
-      ),
-    ),
-    'inherited props are not collapsed separately',
+  const inheritedLabels = created(frame.patches, 'Expander').flatMap((id) =>
+    frame.patches
+      .filter((patch) => patch.SetProp?.id === id && patch.SetProp.prop === 'Label')
+      .map((patch) => String(patch.SetProp.value?.Text)),
   );
+  assert(
+    inheritedLabels.some((label) => label.startsWith('Inherited behavior and visibility props')),
+  );
+  assert(inheritedLabels.some((label) => label.startsWith('Inherited layout props')));
 });
 
 function labelled(patches, tag, label) {

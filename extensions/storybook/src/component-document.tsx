@@ -18,10 +18,7 @@ import {
 } from '@husklet/react';
 import type { ControlRow } from './editors.js';
 
-const INHERITED = new Set([
-  'destructive',
-  'visible',
-  'tooltip',
+const INHERITED_LAYOUT = new Set([
   'width',
   'height',
   'pad',
@@ -31,6 +28,7 @@ const INHERITED = new Set([
   'span',
   'rowSpan',
 ]);
+const INHERITED_BEHAVIOR = new Set(['destructive', 'visible', 'tooltip']);
 
 export function ComponentDocument({
   name,
@@ -94,18 +92,26 @@ export function SpecimenGrid({ children }: { children: React.ReactNode }) {
 }
 
 export function ApiReference({ example, rows }: { example: string; rows: ControlRow[] }) {
-  const own = rows.filter((row) => !INHERITED.has(row.name));
-  const inherited = rows.filter((row) => INHERITED.has(row.name));
+  const inheritedLayout = rows.filter((row) => INHERITED_LAYOUT.has(row.name));
+  const inheritedBehavior = rows.filter((row) => INHERITED_BEHAVIOR.has(row.name));
+  const own = rows.filter(
+    (row) => !INHERITED_LAYOUT.has(row.name) && !INHERITED_BEHAVIOR.has(row.name),
+  );
   return (
     <Column gap={3} width="fill">
       <Code value={example} wrap />
       <ApiTable rows={own} />
-      {inherited.length > 0 ? (
+      {inheritedBehavior.length > 0 ? (
         <Expander
-          label={`Inherited layout and automation props · ${inherited.length}`}
+          label={`Inherited behavior and visibility props · ${inheritedBehavior.length}`}
           width="fill"
         >
-          <ApiTable rows={inherited} />
+          <ApiTable rows={inheritedBehavior} />
+        </Expander>
+      ) : null}
+      {inheritedLayout.length > 0 ? (
+        <Expander label={`Inherited layout props · ${inheritedLayout.length}`} width="fill">
+          <ApiTable rows={inheritedLayout} />
         </Expander>
       ) : null}
     </Column>
