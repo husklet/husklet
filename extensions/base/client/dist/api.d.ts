@@ -941,6 +941,8 @@ export interface WorkspaceApi {
             credentials?: [environment: string, key: string][];
             user?: string;
             workingDirectory?: string;
+            /** Bounded chunks written serially to stdin and half-closed before output is consumed. */
+            input?: Iterable<string | Iterable<number>> | AsyncIterable<string | Iterable<number>>;
             pageLimit?: number;
             pollIntervalMs?: number;
             signal?: AbortSignal;
@@ -960,6 +962,8 @@ export interface WorkspaceApi {
             credentials?: [environment: string, key: string][];
             user?: string;
             workingDirectory?: string;
+            /** Bounded chunks written serially to stdin and half-closed before output is consumed. */
+            input?: Iterable<string | Iterable<number>> | AsyncIterable<string | Iterable<number>>;
             maxBytes: number;
             pageLimit?: number;
             pollIntervalMs?: number;
@@ -982,6 +986,8 @@ export interface WorkspaceApi {
             credentials?: [environment: string, key: string][];
             user?: string;
             workingDirectory?: string;
+            /** Bounded chunks written serially to stdin and half-closed before output is consumed. */
+            input?: Iterable<string | Iterable<number>> | AsyncIterable<string | Iterable<number>>;
             maxLineBytes: number;
             pageLimit?: number;
             pollIntervalMs?: number;
@@ -1004,6 +1010,8 @@ export interface WorkspaceApi {
             credentials?: [environment: string, key: string][];
             user?: string;
             workingDirectory?: string;
+            /** Bounded chunks written serially to stdin and half-closed before output is consumed. */
+            input?: Iterable<string | Iterable<number>> | AsyncIterable<string | Iterable<number>>;
             maxLineBytes: number;
             pageLimit?: number;
             pollIntervalMs?: number;

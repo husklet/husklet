@@ -1746,6 +1746,47 @@ test('pre-aborted streaming execution never starts a container command', async (
   stage.server.close();
 });
 
+test('streaming execution owns stdin failure and cancellation before reading output', async () => {
+  const stage = await pair();
+  await frames(stage.host)();
+  const api = workspace(stage.session);
+  const calls = [];
+  api.containers.exec = async (_id, _generation, options) => {
+    calls.push(['exec', options.stdin]);
+    return 'e'.repeat(32);
+  };
+  api.containers.pipeExecutionStdin = async (_id, source, options) => {
+    calls.push(['input', [...source], options.close]);
+    throw new Error('stdin producer failed');
+  };
+  api.containers.executionOutputPages = async function* () {
+    calls.push(['output']);
+  };
+  api.containers.cancelExecution = async (...arguments_) => {
+    calls.push(['cancel', ...arguments_]);
+  };
+  await assert.rejects(
+    api.containers.execStreaming(
+      'c'.repeat(64),
+      7,
+      { command: ['psql'], input: ['select 1;\n'] },
+      () => {},
+    ),
+    (error) =>
+      error instanceof ExecutionOperationError &&
+      error.phase === 'input' &&
+      error.executionId === 'e'.repeat(32),
+  );
+  assert.deepEqual(calls, [
+    ['exec', true],
+    ['input', ['select 1;\n'], true],
+    ['cancel', 'e'.repeat(32), { signal: 'SIGTERM', timeoutMs: 1_000 }],
+  ]);
+  stage.session.close();
+  stage.host.destroy();
+  stage.server.close();
+});
+
 test('text execution preserves split UTF-8 and cancels aggregate overflow', async () => {
   const stage = await pair();
   await frames(stage.host)();

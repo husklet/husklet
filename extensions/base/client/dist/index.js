@@ -748,7 +748,7 @@ export function workspace(session, { signal } = {}) {
                     throw new ExecutionOperationError(executionId, phase, cause, execution);
                 }
             },
-            execStreaming: async (id, generation, { command, environment = [], credentials, user, workingDirectory, pageLimit = 16, pollIntervalMs = 25, signal, cancelSignal = 'SIGTERM', cancelTimeoutMs = 1_000, onStarted, }, onPage) => {
+            execStreaming: async (id, generation, { command, environment = [], credentials, user, workingDirectory, input, pageLimit = 16, pollIntervalMs = 25, signal, cancelSignal = 'SIGTERM', cancelTimeoutMs = 1_000, onStarted, }, onPage) => {
                 if (typeof onPage !== 'function')
                     throw new TypeError('streaming execution requires an output callback');
                 if (onStarted !== undefined && typeof onStarted !== 'function')
@@ -761,17 +761,27 @@ export function workspace(session, { signal } = {}) {
                         credentials,
                         user,
                         workingDirectory,
+                        stdin: input !== undefined,
                     })
                     : await api.containers.exec(id, generation, {
                         command,
                         environment,
                         user,
                         workingDirectory,
+                        stdin: input !== undefined,
                     });
                 let phase = 'output';
                 try {
                     if (onStarted)
                         await onStarted(executionId);
+                    if (input !== undefined) {
+                        phase = 'input';
+                        await api.containers.pipeExecutionStdin(executionId, input, {
+                            signal,
+                            close: true,
+                        });
+                        phase = 'output';
+                    }
                     for await (const page of api.containers.executionOutputPages(executionId, {
                         limit: pageLimit,
                         pollIntervalMs,

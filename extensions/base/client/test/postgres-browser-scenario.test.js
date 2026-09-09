@@ -93,17 +93,15 @@ test('Postgres browser streams credential-backed rows over real Unix framing', a
         writeFragmented({ channel: frame.channel, kind: KIND.response, payload });
       }
     });
-    writeFragmented(
-      {
-        channel: CONTROL,
-        kind: KIND.open,
-        payload: {
-          protocol: 1,
-          peer: 'postgres-fixture',
-          granted: ['containers:read', 'containers:execute', 'credentials:read'],
-        },
+    writeFragmented({
+      channel: CONTROL,
+      kind: KIND.open,
+      payload: {
+        protocol: 1,
+        peer: 'postgres-fixture',
+        granted: ['containers:read', 'containers:execute', 'containers:input', 'credentials:read'],
       },
-    );
+    });
   });
   await new Promise((resolve) => server.listen(socketPath, resolve));
   try {
@@ -117,6 +115,7 @@ test('Postgres browser streams credential-backed rows over real Unix framing', a
         command: ['psql', '--command', 'select 1'],
         environment: [['PGDATABASE', 'app']],
         credentials: [['PGPASSWORD', 'postgres.password']],
+        input: ['select row_to_json(query) from (select 1 as id) query;\n'],
         pageLimit: 1,
         maxLineBytes: 1024,
         onStarted: async (id) => {
@@ -144,9 +143,18 @@ test('Postgres browser streams credential-backed rows over real Unix framing', a
           credentials: [['PGPASSWORD', 'postgres.password']],
           user: null,
           working_directory: null,
+          stdin: true,
         },
       },
       { call: 'execution_inspect', with: { id: executionId } },
+      {
+        call: 'execution_write',
+        with: {
+          id: executionId,
+          contents: [...Buffer.from('select row_to_json(query) from (select 1 as id) query;\n')],
+        },
+      },
+      { call: 'execution_close_input', with: { id: executionId } },
       { call: 'execution_output', with: { id: executionId, after: 0, limit: 1 } },
       { call: 'execution_output', with: { id: executionId, after: 1, limit: 1 } },
       { call: 'execution_inspect', with: { id: executionId } },

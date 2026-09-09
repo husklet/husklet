@@ -1039,6 +1039,7 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
           credentials,
           user,
           workingDirectory,
+          input,
           pageLimit = 16,
           pollIntervalMs = 25,
           signal,
@@ -1060,16 +1061,26 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
               credentials,
               user,
               workingDirectory,
+              stdin: input !== undefined,
             })
           : await api.containers.exec(id, generation, {
               command,
               environment,
               user,
               workingDirectory,
+              stdin: input !== undefined,
             });
         let phase = 'output';
         try {
           if (onStarted) await onStarted(executionId);
+          if (input !== undefined) {
+            phase = 'input';
+            await api.containers.pipeExecutionStdin(executionId, input, {
+              signal,
+              close: true,
+            });
+            phase = 'output';
+          }
           for await (const page of api.containers.executionOutputPages(executionId, {
             limit: pageLimit,
             pollIntervalMs,

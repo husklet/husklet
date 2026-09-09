@@ -40,58 +40,41 @@ try {
   let rows = 0;
   const preview: unknown[] = [];
   try {
-    executionId = await containers.execWithCredentials(container.id, container.generation, {
-      command: [
-        'psql',
-        '--no-psqlrc',
-        '--quiet',
-        '--tuples-only',
-        '--no-align',
-        '--dbname',
-        configuration.database,
-        '--file',
-        '-',
-      ],
-      credentials: [['PGPASSWORD', configuration.passwordCredential]],
-      stdin: true,
-    });
-    await containers.pipeExecutionStdin(
-      executionId,
-      [`SELECT row_to_json(husklet_row)::text FROM (${query}) AS husklet_row;\n`],
-      { signal: abort.signal },
+    const result = await containers.execJsonLines(
+      container.id,
+      container.generation,
+      {
+        command: [
+          'psql',
+          '--no-psqlrc',
+          '--quiet',
+          '--tuples-only',
+          '--no-align',
+          '--dbname',
+          configuration.database,
+          '--file',
+          '-',
+        ],
+        credentials: [['PGPASSWORD', configuration.passwordCredential]],
+        input: [`SELECT row_to_json(husklet_row)::text FROM (${query}) AS husklet_row;\n`],
+        maxLineBytes: 1024 * 1024,
+        pageLimit: 16,
+        signal: abort.signal,
+        onStarted: (id) => {
+          executionId = id;
+        },
+      },
+      (value) => {
+        rows += 1;
+        if (preview.length < 25) preview.push(value);
+      },
     );
-    const decoder = new TextDecoder('utf-8', { fatal: true });
-    let pending = '';
-    for await (const page of containers.executionOutputPages(executionId, {
-      limit: 16,
-      signal: abort.signal,
-    })) {
-      for (const entry of page.entries) {
-        if (entry.stream === 'stderr') continue; // surface stderr from executionLogs on failure below
-        pending += decoder.decode(Uint8Array.from(entry.bytes), { stream: true });
-        if (new TextEncoder().encode(pending).byteLength > 1024 * 1024) {
-          throw new RangeError('Postgres returned a row larger than 1 MiB');
-        }
-        for (;;) {
-          const newline = pending.indexOf('\n');
-          if (newline < 0) break;
-          const line = pending.slice(0, newline).replace(/\r$/, '');
-          pending = pending.slice(newline + 1);
-          if (line) {
-            rows += 1;
-            if (preview.length < 25) preview.push(JSON.parse(line));
-          }
-        }
-      }
-    }
-    pending += decoder.decode();
-    if (pending.trim()) {
-      rows += 1;
-      if (preview.length < 25) preview.push(JSON.parse(pending));
-    }
-    const execution = await containers.execution(executionId);
+    const execution = result.execution;
     if (execution.exit_code !== 0) {
-      const output = await containers.executionLogs(executionId, { stdout: false, stderr: true });
+      const output = await containers.executionLogs(result.executionId, {
+        stdout: false,
+        stderr: true,
+      });
       throw new Error(
         `psql exited with status ${execution.exit_code ?? 'unknown'}: ${new TextDecoder().decode(Uint8Array.from(output.stderr))}`,
       );
