@@ -27,5 +27,9 @@ test('command palette story exposes grouped authority and destructive metadata',
     frame.patches.some((patch) => patch.SetProp?.prop === 'Enabled' && !patch.SetProp.value.Flag),
   );
   const browser = host();
-  assert.ok(labels(browser.render(h(Playground)).patches).includes(COMMAND_PALETTE_STORY));
+  assert.ok(
+    labels(browser.render(h(Playground, { initialStory: COMMAND_PALETTE_STORY })).patches).includes(
+      COMMAND_PALETTE_STORY,
+    ),
+  );
 });

@@ -115,7 +115,7 @@ test('generated examples are concise valid-looking JSX derived from specimen def
   assert.deepEqual(defaults('ToggleButton').children, []);
 });
 
-test('the playground renders flows and only one bounded component family', () => {
+test('the playground renders one bounded component family without the product-pattern tail', () => {
   const stage = host();
   const frame = stage.render(h(Playground));
   const built = created(frame.patches).map((entry) => entry.tag);
@@ -123,12 +123,21 @@ test('the playground renders flows and only one bounded component family', () =>
   assert.equal(built.filter((tag) => tag === 'Row').length >= 1, true);
   assert.equal(
     built.filter((tag) => tag === 'ListItemButton').length,
-    FLOW_STORIES.length + grouped().find((family) => family.name === 'buttons').tags.length,
-    'flows and the active family are listed',
+    grouped().find((family) => family.name === 'buttons').tags.length,
+    'only the active component family is listed',
   );
   assert.ok(built.filter((tag) => tag === 'ListItemButton').length < tags.length / 2);
   assert.ok(built.includes('Scroll'), 'the component document scrolls');
   assert.ok(built.includes('Select') && built.includes('Switch') && built.includes('Entry'));
+});
+
+test('product patterns are a separate top-level mode with one selected page', () => {
+  const frame = host().render(h(Playground, { initialStory: FORM_STORY }));
+  const items = created(frame.patches).filter((entry) => entry.tag === 'ListItemButton');
+  assert.equal(items.length, FLOW_STORIES.length, 'pattern mode materialized component siblings');
+  assert.ok(node(frame.patches, 'ListItemButton', FORM_STORY));
+  assert.ok(!node(frame.patches, 'ListItemButton', 'Button'));
+  assert.ok(node(frame.patches, 'Heading', 'Workspace defaults'));
 });
 
 test('the sidebar uses one native scroller without nesting a List scroller', () => {
@@ -136,7 +145,9 @@ test('the sidebar uses one native scroller without nesting a List scroller', () 
     h(Sidebar, {
       families: grouped(),
       selected: 'Button',
+      mode: 'component',
       activeFamily: 'buttons',
+      onMode: () => {},
       onFamily: () => {},
       onSelect: () => {},
     }),
@@ -155,6 +166,7 @@ test('global navigation finds an unknown-family component without materializing 
   const broad = searchResults(families, 'a');
   assert.equal(broad.length, SEARCH_RESULT_LIMIT, 'global results have no hard rendering bound');
   assert.ok(searchResults(families, 'datatable').some((result) => result.name === 'DataTable'));
+  assert.equal(searchResults(families, 'validated settings')[0]?.kind, 'pattern');
 
   const stage = host();
   const first = stage.render(h(Playground));
@@ -173,7 +185,7 @@ test('global navigation finds an unknown-family component without materializing 
     }),
   );
   const matches = stage.since(beforeSearch);
-  const dataTable = node(matches, 'ListItemButton', 'DataTable');
+  const dataTable = node(matches, 'ListItemButton', 'Component · DataTable');
   assert.ok(dataTable, 'search still requires knowing the component family');
   assert.ok(
     !node(matches, 'ListItemButton', FLOW_STORIES[0]),
@@ -344,7 +356,7 @@ test('keyboard accessibility story validates, confirms separately, and bounds fo
 
 test('keyboard accessibility story is selectable from the shipped sidebar', () => {
   const stage = host();
-  const first = stage.render(h(Playground));
+  const first = stage.render(h(Playground, { initialStory: FLOW_STORIES[0] }));
   const item = node(first.patches, 'ListItemButton', KEYBOARD_STORY);
   assert.ok(item);
   const before = stage.frames.length;
@@ -436,7 +448,7 @@ test('the tag input retains a submitted value and removes only the activated tag
 
 test('the validated form is selectable as a canonical end-user flow', () => {
   const stage = host();
-  const first = stage.render(h(Playground));
+  const first = stage.render(h(Playground, { initialStory: FLOW_STORIES[0] }));
   const item = node(first.patches, 'ListItemButton', FORM_STORY);
   assert.ok(item, 'the sidebar omits the form flow');
   const before = stage.frames.length;
@@ -452,7 +464,7 @@ test('the validated form is selectable as a canonical end-user flow', () => {
 
 test('the acquisition flow selects every semantic progress state without materializing them together', () => {
   const stage = host();
-  const first = stage.render(h(Playground));
+  const first = stage.render(h(Playground, { initialStory: FLOW_STORIES[0] }));
   const item = node(first.patches, 'ListItemButton', ACQUISITION_STORY);
   assert.ok(item, 'the sidebar has no acquisition flow');
   const before = stage.frames.length;
@@ -669,7 +681,9 @@ test('sidebar search input is bounded and keeps the selected story visible', () 
     h(Sidebar, {
       families: grouped(),
       selected: 'Button',
+      mode: 'component',
       activeFamily: 'buttons',
+      onMode: () => {},
       onFamily: () => {},
       onSelect: () => {},
     }),

@@ -33,6 +33,6 @@ test('streaming log publishes bounded deltas and is selectable', () => {
   assert(values[0].SetProp.value.Text.length <= LOG_CHUNK_LIMIT);
 
   const browser = host();
-  const frame = browser.render(h(Playground));
+  const frame = browser.render(h(Playground, { initialStory: STREAMING_LOG_STORY }));
   assert.ok(labelled(frame.patches, 'ListItemButton', STREAMING_LOG_STORY));
 });

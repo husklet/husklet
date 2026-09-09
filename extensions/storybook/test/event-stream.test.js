@@ -64,5 +64,11 @@ test('event timeline is selectable and its acknowledgement rerenders visibly', (
   );
 
   const browser = host();
-  assert.ok(labelled(browser.render(h(Playground)).patches, 'ListItemButton', EVENT_STREAM_STORY));
+  assert.ok(
+    labelled(
+      browser.render(h(Playground, { initialStory: 'Validated settings form' })).patches,
+      'ListItemButton',
+      EVENT_STREAM_STORY,
+    ),
+  );
 });

@@ -548,7 +548,7 @@ test('profile inspection rejects invalid frames and enforces its hard ceiling', 
 
 test('the diff review is bounded, selectable, and switches presentation', () => {
   const stage = host();
-  const first = stage.render(h(Playground));
+  const first = stage.render(h(Playground, { initialStory: DIFF_STORY }));
   const story = node(first.patches, 'ListItemButton', DIFF_STORY);
   assert.ok(story);
   stage.surface.dispatch({ trigger: 'Invoke', node: story, id: `${story}:Invoke` });
@@ -563,7 +563,7 @@ test('the diff review is bounded, selectable, and switches presentation', () => 
 
 test('navigation and transient UI is selectable and demonstrates expand, invoke, and close', () => {
   const stage = host();
-  const first = stage.render(h(Playground));
+  const first = stage.render(h(Playground, { initialStory: NAVIGATION_STORY }));
   const story = node(first.patches, 'ListItemButton', NAVIGATION_STORY);
   assert.ok(story);
   stage.surface.dispatch({ trigger: 'Invoke', node: story, id: `${story}:Invoke` });

@@ -127,11 +127,12 @@ type PlaygroundProps = {
   initialStory?: string;
 };
 type SearchResult = {
-  kind: 'flow' | 'component';
+  kind: NavigationMode;
   name: string;
   detail: string;
   family: string | null;
 };
+type NavigationMode = 'component' | 'pattern';
 type Interaction = { sequence: number; trigger: string; detail: string };
 
 /** The whole playground. */
@@ -144,6 +145,7 @@ export function Playground({
 }: PlaygroundProps = {}) {
   const families = useMemo(grouped, []);
   const [selected, setSelected] = useState(initialStory);
+  const mode = modeFor(selected);
   const [activeFamily, setActiveFamily] = useState(
     () =>
       families.find((family) => family.tags.some((tag) => tag.name === initialStory))?.name ??
@@ -157,25 +159,38 @@ export function Playground({
     ...FLOW_STORIES,
     ...families.flatMap((family) => family.tags.map((tag) => tag.name)),
   ];
+  const selectStory = (name: string) => {
+    const nextMode = modeFor(name);
+    if (nextMode === 'component') {
+      const nextFamily = families.find((family) => family.tags.some((tag) => tag.name === name));
+      if (nextFamily) setActiveFamily(nextFamily.name);
+    }
+    setSelected(name);
+  };
 
   return (
     <Responsive breakpoint={1024} position={240} grow>
       <Row width="fill" pad={2} gap={2} align="center">
-        <Text label="Component" color="text-dim" />
+        <Text label="Page" color="text-dim" />
         <Select
           value={selected}
           width="fill"
-          choices={allStories.map((name) => ({ value: name, label: spaced(name) }))}
-          onChange={(report) => setSelected(String(report.value))}
+          choices={allStories.map((name) => ({
+            value: name,
+            label: `${modeLabel(modeFor(name))} · ${spaced(name)}`,
+          }))}
+          onChange={(report) => selectStory(String(report.value))}
         />
       </Row>
       <Sidebar
         key={'sidebar'}
         families={families}
         selected={selected}
+        mode={mode}
         activeFamily={activeFamily}
+        onMode={(nextMode) => selectStory(nextMode === 'component' ? OPENING : FLOW_STORIES[0])}
         onFamily={setActiveFamily}
-        onSelect={setSelected}
+        onSelect={selectStory}
       />
       <Scroll grow width="fill" height="fill">
         {selected === 'Button' ? (
@@ -209,13 +224,17 @@ export function Playground({
 export function Sidebar({
   families,
   selected,
+  mode,
   activeFamily,
+  onMode,
   onFamily,
   onSelect,
 }: {
   families: StoryFamily[];
   selected: string;
+  mode: NavigationMode;
   activeFamily?: string;
+  onMode: (mode: NavigationMode) => void;
   onFamily: (family: string) => void;
   onSelect: (story: string) => void;
 }) {
@@ -226,6 +245,16 @@ export function Sidebar({
   return (
     <Scroll width={{ chars: 26 }} height={'fill'}>
       <Column pad={1} gap={1}>
+        <ListSubheader key={'browse'} label={'Browse'} />
+        <Select
+          key={'mode'}
+          value={mode}
+          choices={[
+            { value: 'component', label: 'Components' },
+            { value: 'pattern', label: 'Product patterns' },
+          ]}
+          onChange={(event) => onMode(event.value as NavigationMode)}
+        />
         <ListSubheader
           key={'find'}
           label={'Components'}
@@ -248,13 +277,10 @@ export function Sidebar({
               ...results.map((result) => (
                 <ListItemButton
                   key={`${result.kind}:${result.name}`}
-                  label={result.name}
+                  label={`${modeLabel(result.kind)} · ${result.name}`}
                   tooltip={result.detail}
                   variant={selected === result.name ? 'filled' : 'ghost'}
-                  onInvoke={() => {
-                    if (result.family) onFamily(result.family);
-                    onSelect(result.name);
-                  }}
+                  onInvoke={() => onSelect(result.name)}
                 />
               )),
               ...(results.length === 0
@@ -269,42 +295,47 @@ export function Sidebar({
                 : []),
             ]
           : [
-              <ListSubheader
-                key={'components'}
-                label={'Component family'}
-                tooltip={'choose one bounded catalogue family'}
-              />,
-              <Select
-                key={'family'}
-                value={family.name}
-                choices={families.map((candidate) => ({
-                  value: candidate.name,
-                  label: candidate.label,
-                }))}
-                onChange={(event) => onFamily(String(event.value))}
-              />,
-              <ListSubheader key={family.name} label={family.label} tooltip={family.note} />,
-              ...family.tags.map((tag) => (
-                <ListItemButton
-                  key={tag.name}
-                  label={tag.name}
-                  variant={tag.name === selected ? 'filled' : 'ghost'}
-                  onInvoke={() => onSelect(tag.name)}
-                />
-              )),
-              <ListSubheader
-                key={'flows'}
-                label={'Product patterns'}
-                tooltip={'complete product states composed from the components'}
-              />,
-              ...FLOW_STORIES.map((story) => (
-                <ListItemButton
-                  key={story}
-                  label={story}
-                  variant={selected === story ? 'filled' : 'ghost'}
-                  onInvoke={() => onSelect(story)}
-                />
-              )),
+              ...(mode === 'component'
+                ? [
+                    <ListSubheader
+                      key={'components'}
+                      label={'Component family'}
+                      tooltip={'choose one bounded catalogue family'}
+                    />,
+                    <Select
+                      key={'family'}
+                      value={family.name}
+                      choices={families.map((candidate) => ({
+                        value: candidate.name,
+                        label: candidate.label,
+                      }))}
+                      onChange={(event) => onFamily(String(event.value))}
+                    />,
+                    <ListSubheader key={family.name} label={family.label} tooltip={family.note} />,
+                    ...family.tags.map((tag) => (
+                      <ListItemButton
+                        key={tag.name}
+                        label={tag.name}
+                        variant={tag.name === selected ? 'filled' : 'ghost'}
+                        onInvoke={() => onSelect(tag.name)}
+                      />
+                    )),
+                  ]
+                : [
+                    <ListSubheader
+                      key={'patterns'}
+                      label={'Product patterns'}
+                      tooltip={'complete product states composed from the components'}
+                    />,
+                    ...FLOW_STORIES.map((story) => (
+                      <ListItemButton
+                        key={story}
+                        label={story}
+                        variant={selected === story ? 'filled' : 'ghost'}
+                        onInvoke={() => onSelect(story)}
+                      />
+                    )),
+                  ]),
             ]}
       </Column>
     </Scroll>
@@ -318,7 +349,7 @@ export function searchResults(families: StoryFamily[], query: unknown): SearchRe
     .toLocaleLowerCase();
   if (normalized.length === 0) return [];
   const flows = FLOW_STORIES.filter((name) => name.toLocaleLowerCase().includes(normalized)).map(
-    (name): SearchResult => ({ kind: 'flow', name, detail: 'End-user flow', family: null }),
+    (name): SearchResult => ({ kind: 'pattern', name, detail: 'Product pattern', family: null }),
   );
   const components = families.flatMap((family) =>
     family.tags
@@ -331,6 +362,14 @@ export function searchResults(families: StoryFamily[], query: unknown): SearchRe
       })),
   );
   return [...flows, ...components].slice(0, SEARCH_RESULT_LIMIT);
+}
+
+function modeFor(name: string): NavigationMode {
+  return FLOW_STORIES.includes(name) ? 'pattern' : 'component';
+}
+
+function modeLabel(mode: NavigationMode): string {
+  return mode === 'component' ? 'Component' : 'Pattern';
 }
 
 /** The selected component, alive, with the properties currently set on it. */

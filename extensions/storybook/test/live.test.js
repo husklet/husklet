@@ -140,8 +140,8 @@ test('the shipped entrypoint connects and renders the complete playground over a
   );
   assert.equal(
     rendered.with.frame.patches.filter((patch) => patch.Create?.tag === 'ListItemButton').length,
-    FLOW_STORIES.length + grouped().find((family) => family.name === 'buttons').tags.length,
-    'the live playground did not render flows and the active component family',
+    grouped().find((family) => family.name === 'buttons').tags.length,
+    'the live playground did not render only the active component family',
   );
   assert.ok(
     rendered.with.frame.patches.some((patch) => patch.Create?.tag === 'Scroll'),
@@ -182,7 +182,7 @@ test('the shipped entrypoint connects and renders the complete playground over a
       searchFrame.with.frame.patches.length < 1_200,
       `<${tag.name}> search exceeded the patch budget`,
     );
-    const choice = liveNode(live, 'ListItemButton', tag.name);
+    const choice = liveNode(live, 'ListItemButton', `Component · ${tag.name}`);
     assert.ok(choice, `<${tag.name}> is not selectable from live global navigation`);
 
     before = calls.filter((call) => call.call === 'interface_render_at').length;
@@ -237,7 +237,7 @@ test('the shipped entrypoint connects and renders the complete playground over a
     `searching for the interactive Button never crossed the socket; stderr=${stderr}`,
   );
   apply(live, buttonSearch.with.frame.patches);
-  const buttonChoice = liveNode(live, 'ListItemButton', 'Button');
+  const buttonChoice = liveNode(live, 'ListItemButton', 'Component · Button');
   assert.ok(buttonChoice, 'Button is absent from live search results');
   renderCount = calls.filter((call) => call.call === 'interface_render_at').length;
   accepted.write(
@@ -302,7 +302,7 @@ test('the shipped entrypoint connects and renders the complete playground over a
     apply(live, interaction.with.frame.patches);
   }
 
-  // Return to the composed-flow navigation before exercising its controls.
+  // Global search crosses modes without materializing the product-pattern tail.
   renderCount = calls.filter((call) => call.call === 'interface_render_at').length;
   accepted.write(
     encode({
@@ -314,16 +314,16 @@ test('the shipped entrypoint connects and renders the complete playground over a
         slot: '',
         id: `${search}:Change`,
         node: search,
-        value: { Text: '' },
+        value: { Text: 'Container operations console' },
       },
     }),
   );
   const cleared = await until(
     () => calls.filter((call) => call.call === 'interface_render_at')[renderCount],
-    `clearing component search never crossed the socket; stderr=${stderr}`,
+    `searching product patterns never crossed the socket; stderr=${stderr}`,
   );
   apply(live, cleared.with.frame.patches);
-  const story = liveNode(live, 'ListItemButton', 'Container operations console');
+  const story = liveNode(live, 'ListItemButton', 'Pattern · Container operations console');
   assert.ok(story, 'container operations is not selectable from the live sidebar');
   renderCount = calls.filter((call) => call.call === 'interface_render_at').length;
   accepted.write(

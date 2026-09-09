@@ -61,5 +61,11 @@ test('key/value inspector is selectable and refresh is visibly acknowledged', ()
       .flatMap((frame) => frame.patches)
       .some((patch) => patch.SetProp?.value?.Text === 'Metadata refreshed 1 time.'),
   );
-  assert.ok(labelled(host().render(h(Playground)).patches, 'ListItemButton', KEY_VALUE_STORY));
+  assert.ok(
+    labelled(
+      host().render(h(Playground, { initialStory: 'Validated settings form' })).patches,
+      'ListItemButton',
+      KEY_VALUE_STORY,
+    ),
+  );
 });

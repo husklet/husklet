@@ -26,6 +26,6 @@ test('terminal transcript story composes a selectable cursor-bearing bounded ins
   );
 
   const browser = host();
-  const catalogue = browser.render(h(Playground));
+  const catalogue = browser.render(h(Playground, { initialStory: TERMINAL_TRANSCRIPT_STORY }));
   assert.ok(labels(catalogue.patches).includes(TERMINAL_TRANSCRIPT_STORY));
 });
