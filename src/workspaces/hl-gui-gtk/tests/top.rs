@@ -10,7 +10,8 @@ mod unix {
 
     use gtk::prelude::*;
     use hl_extension::port::{
-        ExtensionCatalogue, ExtensionCatalogueEntry, NetworkEndpointInventory, NetworkKind, NetworkSummary,
+        ExtensionCatalogue, ExtensionCatalogueEntry, NetworkEndpointInventory, NetworkInventory, NetworkKind,
+        NetworkSummary,
     };
     use hl_extension::{
         Capability, ChannelId, ExtensionName, ExtensionPreferences, ExtensionSummary, Frame, Grant, Hello, PROTOCOL,
@@ -118,6 +119,7 @@ mod unix {
                     Capability::ImageRead,
                     Capability::VolumeRead,
                     Capability::NetworkRead,
+                    Capability::NetworkWrite,
                     Capability::TerminalRead,
                 ]),
                 limits: hl_extension::Limits::default(),
@@ -267,6 +269,9 @@ mod unix {
             capture(&window, &format!("{capture_fixture}-{name}-{width_name}"), width, 800);
         }
         if fixture == "populated" && name == "networks" {
+            let network_id = "c".repeat(32);
+            let container_id = "a".repeat(64);
+            let mut inspections = 0;
             find_button(&root, "Manage connections").emit_clicked();
             settle_toolkit();
             let interaction = surface
@@ -289,20 +294,24 @@ mod unix {
                         let request = codec::read_request(&frame).expect("expanded network request decodes");
                         let reply = match request {
                             Request::InterfaceRender { frame } | Request::InterfaceRenderAt { frame, .. } => {
-                                tree.apply(&frame, &mut surface).expect("expanded network frame applies");
+                                tree.apply(&frame, &mut surface)
+                                    .expect("expanded network frame applies");
                                 Reply::Done
                             }
-                            Request::NetworkInspect { reference } => Reply::Network(NetworkSummary {
-                                id: reference,
-                                name: "development".into(),
-                                driver: "bridge".into(),
-                                scope: "local".into(),
-                                kind: NetworkKind::Custom,
-                                endpoints: Some(NetworkEndpointInventory {
-                                    containers: vec!["a".repeat(64)],
-                                    truncated: false,
-                                }),
-                            }),
+                            Request::NetworkInspect { reference } => {
+                                inspections += 1;
+                                Reply::Network(NetworkSummary {
+                                    id: reference,
+                                    name: "development".into(),
+                                    driver: "bridge".into(),
+                                    scope: "local".into(),
+                                    kind: NetworkKind::Custom,
+                                    endpoints: Some(NetworkEndpointInventory {
+                                        containers: Vec::new(),
+                                        truncated: false,
+                                    }),
+                                })
+                            }
                             other => panic!("unexpected expanded network call: {other:?}"),
                         };
                         wire.send(&codec::reply(&reply).expect("expanded reply encodes"))
@@ -325,8 +334,114 @@ mod unix {
                 assert_contained(&expanded_root, &format!("expanded/networks/{width_name}"));
                 capture(&window, &format!("expanded-networks-{width_name}"), width, 800);
             }
-            assert!(has_label(&expanded_root, "Connected containers · 1"));
+            assert!(has_label(&expanded_root, "Connected containers · 0"));
             assert!(has_label(&expanded_root, "Refresh connections"));
+
+            let selector = find_toggle(&expanded_root, "Choose…");
+            selector.set_active(true);
+            settle_toolkit();
+            choice_option(&selector, 0).emit_clicked();
+            settle_toolkit();
+            let selection = send_report(&surface, &mut wire, 97, |event| {
+                matches!(event, hl_gui::Event::Change { .. })
+            });
+            let hl_gui::Event::Change { value, .. } = selection else {
+                unreachable!()
+            };
+            assert_eq!(value, hl_gui::PropValue::Text(container_id.clone()));
+            apply_until(&mut wire, &mut tree, &mut surface, "Connect", |request| match request {
+                other => panic!("unexpected container selection call: {other:?}"),
+            });
+            let selected_root = surface.widget().clone().upcast::<gtk::Widget>();
+            find_button(&selected_root, "Connect").emit_clicked();
+            settle_toolkit();
+            send_report(&surface, &mut wire, 99, |event| {
+                matches!(event, hl_gui::Event::Invoke { .. })
+            });
+            let success = format!("Connected container {container_id} to network {network_id}.");
+            apply_until(&mut wire, &mut tree, &mut surface, &success, |request| match request {
+                Request::NetworkConnect {
+                    reference,
+                    container,
+                    aliases,
+                } => {
+                    assert_eq!(reference, network_id);
+                    assert_eq!(container, container_id);
+                    assert!(aliases.is_empty());
+                    Reply::Done
+                }
+                Request::NetworkList => Reply::Networks(NetworkInventory::bounded(vec![NetworkSummary {
+                    id: network_id.clone(),
+                    name: "development".into(),
+                    driver: "bridge".into(),
+                    scope: "local".into(),
+                    kind: NetworkKind::Custom,
+                    endpoints: Some(NetworkEndpointInventory {
+                        containers: vec![container_id.clone()],
+                        truncated: false,
+                    }),
+                }])),
+                Request::NetworkInspect { reference } => {
+                    inspections += 1;
+                    assert_eq!(reference, network_id);
+                    Reply::Network(NetworkSummary {
+                        id: reference,
+                        name: "development".into(),
+                        driver: "bridge".into(),
+                        scope: "local".into(),
+                        kind: NetworkKind::Custom,
+                        endpoints: Some(NetworkEndpointInventory {
+                            containers: vec![container_id.clone()],
+                            truncated: false,
+                        }),
+                    })
+                }
+                other => panic!("unexpected post-connect call: {other:?}"),
+            });
+            apply_until(
+                &mut wire,
+                &mut tree,
+                &mut surface,
+                "Connected containers · 1",
+                |request| match request {
+                    Request::NetworkInspect { reference } => {
+                        inspections += 1;
+                        assert_eq!(reference, network_id);
+                        Reply::Network(NetworkSummary {
+                            id: reference,
+                            name: "development".into(),
+                            driver: "bridge".into(),
+                            scope: "local".into(),
+                            kind: NetworkKind::Custom,
+                            endpoints: Some(NetworkEndpointInventory {
+                                containers: vec![container_id.clone()],
+                                truncated: false,
+                            }),
+                        })
+                    }
+                    other => panic!("unexpected membership verification call: {other:?}"),
+                },
+            );
+            assert!(inspections >= 2, "success was not followed by membership reinspection");
+            let success_root = surface.widget().clone().upcast::<gtk::Widget>();
+            window.set_child(Some(&success_root));
+            for (width_name, width) in [("narrow", 600), ("wide", 1_200)] {
+                window.set_default_size(width, 800);
+                window.set_size_request(width, 800);
+                window.present();
+                settle_toolkit();
+                success_root.measure(gtk::Orientation::Horizontal, -1);
+                success_root.measure(gtk::Orientation::Vertical, width);
+                success_root.allocate(width, 1_600, -1, None);
+                assert_contained(&success_root, &format!("post-success/networks/{width_name}"));
+                capture(&window, &format!("post-success-networks-{width_name}"), width, 800);
+            }
+            assert!(has_label(&success_root, &success));
+            assert!(has_label(&success_root, "Connected containers · 1"));
+            assert!(has_label(
+                &success_root,
+                &format!("Container · {}", &container_id[..12])
+            ));
         }
         let stderr = child.stop();
         assert!(stderr.is_empty(), "{fixture}/{name} wrote to stderr: {stderr}");
@@ -510,6 +625,100 @@ mod unix {
             }
         }
         false
+    }
+
+    fn find_toggle(root: &gtk::Widget, label: &str) -> gtk::ToggleButton {
+        find_toggle_optional(root, label).unwrap_or_else(|| panic!("toggle {label:?} was not found"))
+    }
+
+    fn find_toggle_optional(root: &gtk::Widget, label: &str) -> Option<gtk::ToggleButton> {
+        if let Some(toggle) = root.downcast_ref::<gtk::ToggleButton>() {
+            if has_label(root, label) {
+                return Some(toggle.clone());
+            }
+        }
+        let mut child = root.first_child();
+        while let Some(current) = child {
+            child = current.next_sibling();
+            if let Some(toggle) = find_toggle_optional(&current, label) {
+                return Some(toggle);
+            }
+        }
+        None
+    }
+
+    fn choice_option(choice: &gtk::ToggleButton, index: u32) -> gtk::Button {
+        let overlay = choice
+            .child()
+            .and_downcast::<gtk::Overlay>()
+            .expect("choice has an overlay");
+        let mut child = overlay.first_child();
+        while let Some(current) = child {
+            child = current.next_sibling();
+            if let Ok(popover) = current.downcast::<gtk::Popover>() {
+                let options = popover
+                    .child()
+                    .and_downcast::<gtk::Box>()
+                    .expect("choice options are boxed");
+                return (0..index)
+                    .try_fold(options.first_child().expect("choice has an option"), |option, _| {
+                        option.next_sibling()
+                    })
+                    .expect("choice option exists")
+                    .downcast::<gtk::Button>()
+                    .expect("choice option is a button");
+            }
+        }
+        panic!("choice popover was not found")
+    }
+
+    fn send_report(
+        surface: &Surface,
+        wire: &mut Wire<UnixStream>,
+        channel: u32,
+        wanted: impl Fn(&hl_gui::Event) -> bool,
+    ) -> hl_gui::Event {
+        let event = surface
+            .reports()
+            .drain()
+            .into_iter()
+            .find(wanted)
+            .expect("live GTK control emits the expected report");
+        let payload =
+            codec::interaction(&event, Some("")).expect("live GTK report has a production wire representation");
+        wire.send(&Frame::new(ChannelId::new(channel), hl_extension::Kind::Event, payload))
+            .expect("live GTK report reaches Top");
+        event
+    }
+
+    fn apply_until(
+        wire: &mut Wire<UnixStream>,
+        tree: &mut Tree,
+        surface: &mut Surface,
+        wanted: &str,
+        mut answer: impl FnMut(Request) -> Reply,
+    ) {
+        let deadline = Instant::now() + DEADLINE;
+        while Instant::now() < deadline && !has_label(surface.widget().upcast_ref::<gtk::Widget>(), wanted) {
+            match receive_until(wire, (Instant::now() + Duration::from_millis(80)).min(deadline)) {
+                Ok(frame) if frame.kind == hl_extension::Kind::Credit => {}
+                Ok(frame) => {
+                    let request = codec::read_request(&frame).expect("interactive request decodes");
+                    let reply = match request {
+                        Request::InterfaceRender { frame } | Request::InterfaceRenderAt { frame, .. } => {
+                            tree.apply(&frame, surface).expect("interactive frame applies");
+                            Reply::Done
+                        }
+                        other => answer(other),
+                    };
+                    wire.send(&codec::reply(&reply).expect("interactive reply encodes"))
+                        .expect("interactive reply sends");
+                }
+                Err(hl_extension::Transit::Pending) => settle_toolkit(),
+                Err(error) => panic!("interactive socket failed: {error:?}"),
+            }
+        }
+        assert!(has_label(surface.widget().upcast_ref::<gtk::Widget>(), wanted));
     }
 
     fn assert_contained(parent: &gtk::Widget, case: &str) {

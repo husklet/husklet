@@ -46,7 +46,7 @@ export const populatedFixture = {
   ],
   networks: [
     {
-      id: 'c'.repeat(64),
+      id: 'c'.repeat(32),
       name: 'development',
       driver: 'bridge',
       scope: 'local',
