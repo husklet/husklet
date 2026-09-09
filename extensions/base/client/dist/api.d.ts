@@ -1498,7 +1498,7 @@ export interface WorkspaceApi {
             observed?: string | null;
             limit?: number;
         }): Promise<DirectoryPage>;
-        /** Depth-first, bounded traversal with one host page in memory at a time. */
+        /** Depth-first traversal with bounded pages and memory proportional to active directory depth. */
         walk(path: string, options?: {
             pageSize?: number;
             signal?: AbortSignal;

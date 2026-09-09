@@ -105,6 +105,17 @@ function exactFilesystemPageSize(limit) {
     }
     return limit;
 }
+function compareUtf8(left, right) {
+    const encoder = new TextEncoder();
+    const leftBytes = encoder.encode(left);
+    const rightBytes = encoder.encode(right);
+    const length = Math.min(leftBytes.length, rightBytes.length);
+    for (let index = 0; index < length; index += 1) {
+        if (leftBytes[index] !== rightBytes[index])
+            return leftBytes[index] - rightBytes[index];
+    }
+    return leftBytes.length - rightBytes.length;
+}
 function filesystemAbort(signal) {
     const error = new Error('filesystem iteration aborted', { cause: signal?.reason });
     error.name = 'AbortError';
@@ -1333,6 +1344,10 @@ export function workspace(session, { signal } = {}) {
                     (page.more && page.entries.length === 0) ||
                     (after !== null && page.next === after) ||
                     page.entries.some((entry) => !isDirectFilesystemChild(path, entry.path)) ||
+                    page.entries.some((entry, index) => {
+                        const previous = index === 0 ? after : page.entries[index - 1].path;
+                        return previous !== null && compareUtf8(entry.path, previous) <= 0;
+                    }) ||
                     (page.entries.length > 0 && page.next !== page.entries.at(-1).path)) {
                     throw new TypeError('host returned an inconsistent filesystem directory page');
                 }
@@ -1340,7 +1355,6 @@ export function workspace(session, { signal } = {}) {
             },
             walk: async function* (path, { pageSize = 256, signal } = {}) {
                 exactFilesystemPageSize(pageSize);
-                const directories = new Set([path]);
                 const stack = [
                     { path, after: null, observed: null, entries: [], index: 0, more: true },
                 ];
@@ -1348,12 +1362,6 @@ export function workspace(session, { signal } = {}) {
                     const current = stack.at(-1);
                     if (current.index < current.entries.length) {
                         const entry = current.entries[current.index++];
-                        if (entry.directory) {
-                            if (directories.has(entry.path)) {
-                                throw new TypeError(`host returned repeated filesystem directory ${JSON.stringify(entry.path)}`);
-                            }
-                            directories.add(entry.path);
-                        }
                         yield entry;
                         if (entry.directory) {
                             stack.push({

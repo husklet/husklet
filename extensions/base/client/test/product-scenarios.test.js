@@ -469,11 +469,11 @@ test('embeddings workbench resumes, indexes changed ranges with an opaque creden
           reply: 'directory_page',
           with: {
             entries: [
-              { path: 'src/old.ts', directory: false, size: 1, identity: 'old-v1' },
               { path: 'src/new.ts', directory: false, size: document.length, identity: 'new-v2' },
+              { path: 'src/old.ts', directory: false, size: 1, identity: 'old-v1' },
             ],
             identity: 'directory-v2',
-            next: 'src/new.ts',
+            next: 'src/old.ts',
             more: false,
           },
         });

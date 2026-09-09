@@ -226,7 +226,10 @@ test('real Unix credential injection sends only the key without granting secret 
       },
     ]);
     assert.ok(!JSON.stringify(calls).includes('sentinel-password'));
-    await assert.rejects(workspace(session).credentials.read('postgres.password'), /credentials:read/);
+    await assert.rejects(
+      workspace(session).credentials.read('postgres.password'),
+      /credentials:read/,
+    );
     assert.equal(calls.length, 1, 'denied plaintext reads never reach the Unix socket');
     await session.close();
   } finally {
@@ -1325,6 +1328,14 @@ test('real Unix filesystem walk rejects directory cycles and handles a very deep
         let entries;
         if (requested === 'cycle') {
           entries = [{ path: 'cycle', directory: true, size: 0 }];
+        } else if (requested === 'backward') {
+          entries = [
+            {
+              path: frame.payload.with.after === null ? 'backward/b' : 'backward/a',
+              directory: false,
+              size: 1,
+            },
+          ];
         } else if (requested === 'duplicate') {
           entries = [
             { path: 'duplicate/child', directory: true, size: 0 },
@@ -1344,9 +1355,10 @@ test('real Unix filesystem walk rejects directory cycles and handles a very deep
               reply: 'directory_page',
               with: {
                 entries,
-                identity: `directory-${listCalls}`,
+                identity:
+                  requested === 'backward' ? 'directory-backward' : `directory-${listCalls}`,
                 next: entries.at(-1)?.path ?? null,
-                more: false,
+                more: requested === 'backward' && frame.payload.with.after === null,
               },
             },
           }),
@@ -1370,10 +1382,15 @@ test('real Unix filesystem walk rejects directory cycles and handles a very deep
       /host returned an inconsistent filesystem directory page/,
     );
     const duplicate = files.walk('duplicate');
-    assert.equal((await duplicate.next()).value.path, 'duplicate/child');
     await assert.rejects(
       duplicate.next(),
-      /host returned repeated filesystem directory "duplicate\/child"/,
+      /host returned an inconsistent filesystem directory page/,
+    );
+    const backward = files.walk('backward', { pageSize: 1 });
+    assert.equal((await backward.next()).value.path, 'backward/b');
+    await assert.rejects(
+      backward.next(),
+      /host returned an inconsistent filesystem directory page/,
     );
     let depth = 0;
     for await (const entry of files.walk('deep')) {
