@@ -10,6 +10,7 @@ import {
   CardContent,
   ColorPicker,
   Column,
+  ConfirmAction,
   Container,
   Entry,
   FormControlLabel,
@@ -283,13 +284,42 @@ export function Workspace({ api }: { api: WorkspaceApi }) {
                     }
                   />
                 </Column>
-                <Row gap={2} align="center">
-                  <Switch
-                    checked={configuration.docker_socket}
-                    onToggle={(event: Change) => change('docker_socket', Boolean(event.value))}
+                <Column gap={1} width="fill">
+                  <Heading label="Runtime access" scale="caption" />
+                  <Text
+                    label="Docker-compatible socket access lets processes in this workspace control its container engine. Only enable it for trusted workspace code."
+                    color="text-dim"
+                    wrap
                   />
-                  <Text label="Expose Docker-compatible workspace socket" />
-                </Row>
+                  <Text
+                    label="This change takes effect after the workspace restarts."
+                    color="text-dim"
+                    wrap
+                  />
+                  {configuration.docker_socket ? (
+                    <Column gap={1}>
+                      <InlineMessage
+                        label="Docker-compatible workspace socket is enabled."
+                        tone="warning"
+                      />
+                      <Button
+                        label="Disable Docker socket"
+                        size="small"
+                        variant="outline"
+                        onInvoke={() => change('docker_socket', false)}
+                      />
+                    </Column>
+                  ) : (
+                    <ConfirmAction
+                      authorityKey={`docker-socket:${configuration.generation}:${configuration.configuration_revision}`}
+                      label="Enable Docker socket"
+                      confirmLabel="Confirm socket access"
+                      pendingLabel="Enabling…"
+                      question="Allow trusted workspace processes to control this workspace’s container engine after restart?"
+                      onConfirm={() => change('docker_socket', true)}
+                    />
+                  )}
+                </Column>
               </SettingsGroup>
               <SettingsGroup
                 name="advanced"

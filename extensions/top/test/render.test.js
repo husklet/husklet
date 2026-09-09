@@ -652,6 +652,29 @@ test('Top owns workspace settings and extension management in the same tab', asy
     { Length: { Step: 4 } },
     'the catalogue uses the same 16px page inset as operational pages',
   );
+  invoke(stage, 'Settings');
+  await settled();
+  await settled();
+  assert.ok(labelled(stage, 'Runtime access'));
+  assert.ok(
+    labelled(
+      stage,
+      'Docker-compatible socket access lets processes in this workspace control its container engine. Only enable it for trusted workspace code.',
+    ),
+  );
+  assert.ok(labelled(stage, 'This change takes effect after the workspace restarts.'));
+  invoke(stage, 'Enable Docker socket');
+  await settled();
+  assert.ok(
+    labelled(
+      stage,
+      'Allow trusted workspace processes to control this workspace’s container engine after restart?',
+    ),
+  );
+  invoke(stage, 'Confirm socket access');
+  await settled();
+  assert.ok(labelled(stage, 'Docker-compatible workspace socket is enabled.'));
+  assert.ok(labelled(stage, 'Disable Docker socket'));
 });
 
 test('workspace save rotates environment through the explicit revision-bound patch', async () => {
