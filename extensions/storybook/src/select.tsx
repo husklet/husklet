@@ -1,5 +1,5 @@
 import React from 'react';
-import { Column, Expander, FormControlLabel, Select, Switch, Text } from '@husklet/react';
+import { Code, Column, Expander, FormControlLabel, Select, Switch, Text } from '@husklet/react';
 import {
   ApiReference,
   ComponentDocument,
@@ -26,6 +26,7 @@ export function SelectWorkbench() {
       summary="Select chooses one value from a short, stable set. Use labels people recognize and store the separate machine value."
     >
       <DocumentationSection title="Overview">
+        <Code value={'<Select value={shell} choices={shells} onChange={setShell} />'} wrap />
         <FieldSpecimen
           label="Default shell"
           helper={event}
@@ -49,12 +50,6 @@ export function SelectWorkbench() {
           />
         </FieldSpecimen>
       </DocumentationSection>
-      <DocumentationSection title="API">
-        <ApiReference
-          example={`<Select value={shell} choices={shells} onChange={setShell} />`}
-          rows={rows('Select')}
-        />
-      </DocumentationSection>
       <DocumentationSection title="Widths">
         <Column gap={2}>
           <FieldSpecimen label="Compact · 18ch" width={{ chars: 18 }}>
@@ -70,7 +65,26 @@ export function SelectWorkbench() {
       </DocumentationSection>
       <DocumentationSection title="States">
         <SpecimenGrid>
-          <FieldSpecimen label="Enabled" helper="Changes apply to new panes" width={{ chars: 30 }}>
+          <FieldSpecimen
+            label="Empty"
+            helper="Ask for a choice without inventing one"
+            width={{ chars: 30 }}
+          >
+            <Select value="" choices={shells} width={{ chars: 30 }} />
+          </FieldSpecimen>
+          <FieldSpecimen
+            label="Focused"
+            helper="Keyboard focus remains visible"
+            width={{ chars: 30 }}
+          >
+            <Select
+              value="zsh"
+              choices={shells}
+              tooltip="Focused shell selector"
+              width={{ chars: 30 }}
+            />
+          </FieldSpecimen>
+          <FieldSpecimen label="Selected" helper="Changes apply to new panes" width={{ chars: 30 }}>
             <Select value="zsh" choices={shells} width={{ chars: 30 }} />
           </FieldSpecimen>
           <FieldSpecimen
@@ -79,6 +93,19 @@ export function SelectWorkbench() {
             width={{ chars: 30 }}
           >
             <Select value="bash" choices={shells} enabled={false} width={{ chars: 30 }} />
+          </FieldSpecimen>
+          <FieldSpecimen
+            label="Long label"
+            helper="The value remains bounded by the field"
+            width={{ chars: 30 }}
+          >
+            <Select
+              value="long"
+              choices={[
+                { value: 'long', label: 'Remote development shell with workspace defaults' },
+              ]}
+              width={{ chars: 30 }}
+            />
           </FieldSpecimen>
         </SpecimenGrid>
         <Text
@@ -92,6 +119,9 @@ export function SelectWorkbench() {
           label="Pair the control with a visible field label. Option labels must be unique when spoken aloud, and keyboard focus must remain visible."
           wrap
         />
+      </DocumentationSection>
+      <DocumentationSection title="API">
+        <ApiReference rows={rows('Select')} />
       </DocumentationSection>
       <Expander label="Playground" expanded={false} width="fill">
         <SpecimenGrid>

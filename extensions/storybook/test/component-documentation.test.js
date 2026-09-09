@@ -141,6 +141,23 @@ test('Select and Switch playgrounds retain their reported values', () => {
   }
 });
 
+test('Select teaches controlled selection and bounded states before its API', () => {
+  const frame = host().render(h(SelectWorkbench));
+  const labels = frame.patches
+    .filter((patch) => patch.SetProp?.prop === 'Label')
+    .map((patch) => patch.SetProp.value?.Text);
+  for (const state of ['Empty', 'Focused', 'Selected', 'Disabled', 'Long label']) {
+    assert(labels.includes(state), `Select is missing ${state}`);
+  }
+  const headings = created(frame.patches, 'Heading').flatMap((id) =>
+    frame.patches
+      .filter((patch) => patch.SetProp?.id === id && patch.SetProp.prop === 'Label')
+      .map((patch) => patch.SetProp.value.Text),
+  );
+  assert(headings.indexOf('States') < headings.indexOf('API'));
+  assert(headings.indexOf('Accessibility') < headings.indexOf('API'));
+});
+
 test('playground controls keep visible labels in the rendered tree', () => {
   for (const [Workbench, labels] of [
     [EntryWorkbench, ['Field width', 'Validation tone', 'Field enabled', 'Hide value']],
@@ -179,6 +196,6 @@ test('Select state specimens declare matching bounded widths in source', () => {
     /<DocumentationSection title="States">([\s\S]*?)<\/DocumentationSection>/,
   )?.[1];
   assert.ok(states, 'Select states section is missing');
-  assert.equal(states.match(/width=\{\{ chars: 30 \}\}/g)?.length, 4);
+  assert.equal(states.match(/width=\{\{ chars: 30 \}\}/g)?.length, 10);
   assert.doesNotMatch(states, /width="fill"/);
 });

@@ -205,10 +205,20 @@ mod unix {
         // native root. Manually allocating it while unrooted exercises no valid
         // GTK lifecycle and leaves its factories measuring stale children.
         let realized_window = gtk::Window::new();
-        realized_window.set_default_size(1_200, 800);
+        let narrow_story = matches!(story, "Button" | "Entry" | "Select" | "DataTable");
+        realized_window.set_default_size(if narrow_story { 600 } else { 1_200 }, 800);
         realized_window.set_child(Some(&root));
         realized_window.present();
         settle_toolkit();
+        if narrow_story {
+            assert!(realized_window.width() <= 600, "{story} narrow capture remained wide");
+            assert_contained(&root, story);
+            capture_story(&realized_window, &format!("{story} narrow"));
+            realized_window.set_size_request(1_200, 800);
+            realized_window.set_default_size(1_200, 800);
+            root.allocate(1_200, 800, -1, None);
+            settle_toolkit();
+        }
         if story == "Button" {
             let search = find::<gtk::Entry>(&root, |entry| {
                 entry.placeholder_text().as_deref() == Some("Search components")
@@ -267,6 +277,29 @@ mod unix {
             assert!(focus.grab_focus(), "Entry accepts deterministic keyboard focus");
             settle_toolkit();
             let _ = surface.reports().drain();
+        }
+        if story == "Select" {
+            let focus = find::<gtk::ToggleButton>(&root, |button| {
+                button.tooltip_text().as_deref() == Some("Focused shell selector")
+            });
+            assert!(focus.grab_focus(), "Select accepts deterministic keyboard focus");
+            settle_toolkit();
+            let _ = surface.reports().drain();
+            let live = find::<gtk::ToggleButton>(&root, |button| {
+                button.tooltip_text().as_deref() == Some("Default shell")
+            });
+            live.emit_clicked();
+            settle_toolkit();
+            let popover = find::<gtk::Popover>(&live.clone().upcast(), |_| true);
+            assert!(popover.is_visible(), "Select open-list specimen did not reveal its options");
+            capture_story(&realized_window, "Select open");
+            capture_widget(
+                &realized_window,
+                popover.upcast_ref::<gtk::Widget>(),
+                "Select open list",
+            );
+            live.emit_clicked();
+            settle_toolkit();
         }
         let toggle_before = if story == "ToggleButton" {
             let toggle = find::<gtk::ToggleButton>(&root, |button| {
@@ -644,6 +677,10 @@ mod unix {
     }
 
     fn capture_story(window: &gtk::Window, story: &str) {
+        capture_widget(window, window.upcast_ref::<gtk::Widget>(), story);
+    }
+
+    fn capture_widget(window: &gtk::Window, widget: &gtk::Widget, story: &str) {
         let Some(directory) = std::env::var_os("STORYBOOK_SHOT") else {
             return;
         };
@@ -659,13 +696,17 @@ mod unix {
                 }
             })
             .collect::<String>();
-        let paintable = gtk::WidgetPaintable::new(Some(window.upcast_ref::<gtk::Widget>()));
+        let paintable = gtk::WidgetPaintable::new(Some(widget));
         let node = (0..20)
             .find_map(|_| {
                 window.queue_draw();
                 settle_toolkit();
                 let snapshot = gtk::Snapshot::new();
-                paintable.snapshot(snapshot.upcast_ref::<gtk::gdk::Snapshot>(), 1_200.0, 800.0);
+                paintable.snapshot(
+                    snapshot.upcast_ref::<gtk::gdk::Snapshot>(),
+                    f64::from(widget.width()),
+                    f64::from(widget.height()),
+                );
                 let node = snapshot.to_node();
                 if node.is_none() {
                     std::thread::sleep(std::time::Duration::from_millis(10));

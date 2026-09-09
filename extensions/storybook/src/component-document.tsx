@@ -9,6 +9,7 @@ import {
   Grid,
   Heading,
   Section,
+  Scroll,
   Table,
   TableBody,
   TableCell,
@@ -100,18 +101,24 @@ export function ApiReference({ example, rows }: { example?: string; rows: Contro
   return (
     <Column gap={3} width="fill">
       {example ? <Code value={example} wrap /> : null}
-      <ApiTable rows={own} />
+      <Scroll width="fill">
+        <ApiTable rows={own} />
+      </Scroll>
       {inheritedBehavior.length > 0 ? (
         <Expander
           label={`Inherited behavior and visibility props · ${inheritedBehavior.length}`}
           width="fill"
         >
-          <ApiTable rows={inheritedBehavior} />
+          <Scroll width="fill">
+            <ApiTable rows={inheritedBehavior} />
+          </Scroll>
         </Expander>
       ) : null}
       {inheritedLayout.length > 0 ? (
         <Expander label={`Inherited layout props · ${inheritedLayout.length}`} width="fill">
-          <ApiTable rows={inheritedLayout} />
+          <Scroll width="fill">
+            <ApiTable rows={inheritedLayout} />
+          </Scroll>
         </Expander>
       ) : null}
     </Column>
