@@ -612,9 +612,8 @@ test('Top owns workspace settings and extension management in the same tab', asy
   assert.ok(labelled(stage, 'Trust & compatibility'));
   assert.ok(labelled(stage, 'Husklet first-party'));
   assert.ok(labelled(stage, 'Compatibility undeclared'));
-  assert.ok(labelled(stage, 'Review requested access before anything is installed.'));
-  assert.deepEqual(ancestorTags(stage, 'Review Component playground').slice(0, 5), [
-    'Column',
+  assert.equal(labelled(stage, 'Review requested access before anything is installed.'), undefined);
+  assert.deepEqual(ancestorTags(stage, 'Review access').slice(0, 4), [
     'CardActions',
     'Card',
     'Row',
@@ -834,7 +833,7 @@ test('extension discovery reviews the first-party Storybook without requiring a 
     }),
   );
   await settled();
-  invoke(stage, 'Review Component playground');
+  invoke(stage, 'Review access');
   await settled();
   await settled();
   assert.deepEqual(references, ['ghcr.io/husklet/husklet/extension-storybook:latest']);
@@ -891,11 +890,9 @@ test('extension discovery keeps unknown compatibility reviewable and blocks know
   await settled();
   await settled();
   assert.ok(labelled(stage, 'Compatibility not declared'));
-  assert.equal(isEnabled(stage, 'Review Unknown'), true);
+  assert.deepEqual(enabledStates(stage, 'Review access'), [true, false, false]);
   assert.ok(labelled(stage, 'Incompatible · supports arm64; workspace is amd64'));
-  assert.equal(isEnabled(stage, 'Review ARM only'), false);
   assert.ok(labelled(stage, 'Incompatible · requires protocol 999; this client uses 1'));
-  assert.equal(isEnabled(stage, 'Review Future protocol'), false);
 });
 
 test('an installed catalogue extension exposes its update review without retyping a reference', async () => {
@@ -944,7 +941,7 @@ test('an installed catalogue extension exposes its update review without retypin
   assert.ok(labelled(stage, 'Review update'));
   assert.ok(labelled(stage, 'Update to Version 2.0.0 · Compatibility not declared'));
   assert.equal(
-    labelled(stage, 'Review Component playground'),
+    labelled(stage, 'Review access'),
     undefined,
     'installed catalogue entries do not also appear as new installations',
   );
@@ -1187,7 +1184,7 @@ test('extension discovery can retry a failed catalogue without leaving the page'
   invoke(stage, 'Retry catalogue');
   await settled();
   assert.equal(attempts, 2);
-  assert.ok(labelled(stage, 'Review Component playground'));
+  assert.ok(labelled(stage, 'Review access'));
 });
 
 test('extension inspection keeps invalid and failed references recoverable with a direct retry', async () => {
@@ -6195,6 +6192,19 @@ function isEnabled(stage, label) {
         'SetProp' in patch && patch.SetProp.id === node && patch.SetProp.prop === 'Enabled',
     )
     .at(-1)?.SetProp.value?.Flag;
+}
+
+function enabledStates(stage, label) {
+  const patches = stage.frames.flatMap((frame) => frame.patches);
+  const nodes = patches
+    .filter((patch) => patch.SetProp?.prop === 'Label' && patch.SetProp.value?.Text === label)
+    .map((patch) => patch.SetProp.id);
+  return nodes.map(
+    (node) =>
+      patches
+        .filter((patch) => patch.SetProp?.id === node && patch.SetProp?.prop === 'Enabled')
+        .at(-1)?.SetProp.value?.Flag,
+  );
 }
 
 function property(stage, label, prop) {
