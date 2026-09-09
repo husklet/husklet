@@ -638,10 +638,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
   const requestedFilesystem = acquisition?.candidate?.requested_filesystem ?? {
     ...emptyFilesystemGrant(),
   };
-  const availableCatalogue =
-    catalogue?.entries.filter(
-      (entry) => !installed.some((extension) => extension.name === entry.id),
-    ) ?? [];
+  const catalogueEntries = catalogue?.entries ?? [];
   const requestedWorkspaceEnvironment = acquisition?.candidate?.requested_workspace_environment ?? {
     read: [],
     write: [],
@@ -710,8 +707,8 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
             {!acquisition && (
               <Row gap={1} width="fill" align="center" justify="start" wrap>
                 <Heading label="Discover" scale="caption" grow={false} align="start" />
-                {catalogueState === 'ready' && availableCatalogue.length > 0 ? (
-                  <Badge label={countLabel(availableCatalogue.length, 'available extension')} />
+                {catalogueState === 'ready' && catalogueEntries.length > 0 ? (
+                  <Badge label={countLabel(catalogueEntries.length, 'catalogue extension')} />
                 ) : null}
               </Row>
             )}
@@ -729,22 +726,25 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                     <Text label="Loading extension catalogue…" color="text-dim" />
                   </Row>
                 )}
-                {catalogueState === 'ready' && availableCatalogue.length === 0 && (
+                {catalogueState === 'ready' && catalogueEntries.length === 0 && (
                   <InlineMessage
-                    label={
-                      catalogue && catalogue.entries.length > 0
-                        ? 'Everything in the built-in catalogue is installed. Available updates appear below.'
-                        : 'The built-in extension catalogue is currently empty.'
-                    }
+                    label="The built-in extension catalogue is currently empty."
                     width={COPY_WIDTH}
                     tone="neutral"
                   />
                 )}
-                {availableCatalogue.length > 0 && (
+                {catalogueEntries.length > 0 && (
                   <Row gap={1} width="fill" wrap>
-                    {availableCatalogue.map((entry) => {
+                    {catalogueEntries.map((entry) => {
                       const compatibility = catalogueCompatibility(entry, workspaceArchitecture);
                       const trust = catalogueTrust(entry);
+                      const installedExtension = installed.find(
+                        (extension) => extension.name === entry.id,
+                      );
+                      const updateAvailable = Boolean(
+                        installedExtension &&
+                        newerVersion(entry.version, installedExtension.version),
+                      );
                       return (
                         <Card key={entry.id} grow={false} width="fill" variant="outline">
                           <CardHeader
@@ -756,6 +756,17 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                           <CardContent gap={1}>
                             <Text label={entry.description} color="text-dim" wrap />
                             <Row gap={1} wrap>
+                              {installedExtension ? (
+                                <Badge label="Installed" tone="positive" />
+                              ) : (
+                                <Badge label="Available" tone="accent" />
+                              )}
+                              {installedExtension ? (
+                                <Badge
+                                  label={updateAvailable ? 'Update available' : 'Up to date'}
+                                  tone={updateAvailable ? 'accent' : 'neutral'}
+                                />
+                              ) : null}
                               <Badge label={trust.label} tone={trust.tone} />
                               <Badge
                                 label={
@@ -807,16 +818,18 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                               </Column>
                             </Expander>
                           </CardContent>
-                          <CardActions gap={1} align="start" justify="start" width="fill">
-                            <Button
-                              label="Review access"
-                              tooltip={`Review access requested by ${entry.title}`}
-                              variant="filled"
-                              tone="accent"
-                              enabled={!busy && compatibility.compatible !== false}
-                              onInvoke={() => inspect(entry.reference)}
-                            />
-                          </CardActions>
+                          {!installedExtension ? (
+                            <CardActions gap={1} align="start" justify="start" width="fill">
+                              <Button
+                                label="Review access"
+                                tooltip={`Review access requested by ${entry.title}`}
+                                variant="filled"
+                                tone="accent"
+                                enabled={!busy && compatibility.compatible !== false}
+                                onInvoke={() => inspect(entry.reference)}
+                              />
+                            </CardActions>
+                          ) : null}
                         </Card>
                       );
                     })}

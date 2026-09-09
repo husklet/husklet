@@ -583,7 +583,7 @@ test('Top owns workspace settings and extension management in the same tab', asy
   await settled();
   await settled();
   assert.ok(labelled(stage, 'Discover'));
-  assert.ok(labelled(stage, '1 available extension'));
+  assert.ok(labelled(stage, '1 catalogue extension'));
   assert.ok(labelled(stage, 'Component playground'));
   assert.ok(
     labelled(stage, 'Image · ghcr.io/husklet/husklet/extension-storybook:latest'),
@@ -950,11 +950,14 @@ test('an installed catalogue extension exposes its update review without retypin
     undefined,
     'installed catalogue entries do not also appear as new installations',
   );
-  assert.ok(
+  assert.ok(labelled(stage, 'Installed'));
+  assert.ok(labelled(stage, 'Update available'));
+  assert.equal(
     labelled(
       stage,
       'Everything in the built-in catalogue is installed. Available updates appear below.',
     ),
+    undefined,
   );
 
   invoke(stage, 'Review update');
@@ -968,6 +971,36 @@ test('an installed catalogue extension exposes its update review without retypin
     ),
   );
   assert.ok(labelled(stage, 'Update with selected access'));
+});
+
+test('an up-to-date built-in remains discoverable as a catalogue card', async () => {
+  const stage = host();
+  stage.render(
+    h(Extensions, {
+      api: {
+        extensions: {
+          list: async () => [
+            {
+              name: 'storybook',
+              image_digest: `sha256:${'a'.repeat(64)}`,
+              version: '2.0.0',
+              enabled: true,
+              status: 'duty',
+            },
+          ],
+          catalogue: firstPartyCatalogue,
+        },
+        watchExtensions: async () => () => {},
+      },
+    }),
+  );
+  await settled();
+  await settled();
+  assert.ok(labelled(stage, 'Component playground'));
+  assert.ok(labelled(stage, 'Installed'));
+  assert.ok(labelled(stage, 'Up to date'));
+  assert.equal(labelled(stage, 'Review access'), undefined);
+  assert.equal(labelled(stage, 'Review update'), undefined);
 });
 
 test('reviewing an unchanged installed digest is an explicit no-op', async () => {
