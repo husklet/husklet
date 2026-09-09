@@ -515,6 +515,10 @@ test('Top owns workspace settings and extension management in the same tab', asy
   await settled();
   assert.equal(taggedProperty(stage, 'Workspace', 'NavigationMenuItem', 'Selected')?.Flag, false);
   assert.equal(taggedProperty(stage, 'Settings', 'NavigationMenuItem', 'Selected')?.Flag, true);
+  assert.ok(
+    taggedProperty(stage, 'Workspace settings', 'Heading', 'Label'),
+    'the settings route has an unambiguous accessible page heading',
+  );
   assert.ok(labelled(stage, 'Runtime'));
   assert.ok(labelled(stage, 'Resources & connectivity'));
   assert.ok(labelled(stage, 'Terminal appearance'));
@@ -2187,7 +2191,12 @@ test('overview refreshes every authoritative inventory in one action', async () 
       onOpen() {},
     }),
   );
-  invoke(stage, 'Refresh all');
+  assert.ok(labelled(stage, 'Refresh workspace inventory'));
+  assert.deepEqual(
+    taggedProperty(stage, 'Refresh workspace inventory', 'IconButton', 'Icon'),
+    { Text: 'view-refresh-symbolic' },
+  );
+  invoke(stage, 'Refresh workspace inventory');
   await settled();
   assert.deepEqual(calls.sort(), [
     'containers',

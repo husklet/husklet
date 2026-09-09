@@ -1,12 +1,12 @@
 import React from 'react';
 import {
-  Button,
   Card,
   CardActionArea,
   CardContent,
   Column,
   Heading,
   Icon,
+  IconButton,
   NavigationMenu,
   NavigationMenuItem,
   Row,
@@ -155,11 +155,14 @@ export function Overview({
   return (
     <Scroll grow width="fill" height="fill">
       <Column width="fill" pad={4} gap={3}>
-        <Row gap={1} align="center" wrap>
-          <Heading label="Workspace" scale="title" align="start" grow={false} />
+        <Row gap={1} width="fill" align="center" justify="start" wrap>
+          <Heading label="Workspace" scale="title" align="start" grow />
           {refreshing ? <Spinner /> : null}
-          <Button
-            label={refreshing ? 'Refreshing…' : 'Refresh all'}
+          <IconButton
+            label={refreshing ? 'Refreshing workspace inventory' : 'Refresh workspace inventory'}
+            tooltip={refreshing ? 'Refreshing workspace inventory…' : 'Refresh all resources'}
+            icon="view-refresh-symbolic"
+            variant="ghost"
             enabled={!refreshing}
             onInvoke={refreshAll}
           />

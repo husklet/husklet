@@ -156,7 +156,7 @@ export function Workspace({ api }: { api: WorkspaceApi }) {
   if (!configuration)
     return (
       <Column width="fill" pad={4} gap={3}>
-        <Heading label="Workspace" scale="title" />
+        <Heading label="Workspace settings" scale="title" />
         {error ? (
           <RecoveryState
             operation="Workspace settings"
@@ -184,7 +184,7 @@ export function Workspace({ api }: { api: WorkspaceApi }) {
       >
         <Row gap={2} wrap justify="start" align="center" width="fill">
           <Column gap={0} grow>
-            <Heading label="Workspace" scale="title" />
+            <Heading label="Workspace settings" scale="title" />
             <Text
               label={`linux/${configuration.architecture} · ${configuration.name}`}
               color="text-dim"
