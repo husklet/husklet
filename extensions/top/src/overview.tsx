@@ -151,8 +151,8 @@ export function Overview({
   return (
     <Scroll grow width="fill" height="fill">
       <Column width="fill" pad={2} gap={2}>
-        <Row width="fill" gap={1} align="center" wrap>
-          <Heading label="Workspace overview" scale="title" />
+        <Row gap={1} align="center" wrap>
+          <Heading label="Workspace overview" scale="title" align="start" grow={false} />
           {refreshing ? <Spinner /> : null}
           <Button
             label={refreshing ? 'Refreshing…' : 'Refresh all'}
@@ -213,8 +213,8 @@ function Summary({
   onOpen: () => void;
 }) {
   return (
-    <Card grow={false} width={{ minimum: { chars: 26 } }} variant="plain">
-      <CardActionArea variant="filled" tooltip={`Open ${label}`} onInvoke={onOpen}>
+    <Card grow={false} width={{ minimum: { chars: 26 } }} variant="outline">
+      <CardActionArea variant="ghost" tooltip={`Open ${label}`} onInvoke={onOpen}>
         <CardContent gap={1} pad={2}>
           <Row gap={1} align="center" width="fill">
             <Text label={label} color="text-dim" />
