@@ -1,6 +1,12 @@
 import React from 'react';
-import { Code, Column, Entry, Expander, Row, Select, Switch, Text } from '@husklet/react';
-import { ComponentDocument, DocumentationSection, choices } from './component-document.js';
+import { Column, Entry, Expander, Row, Select, Switch, Text } from '@husklet/react';
+import {
+  ApiReference,
+  ComponentDocument,
+  DocumentationSection,
+  FieldSpecimen,
+  choices,
+} from './component-document.js';
 import { rows } from './editors.js';
 
 type Width = 'compact' | 'default' | 'wide';
@@ -21,29 +27,36 @@ export function EntryWorkbench() {
       summary="Entry captures one short line of text. Give it a visible purpose, a useful empty-state hint, and immediate validation feedback."
     >
       <DocumentationSection title="Overview">
-        <Entry
-          value={value}
-          width={widths[width]}
-          align="start"
-          tone={tone}
-          enabled={enabled}
-          secret={secret}
-          placeholder="Extension name"
-          tooltip="Extension name"
-          onChange={(report) => {
-            const next = String(report.value ?? '').slice(0, 64);
-            setValue(next);
-            setEvent(`Changed · ${next.length} characters`);
-          }}
-          onSubmit={() => setEvent(`Submitted · ${value || 'empty value'}`)}
-        />
-        <Text label={event} color="text-dim" wrap />
+        <FieldSpecimen label="Extension name" helper={event} width={widths[width]}>
+          <Entry
+            value={value}
+            width={widths[width]}
+            align="start"
+            tone={tone}
+            enabled={enabled}
+            secret={secret}
+            placeholder="Extension name"
+            tooltip="Extension name"
+            onChange={(report) => {
+              const next = String(report.value ?? '').slice(0, 64);
+              setValue(next);
+              setEvent(`Changed · ${next.length} characters`);
+            }}
+            onSubmit={() => setEvent(`Submitted · ${value || 'empty value'}`)}
+          />
+        </FieldSpecimen>
       </DocumentationSection>
       <DocumentationSection title="Widths">
         <Column gap={2}>
-          <Entry value="compact" width={{ chars: 18 }} align="start" />
-          <Entry value="default field" width={{ chars: 30 }} align="start" />
-          <Entry value="wide configuration value" width={{ chars: 48 }} align="start" />
+          <FieldSpecimen label="Compact · 18ch" width={{ chars: 18 }}>
+            <Entry value="workspace-api" width={{ chars: 18 }} />
+          </FieldSpecimen>
+          <FieldSpecimen label="Default · 30ch" width={{ chars: 30 }}>
+            <Entry value="workspace-api" width={{ chars: 30 }} />
+          </FieldSpecimen>
+          <FieldSpecimen label="Wide · 48ch" width={{ chars: 48 }}>
+            <Entry value="workspace-api" width={{ chars: 48 }} />
+          </FieldSpecimen>
         </Column>
         <Text
           label="Choose width from expected content, not from the current value."
@@ -52,10 +65,26 @@ export function EntryWorkbench() {
       </DocumentationSection>
       <DocumentationSection title="States">
         <Column gap={2}>
-          <Entry value="Ready" tooltip="Enabled field" />
-          <Entry value="Invalid workspace name" tone="danger" tooltip="Fix the workspace name" />
-          <Entry value="Read only for now" enabled={false} tooltip="Available after setup" />
-          <Entry value="token-value" secret tooltip="Access token" />
+          <FieldSpecimen label="Default" helper="Ready to edit" width={{ chars: 36 }}>
+            <Entry value="workspace-api" width={{ chars: 36 }} />
+          </FieldSpecimen>
+          <FieldSpecimen
+            label="Error"
+            helper="Use lowercase letters, digits, and hyphens"
+            width={{ chars: 36 }}
+          >
+            <Entry value="Workspace API" tone="danger" width={{ chars: 36 }} />
+          </FieldSpecimen>
+          <FieldSpecimen
+            label="Disabled"
+            helper="Available after workspace setup"
+            width={{ chars: 36 }}
+          >
+            <Entry value="workspace-api" enabled={false} width={{ chars: 36 }} />
+          </FieldSpecimen>
+          <FieldSpecimen label="Secret" helper="Value remains concealed" width={{ chars: 36 }}>
+            <Entry value="token-value" secret width={{ chars: 36 }} />
+          </FieldSpecimen>
         </Column>
       </DocumentationSection>
       <DocumentationSection title="Accessibility">
@@ -93,13 +122,10 @@ export function EntryWorkbench() {
         </Column>
       </Expander>
       <DocumentationSection title="API">
-        <Code
-          value={`<Entry value={name} placeholder="Extension name" onChange={updateName} />`}
-          wrap
+        <ApiReference
+          example={`<Entry value={name} placeholder="Extension name" onChange={updateName} />`}
+          rows={rows('Entry')}
         />
-        {rows('Entry').map((row) => (
-          <Text key={row.name} label={`${row.name} · ${row.note}`} color="text-dim" wrap />
-        ))}
       </DocumentationSection>
     </ComponentDocument>
   );

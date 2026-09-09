@@ -1,6 +1,12 @@
 import React from 'react';
-import { Code, Column, Expander, Row, Select, Switch, Text } from '@husklet/react';
-import { ComponentDocument, DocumentationSection, choices } from './component-document.js';
+import { Column, Expander, FormControlLabel, Select, Switch, Text } from '@husklet/react';
+import {
+  ApiReference,
+  ComponentDocument,
+  DocumentationSection,
+  FieldSpecimen,
+  choices,
+} from './component-document.js';
 import { rows } from './editors.js';
 
 type Context = 'setting' | 'permission' | 'feature';
@@ -21,40 +27,38 @@ export function SwitchWorkbench() {
       summary="Switch changes one independent setting immediately. Put the meaning in adjacent text; the control itself communicates on or off."
     >
       <DocumentationSection title="Overview">
-        <Row gap={2} align="center">
-          <Switch
-            checked={checked}
-            enabled={enabled}
-            tooltip={labels[context]}
-            onToggle={(report) => {
-              const next = Boolean(report.value);
-              setChecked(next);
-              setEvent(next ? 'Setting enabled' : 'Setting disabled');
-            }}
-          />
-          <Column gap={1}>
-            <Text label={labels[context]} />
-            <Text label={event} color="text-dim" />
-          </Column>
-        </Row>
-      </DocumentationSection>
-      <DocumentationSection title="Variants">
-        <Column gap={3}>
-          <Row gap={2} align="center">
-            <Switch checked tooltip="On" />
-            <Text label="On" />
-          </Row>
-          <Row gap={2} align="center">
-            <Switch checked={false} tooltip="Off" />
-            <Text label="Off" />
-          </Row>
-          <Row gap={2} align="center">
-            <Switch checked enabled={false} tooltip="Managed setting" />
-            <Text label="On · managed" color="text-dim" />
-          </Row>
+        <Column gap={1}>
+          <FormControlLabel label={labels[context]} gap={2}>
+            <Switch
+              checked={checked}
+              enabled={enabled}
+              tooltip={labels[context]}
+              onToggle={(report) => {
+                const next = Boolean(report.value);
+                setChecked(next);
+                setEvent(next ? 'Setting enabled' : 'Setting disabled');
+              }}
+            />
+          </FormControlLabel>
+          <Text label={event} color="text-dim" />
         </Column>
       </DocumentationSection>
-      <DocumentationSection title="States and sizing">
+      <DocumentationSection title="States">
+        <Column gap={3}>
+          <FormControlLabel label="Restore panes · on" gap={2}>
+            <Switch checked />
+          </FormControlLabel>
+          <FormControlLabel label="Restore panes · off" gap={2}>
+            <Switch checked={false} />
+          </FormControlLabel>
+          <FieldSpecimen label="Managed setting" helper="Controlled by workspace policy">
+            <FormControlLabel label="Restore panes" gap={2}>
+              <Switch checked enabled={false} />
+            </FormControlLabel>
+          </FieldSpecimen>
+        </Column>
+      </DocumentationSection>
+      <DocumentationSection title="Sizing">
         <Text
           label="Switch uses one consistent native hit target; do not shrink it for dense layouts. Use row spacing and concise copy to control density instead."
           wrap
@@ -82,10 +86,10 @@ export function SwitchWorkbench() {
         </Column>
       </Expander>
       <DocumentationSection title="API">
-        <Code value={`<Switch checked={restorePanes} onToggle={setRestorePanes} />`} wrap />
-        {rows('Switch').map((row) => (
-          <Text key={row.name} label={`${row.name} · ${row.note}`} color="text-dim" wrap />
-        ))}
+        <ApiReference
+          example={`<Switch checked={restorePanes} onToggle={setRestorePanes} />`}
+          rows={rows('Switch')}
+        />
       </DocumentationSection>
     </ComponentDocument>
   );

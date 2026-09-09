@@ -1,5 +1,20 @@
 import React from 'react';
-import { Column, Heading, Section, Text } from '@husklet/react';
+import {
+  Code,
+  Column,
+  FormControl,
+  FormHelperText,
+  FormLabel,
+  Heading,
+  Section,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableRow,
+  Text,
+} from '@husklet/react';
+import type { ControlRow } from './editors.js';
 
 export function ComponentDocument({
   name,
@@ -11,11 +26,31 @@ export function ComponentDocument({
   children: React.ReactNode;
 }) {
   return (
-    <Column width={{ maximum: { chars: 106 } }} pad={4} gap={4}>
+    <Column width="fill" pad={4} gap={4}>
       <Heading label={name} scale="display" />
       <Text label={summary} color="text-dim" wrap />
       {children}
     </Column>
+  );
+}
+
+export function FieldSpecimen({
+  label,
+  helper,
+  width,
+  children,
+}: {
+  label: string;
+  helper?: string;
+  width?: React.ComponentProps<typeof FormControl>['width'];
+  children: React.ReactNode;
+}) {
+  return (
+    <FormControl gap={1} width={width ?? 'fill'} align={width ? 'start' : 'stretch'}>
+      <FormLabel label={label} />
+      {children}
+      {helper ? <FormHelperText label={helper} /> : null}
+    </FormControl>
   );
 }
 
@@ -31,6 +66,32 @@ export function DocumentationSection({
       <Heading label={title} scale="title" />
       {children}
     </Section>
+  );
+}
+
+export function ApiReference({ example, rows }: { example: string; rows: ControlRow[] }) {
+  return (
+    <Column gap={3} width="fill">
+      <Code value={example} wrap />
+      <Table width="fill">
+        <TableHead>
+          <TableRow>
+            <TableCell label="Property" />
+            <TableCell label="Control" />
+            <TableCell label="Description" />
+          </TableRow>
+        </TableHead>
+        <TableBody>
+          {rows.map((row) => (
+            <TableRow key={row.name}>
+              <TableCell label={row.name} />
+              <TableCell label={row.editor} />
+              <TableCell label={row.note} />
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+    </Column>
   );
 }
 

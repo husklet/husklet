@@ -39,8 +39,12 @@ fn controls(css: &mut String, theme: &Theme) {
            background: {ground}; color: {text}; border: 1px solid {line}; border-radius: {radius}px; min-height: 30px; }}\n\
          entry text, spinbutton text {{ color: {text}; }}\n\
          entry, spinbutton, textview, dropdown > button {{ padding: 3px 9px; }}\n\
+         .hl-select {{ background: {ground}; border: 1px solid {line}; border-radius: {radius}px; min-height: 30px; }}\n\
+         .hl-select:hover {{ border-color: {dim}; }}\n\
+         .hl-select:focus-within {{ border-color: {accent}; box-shadow: 0 0 0 1px {accent}; }}\n\
          entry:hover, spinbutton:hover, dropdown:hover > button {{ border-color: {dim}; }}\n\
          entry:focus-within, spinbutton:focus-within, textview:focus-within {{ border-color: {accent}; box-shadow: 0 0 0 1px {accent}; }}\n\
+         entry.tone-danger, .hl-entry.tone-danger {{ border-color: {danger}; box-shadow: 0 0 0 1px {danger}; }}\n\
          scrolledwindow, viewport, listview, columnview, notebook, frame, paned, expander {{ \
            background: transparent; color: {text}; }}\n\
          notebook header, notebook tab {{ background: {surface}; color: {dim}; }}\n\
@@ -62,6 +66,7 @@ fn controls(css: &mut String, theme: &Theme) {
         dim = theme.color(Token::TextDim).hex(),
         faint = theme.color(Token::TextFaint).hex(),
         accent = theme.color(Token::Accent).hex(),
+        danger = theme.color(Token::Danger).hex(),
         radius = radius,
     );
 }
@@ -339,8 +344,11 @@ mod tests {
     #[test]
     fn button_sizes_have_exact_independent_control_metrics() {
         let css = super::sheet(&Theme::dark());
-        assert!(css
-            .contains("button.size-small { min-height: 28px; padding: 4px 8px; font-size: 12px; border-radius: 6px;"));
+        assert!(
+            css.contains(
+                "button.size-small { min-height: 28px; padding: 4px 8px; font-size: 12px; border-radius: 6px;"
+            )
+        );
         assert!(css.contains(
             "button.size-medium { min-height: 36px; padding: 8px 12px; font-size: 14px; border-radius: 6px;"
         ));
@@ -348,5 +356,15 @@ mod tests {
             "button.size-large { min-height: 44px; padding: 12px 16px; font-size: 16px; border-radius: 8px;"
         ));
         assert!(css.contains("button.hl-iconbutton.size-large { min-width: 44px; min-height: 44px; padding: 0;"));
+    }
+
+    #[test]
+    fn form_controls_expose_boundaries_focus_and_validation() {
+        let css = super::sheet(&Theme::dark());
+        assert!(css.contains(".hl-select { background: #0f1115; border: 1px solid #323843;"));
+        assert!(css.contains(".hl-select:focus-within { border-color: #559df7; box-shadow: 0 0 0 1px #559df7;"));
+        assert!(css.contains(
+            "entry.tone-danger, .hl-entry.tone-danger { border-color: #e55353; box-shadow: 0 0 0 1px #e55353;"
+        ));
     }
 }
