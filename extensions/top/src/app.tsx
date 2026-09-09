@@ -111,7 +111,7 @@ export function Top({
   processTable,
   volumeDetails,
   initial = {},
-  initialSection = 'overview',
+  initialSection = 'workspace',
 }: TopProps) {
   const [section, setSection] = useState<Section>(initialSection);
   const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_WIDTH_DEFAULT);
@@ -226,7 +226,7 @@ export function Top({
     };
   }, [api]);
   const body =
-    section === 'overview' ? (
+    section === 'workspace' ? (
       <Overview
         containers={containers}
         executions={executions}
@@ -237,7 +237,7 @@ export function Top({
         extensions={extensions}
         onOpen={setSection}
       />
-    ) : section === 'workspace' ? (
+    ) : section === 'settings' ? (
       <Workspace api={api} />
     ) : section === 'extensions' ? (
       <Extensions api={api} />
@@ -318,8 +318,6 @@ export function Top({
 }
 
 function sectionTitle(value: Section): string {
-  if (value === 'overview') return 'Workspace';
-  if (value === 'workspace') return 'Settings';
   return value.charAt(0).toUpperCase() + value.slice(1);
 }
 

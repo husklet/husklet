@@ -25,8 +25,8 @@ import {
 import { boundedMessage } from './model.js';
 
 export const SECTIONS = [
-  'overview',
   'workspace',
+  'settings',
   'extensions',
   'containers',
   'processes',
@@ -54,7 +54,7 @@ export function Navigation({
   onSelect: (section: Section) => void;
 }) {
   const groups: { label: string; sections: Section[] }[] = [
-    { label: 'Manage', sections: ['overview', 'workspace', 'extensions'] },
+    { label: 'Manage', sections: ['workspace', 'settings', 'extensions'] },
     { label: 'Runtime', sections: ['containers', 'processes', 'executions'] },
     { label: 'Resources', sections: ['images', 'volumes', 'networks'] },
     { label: 'Interface', sections: ['terminals'] },
@@ -89,8 +89,8 @@ export function Navigation({
 }
 
 function navigationIcon(section: Section): string {
-  if (section === 'overview') return 'view-grid-symbolic';
-  if (section === 'workspace') return 'document-open-symbolic';
+  if (section === 'workspace') return 'view-grid-symbolic';
+  if (section === 'settings') return 'preferences-system-symbolic';
   if (section === 'extensions') return 'list-add-symbolic';
   if (section === 'containers') return 'view-list-symbolic';
   if (section === 'processes') return 'edit-find-symbolic';
@@ -102,8 +102,6 @@ function navigationIcon(section: Section): string {
 }
 
 function navigationTitle(section: Section): string {
-  if (section === 'overview') return 'Workspace';
-  if (section === 'workspace') return 'Settings';
   return title(section);
 }
 

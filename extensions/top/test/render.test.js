@@ -350,8 +350,8 @@ test('Top sidebar divider reports and bounds its retained position', () => {
   assert.deepEqual(
     sectionChoice?.SetProp.value.Choices.map((choice) => choice.value),
     [
-      'overview',
       'workspace',
+      'settings',
       'extensions',
       'containers',
       'processes',

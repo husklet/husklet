@@ -43,12 +43,12 @@ tab_title = "Top"
 icon = "utilities-system-monitor-symbolic"
 
 [[pane_providers]]
-id = "overview"
-title = "Top overview"
+id = "workspace"
+title = "Workspace"
 icon = "utilities-system-monitor-symbolic"
 
 [[pane_providers]]
-id = "workspace"
+id = "settings"
 title = "Workspace settings"
 icon = "preferences-system-symbolic"
 
