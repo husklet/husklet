@@ -38,6 +38,8 @@ test('a component offers what it declares and nothing else', () => {
   assert.doesNotMatch(button, /schema\?/, 'a button holds no rows');
   assert.doesNotMatch(shape('Text'), /checked\?/, 'a label holds no state');
   assert.match(shape('DataTable'), /schema\?: readonly ColumnSpec\[\];/);
+  assert.match(declarations, /importance\?: 'essential' \| 'optional';/);
+  assert.match(declarations, /identity\?: boolean;/);
 });
 
 test('constrained component properties are required in generated declarations', () => {

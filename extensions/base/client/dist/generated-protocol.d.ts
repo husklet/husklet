@@ -1,5 +1,5 @@
 // Generated from Rust hl-extension protocol/v1.json. Do not edit.
-// Protocol artifact fnv1a64:2f1bc7a14a196493
+// Protocol artifact fnv1a64:d8ad76841c690e1e
 export const PROTOCOL_SPECIFICATION_VERSION: 1;
 export const PROTOCOL_VERSION: 1;
 export const PROTOCOL_BOUNDS: Readonly<{ "extension_job_bytes": number; "extension_reference_bytes": number; "pane_input_bytes": number; "pane_inventory_items": number; "pane_text_bytes": number; "resource_inventory_items": number; "semantic_action_value_bytes": number; "semantic_depth": number; "semantic_nodes": number; "semantic_text_bytes": number; "terminal_command_argument_bytes": number; "terminal_command_bytes": number }>;
@@ -15,7 +15,8 @@ export type Bounds = { "minimum"?: Length | null; "maximum"?: Length | null };
 export type Capability = "workspaces:read" | "workspaces:control" | "workspaces:events" | "workspace-environment:read" | "workspace-environment:write" | "containers:read" | "containers:create" | "containers:execute" | "containers:input" | "containers:lifecycle" | "containers:remove" | "containers:attach" | "images:read" | "images:pull" | "images:remove" | "images:prune" | "volumes:read" | "volumes:write" | "networks:read" | "networks:write" | "terminals:read" | "terminals:input" | "terminals:focus" | "terminals:layout-control" | "terminals:process-control" | "terminals:output" | "panes:observe" | "panes:semantic-read" | "panes:semantic-control" | "extensions:read" | "extensions:control" | "extensions:remove" | "extensions:install" | "filesystem:read" | "filesystem:write" | "state:read" | "state:write" | "preferences:read" | "preferences:write" | "credentials:read" | "credentials:inject" | "credentials:write" | "interface:render" | "notifications:publish";
 export type Cell = { "Text": string } | { "Number": number } | { "Bytes": number } | { "Badge": { "label": string; "tone": Tone } } | { "Stamp": number } | "Empty";
 export type Choice = { "value": string; "label": string };
-export type Column = { "key": string; "title": string; "width": Length; "align": Align; "sortable": boolean; "editable": boolean };
+export type Column = { "key": string; "title": string; "width": Length; "align": Align; "sortable": boolean; "editable": boolean; "importance": ColumnImportance; "identity": boolean };
+export type ColumnImportance = "Essential" | "Optional";
 export type ContainerCreateSpec = { "image": string; "name": string; "hostname"?: string | null; "entrypoint"?: Array<string> | null; "command": Array<string>; "environment": Array<[string, string]>; "working_directory"?: string | null; "user"?: string | null; "labels": Array<[string, string]>; "mounts": Array<ContainerVolumeMount>; "network"?: string | null; "ports": Array<ContainerPort>; "memory_mb"?: number | null; "cpus"?: number | null; "pids_limit"?: number | null };
 export type ContainerGrant = { "selectors"?: Array<ContainerSelector>; "create"?: boolean };
 export type ContainerInventory = { "containers": Array<ContainerSummary>; "complete": boolean };

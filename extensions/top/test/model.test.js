@@ -51,6 +51,10 @@ test('process table exposes supplied metrics and serves only requested bounded w
     schema.map(({ key }) => key),
     ['container', 'pid', 'user', 'cpu', 'memory', 'command'],
   );
+  assert.equal(schema.find(({ key }) => key === 'container').identity, true);
+  for (const key of ['user', 'cpu', 'memory']) {
+    assert.equal(schema.find((column) => column.key === key).importance, 'optional');
+  }
   assert.equal(await source.replace(records, schema, 'worker', 'pid', true), 5_000);
   assert.deepEqual(mutations, [
     { Length: { source: PROCESS_TABLE_SOURCE, version: 1, rows: 5_000 } },

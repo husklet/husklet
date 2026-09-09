@@ -267,6 +267,11 @@ function column(given: unknown) {
     align: item.align === undefined ? 'Start' : member(item.align, ALIGNS, 'an alignment'),
     sortable: Boolean(item.sortable),
     editable: Boolean(item.editable),
+    importance:
+      item.importance === undefined
+        ? 'Essential'
+        : member(item.importance, ['Essential', 'Optional'], 'a column importance'),
+    identity: Boolean(item.identity),
   };
 }
 

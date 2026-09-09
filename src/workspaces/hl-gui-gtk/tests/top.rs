@@ -16,17 +16,18 @@ mod unix {
         NetworkSummary,
     };
     use hl_extension::{
-        Capability, ChannelId, ExtensionName, ExtensionPreferences, ExtensionSummary, Frame, Grant, Hello, PROTOCOL,
+        codec, Capability, ChannelId, ExtensionName, ExtensionPreferences, ExtensionSummary, Frame, Grant, Hello,
         PaneProvider, PreferenceValue, Reply, Request, Snapshot, Welcome, Wire, WorkspaceConfiguration, WorkspaceInfo,
-        WorkspaceTerminal, codec,
+        WorkspaceTerminal, PROTOCOL,
     };
-    use hl_gui::{Renderer as _, Theme, Tree};
+    use hl_gui::{Renderer as _, SourceMutation, Theme, Tree};
     use hl_gui_gtk::Surface;
 
     const CASES: &[(&str, &str)] = &[
         ("workspace", "workspace"),
         ("settings", "settings"),
         ("extensions", "extensions"),
+        ("processes", "processes"),
         ("networks", "networks"),
     ];
     const DEADLINE: Duration = Duration::from_secs(5);
@@ -139,6 +140,7 @@ mod unix {
         surface.theme(&Theme::dark()).expect("Top theme installs");
         let mut renders = 0;
         let mut quiet = 0;
+        let mut pending_lengths = Vec::new();
         let deadline = Instant::now() + DEADLINE;
         while Instant::now() < deadline && (renders == 0 || quiet < 4) {
             match receive_until(&mut wire, (Instant::now() + Duration::from_millis(80)).min(deadline)) {
@@ -155,6 +157,8 @@ mod unix {
                             );
                             tree.apply(&frame, &mut surface)
                                 .unwrap_or_else(|error| panic!("{fixture}/{name} failed in GTK: {error:?}"));
+                            pending_lengths
+                                .retain(|(source, version, rows)| surface.resize(*source, *version, *rows).is_err());
                             renders += 1;
                             Reply::Done
                         }
@@ -174,10 +178,24 @@ mod unix {
                         } else {
                             catalogue()
                         }),
-                        Request::SourceResize { .. }
-                        | Request::SourceResizeAt { .. }
-                        | Request::EventSubscribe { .. }
-                        | Request::EventUnsubscribe { .. } => Reply::Done,
+                        Request::SourceResize { mutation } | Request::SourceResizeAt { mutation, .. } => {
+                            match mutation {
+                                SourceMutation::Length { source, version, rows } => {
+                                    if surface.resize(source, version, rows).is_err() {
+                                        pending_lengths.push((source, version, rows));
+                                    }
+                                }
+                                SourceMutation::Window(window) => {
+                                    surface.rows(&window).expect("Top source window applies");
+                                }
+                                SourceMutation::Invalidate { .. }
+                                | SourceMutation::Open { .. }
+                                | SourceMutation::Close { .. } => {}
+                                _ => {}
+                            }
+                            Reply::Done
+                        }
+                        Request::EventSubscribe { .. } | Request::EventUnsubscribe { .. } => Reply::Done,
                         other => panic!("unexpected {fixture}/{name} Top call: {other:?}"),
                     };
                     wire.send(&codec::reply(&reply).expect("reply encodes"))
@@ -194,6 +212,7 @@ mod unix {
             "workspace" => "Workspace",
             "settings" => "Workspace settings",
             "extensions" => "Extensions",
+            "processes" => "Processes",
             "networks" => "Networks",
             _ => unreachable!(),
         };
@@ -294,7 +313,75 @@ mod unix {
                     );
                 }
             }
+            if fixture == "populated" && name == "processes" && width == 1_200 {
+                settle_toolkit();
+                let request = surface
+                    .requests(1)
+                    .into_iter()
+                    .last()
+                    .expect("realized Processes table requests a bounded row window");
+                assert!(request.range.count <= 128);
+                let channel = ChannelId::new(88);
+                let mut request_payload = serde_json::to_value(&request).expect("process row request encodes");
+                request_payload
+                    .as_object_mut()
+                    .expect("row request is an object")
+                    .insert("slot".into(), serde_json::Value::String("top-main".into()));
+                wire.send(&Frame::new(
+                    channel,
+                    hl_extension::Kind::Event,
+                    serde_json::to_vec(&request_payload).expect("slotted process row request encodes"),
+                ))
+                .expect("process row request reaches Top");
+                loop {
+                    let frame = receive_until(&mut wire, Instant::now() + DEADLINE)
+                        .expect("Top publishes its process row window");
+                    if frame.kind == hl_extension::Kind::Credit {
+                        continue;
+                    }
+                    let request = codec::read_request(&frame).expect("concurrent Top call decodes");
+                    let mut delivered = false;
+                    let reply = match request {
+                        Request::InterfaceRender { frame } | Request::InterfaceRenderAt { frame, .. } => {
+                            tree.apply(&frame, &mut surface).expect("process rerender applies");
+                            Reply::Done
+                        }
+                        Request::SourceResize { mutation } | Request::SourceResizeAt { mutation, .. } => {
+                            if let SourceMutation::Window(window) = mutation {
+                                surface.rows(&window).expect("GTK accepts process rows");
+                                delivered = true;
+                            }
+                            Reply::Done
+                        }
+                        other => panic!("unexpected call awaiting process rows: {other:?}"),
+                    };
+                    wire.send(&codec::reply(&reply).expect("concurrent reply encodes"))
+                        .expect("concurrent reply sends");
+                    if delivered {
+                        break;
+                    }
+                }
+                settle_toolkit();
+            }
             capture(&window, &format!("{capture_fixture}-{name}-{width_name}"), width, 800);
+            if fixture == "populated" && name == "processes" {
+                let view = find_column_view(&root).expect("Processes renders its DataTable");
+                let visible = view
+                    .columns()
+                    .iter::<gtk::ColumnViewColumn>()
+                    .filter_map(Result::ok)
+                    .filter(|column| column.is_visible())
+                    .filter_map(|column| column.id().map(|id| id.to_string()))
+                    .collect::<Vec<_>>();
+                if width == 600 {
+                    assert_eq!(visible, ["container", "pid", "command", "__responsive_details:0:2,3,4"],);
+                    let details =
+                        find_menu_button(&root, "3 details").expect("narrow Processes exposes optional metrics");
+                    assert!(details.is_focusable());
+                } else {
+                    assert_eq!(visible, ["container", "pid", "user", "cpu", "memory", "command"]);
+                }
+            }
         }
         if fixture == "populated" && name == "extensions" && !catalogue_empty {
             find_toggle(&root, "Discover").set_active(true);
@@ -998,6 +1085,36 @@ mod unix {
             }
         }
         false
+    }
+
+    fn find_column_view(root: &gtk::Widget) -> Option<gtk::ColumnView> {
+        if let Ok(view) = root.clone().downcast::<gtk::ColumnView>() {
+            return Some(view);
+        }
+        let mut child = root.first_child();
+        while let Some(current) = child {
+            child = current.next_sibling();
+            if let Some(view) = find_column_view(&current) {
+                return Some(view);
+            }
+        }
+        None
+    }
+
+    fn find_menu_button(root: &gtk::Widget, wanted: &str) -> Option<gtk::MenuButton> {
+        if let Ok(button) = root.clone().downcast::<gtk::MenuButton>() {
+            if button.label().as_deref() == Some(wanted) {
+                return Some(button);
+            }
+        }
+        let mut child = root.first_child();
+        while let Some(current) = child {
+            child = current.next_sibling();
+            if let Some(button) = find_menu_button(&current, wanted) {
+                return Some(button);
+            }
+        }
+        None
     }
 
     fn find_labelled(root: &gtk::Widget, wanted: &str) -> gtk::Widget {

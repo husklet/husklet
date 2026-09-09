@@ -227,7 +227,7 @@
     {"name": "Maximum", "group": "range", "editor": "number", "values": ["Number", "Integer"], "default": null, "note": "upper bound of a slider or a number entry"},
     {"name": "Step", "group": "range", "editor": "number", "values": ["Number", "Integer"], "default": null, "note": "increment of a slider or a number entry"},
     {"name": "Fraction", "group": "range", "editor": "number", "values": ["Number", "Integer"], "default": null, "note": "progress or meter fill, clamped to nought through one"},
-    {"name": "Schema", "group": "collection", "editor": "schema", "values": ["Schema"], "default": null, "note": "table columns: key, title, width as a Length, align, sortable, editable"},
+    {"name": "Schema", "group": "collection", "editor": "schema", "values": ["Schema"], "default": null, "note": "table columns: key, title, width as a Length, align, sortable, editable, importance, identity"},
     {"name": "Source", "group": "collection", "editor": "source", "values": ["Source"], "default": null, "note": "identity of the windowed row source backing a collection"},
     {"name": "RowHeight", "group": "collection", "editor": "number", "values": ["Number", "Integer"], "default": null, "note": "row height of a windowed collection"},
     {"name": "Choices", "group": "collection", "editor": "choices", "values": ["Choices"], "default": null, "note": "ordered options of a model-backed choice control, each with a stable value and visible label"}

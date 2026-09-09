@@ -1,7 +1,10 @@
 //! Collection binding: declared columns and the rows answering a window.
 
 use gtk::prelude::*;
-use hl_gui::{Align, Cell, CollectionEdit, Column, Event, Length, Node, Prop, PropValue, RowWindow, SourceId, Trigger};
+use hl_gui::{
+    Align, Cell, CollectionEdit, Column, ColumnImportance, Event, Length, Node, Prop, PropValue, RowWindow, SourceId,
+    Trigger,
+};
 
 use crate::rows::{Rows, UNIT};
 
@@ -11,6 +14,7 @@ use crate::component;
 const CHARACTER_PIXELS: i32 = 9;
 /// Horizontal margin applied to each side of a cell.
 const CELL_MARGIN: i32 = 8;
+const NARROW_TABLE_PIXELS: i32 = 720;
 
 /// Applies a collection-shaped property.
 pub(crate) fn configure(
@@ -43,11 +47,155 @@ fn schema(widget: &gtk::Widget, node: &Node, columns: &[Column], reports: &crate
         };
         view.remove_column(&column);
     }
+    let mut optional = Vec::new();
     for (index, column) in columns.iter().enumerate() {
-        view.append_column(&declare(&view, node, column, index, reports));
+        let declared = declare(&view, node, column, index, reports);
+        if column.importance == ColumnImportance::Optional && !column.identity {
+            optional.push((declared.clone(), index, column.title.clone()));
+        }
+        view.append_column(&declared);
     }
+    let identity = columns.iter().position(|column| column.identity);
+    let details = (!optional.is_empty()).then(|| details_column(&optional, identity));
+    if let Some(details) = &details {
+        view.append_column(details);
+    }
+    responsive(&view, widget.width());
 }
 
+fn details_column(
+    optional: &[(gtk::ColumnViewColumn, usize, String)],
+    identity: Option<usize>,
+) -> gtk::ColumnViewColumn {
+    let factory = gtk::SignalListItemFactory::new();
+    let fields = optional
+        .iter()
+        .map(|(_, index, title)| (*index, title.clone()))
+        .collect::<Vec<_>>();
+    let indices = fields
+        .iter()
+        .map(|(index, _)| index.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    factory.connect_setup(|_, item| {
+        let Ok(item) = item.clone().downcast::<gtk::ListItem>() else {
+            return;
+        };
+        let button = gtk::MenuButton::new();
+        button.set_label("Details");
+        button.set_focusable(true);
+        button.set_halign(gtk::Align::Start);
+        button.set_margin_start(CELL_MARGIN);
+        button.set_margin_end(CELL_MARGIN);
+        let popover = gtk::Popover::new();
+        button.set_popover(Some(&popover));
+        item.set_child(Some(&button));
+    });
+    factory.connect_bind(move |_, item| {
+        let Ok(item) = item.clone().downcast::<gtk::ListItem>() else {
+            return;
+        };
+        let (Some(child), Some(entry)) = (item.child(), item.item()) else {
+            return;
+        };
+        let (Ok(button), Ok(text)) = (
+            child.downcast::<gtk::MenuButton>(),
+            entry.downcast::<gtk::StringObject>(),
+        ) else {
+            return;
+        };
+        let cells = text.string();
+        let values = cells.split(UNIT).collect::<Vec<_>>();
+        let mut disclosure = Vec::with_capacity(fields.len());
+        for (index, title) in &fields {
+            let value = values.get(*index).copied().unwrap_or("");
+            let bounded = value.chars().take(256).collect::<String>();
+            let suffix = if bounded.len() < value.len() { "…" } else { "" };
+            disclosure.push(format!("{title}: {bounded}{suffix}"));
+        }
+        let content = gtk::Label::new(Some(&disclosure.join("\n")));
+        content.set_xalign(0.0);
+        content.set_selectable(true);
+        content.set_wrap(true);
+        content.set_max_width_chars(64);
+        content.set_margin_top(8);
+        content.set_margin_end(8);
+        content.set_margin_bottom(8);
+        content.set_margin_start(8);
+        let count = fields.len();
+        let accessible = format!(
+            "{count} hidden field{} for row {}",
+            if count == 1 { "" } else { "s" },
+            item.position() + 1
+        );
+        button.set_label(&format!("{count} details"));
+        button.set_tooltip_text(Some(&format!("{accessible}: {}", disclosure.join("; "))));
+        button.update_property(&[gtk::accessible::Property::Label(&accessible)]);
+        if let Some(popover) = button.popover() {
+            popover.set_child(Some(&content));
+        }
+    });
+    let declared = gtk::ColumnViewColumn::new(Some("Details"), Some(factory));
+    declared.set_id(Some(&format!(
+        "__responsive_details:{}:{indices}",
+        identity.map_or_else(String::new, |index| index.to_string())
+    )));
+    declared.set_fixed_width(128);
+    declared.set_resizable(false);
+    declared.set_visible(false);
+    declared
+}
+
+/// Applies the responsive visibility policy encoded by the synthetic details
+/// column. Called by the one allocation observer owned by the table widget.
+pub(crate) fn responsive(view: &gtk::ColumnView, width: i32) {
+    let narrow = width > 0 && width <= NARROW_TABLE_PIXELS;
+    let columns = (0..view.columns().n_items())
+        .filter_map(|index| {
+            view.columns()
+                .item(index)
+                .and_then(|item| item.downcast::<gtk::ColumnViewColumn>().ok())
+        })
+        .collect::<Vec<_>>();
+    let (identity, optional) = columns
+        .iter()
+        .find_map(|column| {
+            column.id().and_then(|id| {
+                id.strip_prefix("__responsive_details:").and_then(|metadata| {
+                    let (identity, indices) = metadata.split_once(':')?;
+                    Some((
+                        identity.parse::<usize>().ok(),
+                        indices
+                            .split(',')
+                            .filter_map(|index| index.parse::<usize>().ok())
+                            .collect::<Vec<_>>(),
+                    ))
+                })
+            })
+        })
+        .unwrap_or_default();
+    if narrow {
+        let hidden_sort = view
+            .sorter()
+            .and_then(|sorter| sorter.downcast::<gtk::ColumnViewSorter>().ok())
+            .and_then(|sorter| sorter.primary_sort_column())
+            .and_then(|active| columns.iter().position(|column| column == &active))
+            .is_some_and(|index| optional.contains(&index));
+        if hidden_sort {
+            view.sort_by_column(identity.and_then(|index| columns.get(index)), gtk::SortType::Ascending);
+            view.update_property(&[gtk::accessible::Property::Description(
+                "Sorting was reset to the identity column because its optional column moved into row details.",
+            )]);
+        }
+    }
+    for (index, column) in columns.iter().enumerate() {
+        if column.id().is_some_and(|id| id.starts_with("__responsive_details:")) {
+            column.set_visible(narrow);
+        } else if optional.contains(&index) {
+            column.set_visible(!narrow);
+        }
+    }
+}
 fn declare(
     view: &gtk::ColumnView,
     node: &Node,

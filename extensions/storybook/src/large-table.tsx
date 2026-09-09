@@ -30,8 +30,18 @@ export const WINDOW_LIMIT = 128;
 export const OPERATION_HISTORY_LIMIT = 6;
 export const SOURCE = 100;
 export const SCHEMA: readonly ColumnSpec[] = Object.freeze([
-  { key: 'id', title: 'ID', width: { chars: 12 }, sortable: true },
+  { key: 'id', title: 'ID', width: { chars: 8 }, sortable: true, identity: true },
   { key: 'name', title: 'Workspace record', width: 'fill', sortable: true, editable: true },
+  { key: 'owner', title: 'Owner', width: { chars: 12 }, importance: 'optional' },
+  {
+    key: 'cpu',
+    title: 'CPU',
+    width: { chars: 8 },
+    align: 'end',
+    sortable: true,
+    importance: 'optional',
+  },
+  { key: 'memory', title: 'Memory', width: { chars: 10 }, align: 'end', importance: 'optional' },
   { key: 'state', title: 'State', width: { chars: 12 } },
 ]);
 
@@ -156,6 +166,9 @@ export class LargeRecordSource {
         cells: [
           { Text: 'unavailable' },
           { Text: 'The source refused this window' },
+          { Text: 'system' },
+          { Text: '—' },
+          { Text: '—' },
           { Badge: { label: 'error', tone: 'Danger' } },
         ],
       };
@@ -166,6 +179,9 @@ export class LargeRecordSource {
       cells: [
         { Number: logical },
         { Text: this.edits.get(String(logical)) ?? `${this.filter || 'record'}-${logical}` },
+        { Text: logical % 2 ? 'platform' : 'runtime' },
+        { Number: (logical % 100) / 10 },
+        { Bytes: 65_536 + logical * 128 },
         {
           Badge: {
             label: logical % 3 ? 'ready' : 'busy',

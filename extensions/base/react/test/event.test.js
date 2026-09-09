@@ -181,6 +181,8 @@ test('two roots keep independent slots, sequences, sources, and events over one 
               align: 'Start',
               sortable: true,
               editable: false,
+              importance: 'Essential',
+              identity: false,
             },
           ],
         },

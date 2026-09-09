@@ -96,6 +96,20 @@ test('table schemas enforce host allocation and UTF-8 identity bounds before ren
   );
 });
 
+test('table schemas preserve responsive importance and stable identity semantics', () => {
+  assert.deepEqual(value('Schema', [
+    { key: 'container', identity: true },
+    { key: 'cpu', importance: 'optional' },
+  ]).Schema.map(({ importance, identity }) => ({ importance, identity })), [
+    { importance: 'Essential', identity: true },
+    { importance: 'Optional', identity: false },
+  ]);
+  assert.throws(
+    () => value('Schema', [{ key: 'cpu', importance: 'sometimes' }]),
+    /column importance/,
+  );
+});
+
 test('destructive is an explicit typed semantic property', () => {
   const host = surface();
   const frame = host.render(h(Button, { label: 'Delete', destructive: true, onInvoke: () => {} }));

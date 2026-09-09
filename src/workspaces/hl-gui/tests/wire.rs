@@ -297,7 +297,7 @@ fn a_theme_survives_the_wire() {
 fn table_schema_wire_refuses_duplicate_and_overlong_utf8_identity() {
     let column = serde_json::json!({
         "key": "same", "title": "Name", "width": "Content", "align": "Start",
-        "sortable": false, "editable": false
+        "sortable": false, "editable": false, "importance": "Essential", "identity": false
     });
     let duplicate = serde_json::json!({"Schema": [column.clone(), column]});
     assert!(serde_json::from_value::<PropValue>(duplicate)
@@ -307,7 +307,7 @@ fn table_schema_wire_refuses_duplicate_and_overlong_utf8_identity() {
 
     let overlong = serde_json::json!({"Schema": [{
         "key": "é".repeat(65), "title": "Name", "width": "Content", "align": "Start",
-        "sortable": false, "editable": false
+        "sortable": false, "editable": false, "importance": "Essential", "identity": false
     }]});
     assert!(serde_json::from_value::<PropValue>(overlong)
         .unwrap_err()

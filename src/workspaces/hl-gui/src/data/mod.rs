@@ -18,6 +18,17 @@ pub const COLUMN_KEY_BYTE_LIMIT: usize = 128;
 /// Maximum UTF-8 bytes in a user-visible column title.
 pub const COLUMN_TITLE_BYTE_LIMIT: usize = 256;
 
+/// How a renderer treats a column when the table cannot show every field.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[cfg_attr(feature = "wire", derive(serde::Deserialize, serde::Serialize))]
+pub enum ColumnImportance {
+    /// Remains visible at every supported width.
+    #[default]
+    Essential,
+    /// May move into the row's accessible details disclosure at narrow widths.
+    Optional,
+}
+
 /// Identity of one data source within a session.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[cfg_attr(feature = "wire", derive(serde::Deserialize, serde::Serialize))]
@@ -88,6 +99,11 @@ pub struct Column {
     pub sortable: bool,
     #[cfg_attr(feature = "wire", serde(default))]
     pub editable: bool,
+    #[cfg_attr(feature = "wire", serde(default))]
+    pub importance: ColumnImportance,
+    /// The stable identifying field. Identity columns are always visible.
+    #[cfg_attr(feature = "wire", serde(default))]
+    pub identity: bool,
 }
 
 impl Column {
@@ -103,6 +119,8 @@ impl Column {
             align: Align::Start,
             sortable: false,
             editable: false,
+            importance: ColumnImportance::Essential,
+            identity: false,
         }
     }
 
@@ -127,6 +145,19 @@ impl Column {
     #[must_use]
     pub const fn editable(mut self) -> Self {
         self.editable = true;
+        self
+    }
+
+    #[must_use]
+    pub const fn optional(mut self) -> Self {
+        self.importance = ColumnImportance::Optional;
+        self
+    }
+
+    #[must_use]
+    pub const fn identity(mut self) -> Self {
+        self.identity = true;
+        self.importance = ColumnImportance::Essential;
         self
     }
 }
@@ -396,13 +427,24 @@ pub enum SourceMutation {
 #[cfg(test)]
 mod tests {
     use super::{
-        validate_columns, Column, RowRange, COLUMN_KEY_BYTE_LIMIT, COLUMN_TITLE_BYTE_LIMIT, TABLE_COLUMN_LIMIT,
+        validate_columns, Column, ColumnImportance, RowRange, COLUMN_KEY_BYTE_LIMIT, COLUMN_TITLE_BYTE_LIMIT,
+        TABLE_COLUMN_LIMIT,
     };
 
     #[test]
     fn columns_are_read_only_unless_editing_is_explicit() {
         assert!(!Column::new("name", "Name").editable);
         assert!(Column::new("name", "Name").editable().editable);
+    }
+
+    #[test]
+    fn responsive_columns_are_explicit_and_identity_is_always_essential() {
+        let optional = Column::new("cpu", "CPU").optional();
+        assert_eq!(optional.importance, ColumnImportance::Optional);
+        assert!(!optional.identity);
+        let identity = optional.identity();
+        assert!(identity.identity);
+        assert_eq!(identity.importance, ColumnImportance::Essential);
     }
 
     #[test]

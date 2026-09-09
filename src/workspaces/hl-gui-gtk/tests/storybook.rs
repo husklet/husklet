@@ -10,9 +10,9 @@ mod unix {
 
     use gtk::prelude::*;
     use hl_extension::{
-        Capability, ChannelId, ExtensionName, Frame, Grant, Hello, Kind, PROTOCOL, Reply, Request, Welcome, Wire, codec,
+        codec, Capability, ChannelId, ExtensionName, Frame, Grant, Hello, Kind, Reply, Request, Welcome, Wire, PROTOCOL,
     };
-    use hl_gui::{LOG_VIEW_CHARACTER_LIMIT, Renderer as _, SourceMutation, Theme, Tree};
+    use hl_gui::{Renderer as _, SourceMutation, Theme, Tree, LOG_VIEW_CHARACTER_LIMIT};
     use hl_gui_gtk::Surface;
 
     const STORIES: &[&str] = &[
@@ -349,11 +349,7 @@ mod unix {
             }
         }
         if story == "IconButton" {
-            for (class, expected, icon) in [
-                ("size-small", 28, 14),
-                ("size-medium", 36, 18),
-                ("size-large", 44, 20),
-            ] {
+            for (class, expected, icon) in [("size-small", 28, 14), ("size-medium", 36, 18), ("size-large", 44, 20)] {
                 let sizes = descendants::<gtk::Button>(&root)
                     .into_iter()
                     .filter(|button| button.has_css_class(class))
@@ -377,9 +373,7 @@ mod unix {
                     "IconButton {class} icon paint boxes {icon_sizes:?} did not preserve {icon}px optical size"
                 );
             }
-            let fallback = find::<gtk::Button>(&root, |button| {
-                button.tooltip_text().as_deref() == Some("Refresh")
-            });
+            let fallback = find::<gtk::Button>(&root, |button| button.tooltip_text().as_deref() == Some("Refresh"));
             assert_eq!(fallback.icon_name().as_deref(), Some("view-refresh-symbolic"));
             let override_ = find::<gtk::Button>(&root, |button| {
                 button.tooltip_text().as_deref() == Some("Use the host default for font size")
@@ -691,12 +685,53 @@ mod unix {
             let selected = receive_rerender(&mut wire, story);
             tree.apply(&selected, &mut surface)
                 .expect("selected row acknowledgement renders in GTK");
+            let cpu = view
+                .columns()
+                .iter::<gtk::ColumnViewColumn>()
+                .filter_map(Result::ok)
+                .find(|column| column.id().as_deref() == Some("cpu"))
+                .expect("hard responsive specimen has an optional sortable column");
+            view.sort_by_column(Some(&cpu), gtk::SortType::Descending);
+            settle_toolkit();
+            let _ = surface.reports().drain();
             realized_window.set_size_request(600, 800);
             realized_window.set_default_size(600, 800);
             root.measure(gtk::Orientation::Horizontal, -1);
             root.measure(gtk::Orientation::Vertical, 600);
             root.allocate(600, 800, -1, None);
             settle_toolkit();
+            let narrow_columns = view
+                .columns()
+                .iter::<gtk::ColumnViewColumn>()
+                .filter_map(Result::ok)
+                .filter(|column| column.is_visible())
+                .filter_map(|column| column.id().map(|id| id.to_string()))
+                .collect::<Vec<_>>();
+            assert_eq!(
+                narrow_columns,
+                ["id", "name", "state", "__responsive_details:0:2,3,4"],
+                "narrow DataTable did not retain identity/content and disclose optional fields",
+            );
+            let details = descendants::<gtk::MenuButton>(&root)
+                .into_iter()
+                .find(|button| button.label().as_deref() == Some("3 details"))
+                .expect("narrow DataTable rows expose keyboard-reachable details");
+            assert!(details.is_focusable());
+            assert!(details.tooltip_text().is_some_and(|text| {
+                text.contains("3 hidden fields") && text.contains("Owner:") && text.contains("CPU:")
+            }));
+            assert!(model.is_selected(0), "narrow responsive columns lost row selection");
+            let reset = surface
+                .reports()
+                .drain()
+                .into_iter()
+                .find_map(|event| match event {
+                    hl_gui::Event::Sort { sort, .. } => Some(sort),
+                    _ => None,
+                })
+                .expect("hiding the active optional sort reports its deterministic reset");
+            assert_eq!(reset.column, "id");
+            assert!(!reset.descending);
             capture_story(&realized_window, "DataTable narrow");
             realized_window.set_size_request(1_200, 800);
             realized_window.set_default_size(1_200, 800);
@@ -704,6 +739,15 @@ mod unix {
             root.measure(gtk::Orientation::Vertical, 1_200);
             root.allocate(1_200, 800, -1, None);
             settle_toolkit();
+            let wide_columns = view
+                .columns()
+                .iter::<gtk::ColumnViewColumn>()
+                .filter_map(Result::ok)
+                .filter(|column| column.is_visible())
+                .filter_map(|column| column.id().map(|id| id.to_string()))
+                .collect::<Vec<_>>();
+            assert_eq!(wide_columns, ["id", "name", "owner", "cpu", "memory", "state"]);
+            assert!(model.is_selected(0), "wide responsive columns lost row selection");
             capture_story(&realized_window, "DataTable");
         }
         assert!(readable_heading(&root), "{story} has no readable GTK heading");

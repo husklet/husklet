@@ -152,11 +152,37 @@ type ProcessColumn = ColumnSpec & { key: string };
 type ProcessTableRow = { key: number; cells: Array<{ Text: string }> };
 
 const PROCESS_COLUMNS = {
-  container: { key: 'container', title: 'Container', width: { chars: 18 }, sortable: true },
+  container: {
+    key: 'container',
+    title: 'Container',
+    width: { chars: 18 },
+    sortable: true,
+    identity: true,
+  },
   pid: { key: 'pid', title: 'PID', width: { chars: 8 }, align: 'end', sortable: true },
-  user: { key: 'user', title: 'User', width: { chars: 14 }, sortable: true },
-  cpu: { key: 'cpu', title: 'CPU', width: { chars: 9 }, align: 'end', sortable: true },
-  memory: { key: 'memory', title: 'Memory', width: { chars: 12 }, align: 'end', sortable: true },
+  user: {
+    key: 'user',
+    title: 'User',
+    width: { chars: 14 },
+    sortable: true,
+    importance: 'optional',
+  },
+  cpu: {
+    key: 'cpu',
+    title: 'CPU',
+    width: { chars: 9 },
+    align: 'end',
+    sortable: true,
+    importance: 'optional',
+  },
+  memory: {
+    key: 'memory',
+    title: 'Memory',
+    width: { chars: 12 },
+    align: 'end',
+    sortable: true,
+    importance: 'optional',
+  },
   command: { key: 'command', title: 'Command', width: 'fill', sortable: true },
 } as const satisfies Record<string, ProcessColumn>;
 

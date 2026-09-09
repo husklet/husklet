@@ -175,6 +175,10 @@ export interface ColumnSpec {
   align?: ${union(catalogue().enums.Align)};
   sortable?: boolean;
   editable?: boolean;
+  /** Essential columns stay visible; optional columns move into row details when narrow. */
+  importance?: 'essential' | 'optional';
+  /** Stable identifying field; always visible at every supported width. */
+  identity?: boolean;
 }
 export const TABLE_COLUMN_LIMIT: 64;
 export const COLUMN_KEY_BYTE_LIMIT: 128;

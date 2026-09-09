@@ -709,10 +709,43 @@
           "schema": {
             "kind": "boolean"
           }
+        },
+        {
+          "name": "importance",
+          "optional": false,
+          "schema": {
+            "kind": "ref",
+            "name": "ColumnImportance"
+          }
+        },
+        {
+          "name": "identity",
+          "optional": false,
+          "schema": {
+            "kind": "boolean"
+          }
         }
       ],
       "kind": "struct",
       "serde": {}
+    },
+    "ColumnImportance": {
+      "kind": "enum",
+      "serde": {},
+      "variants": [
+        {
+          "name": "Essential",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Optional",
+          "payload": {
+            "kind": "unit"
+          }
+        }
+      ]
     },
     "ContainerCreateSpec": {
       "fields": [
@@ -13662,7 +13695,7 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:55e185443440c11b",
+  "source_fingerprint": "fnv1a64:0bf39de57a8ce44e",
   "specification_version": 1,
   "topics": [
     {

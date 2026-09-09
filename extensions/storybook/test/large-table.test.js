@@ -115,7 +115,7 @@ test('sort, filter, resize and all states remain bounded source operations', asy
   assert.equal(source.length(), 0);
   await source.configure({ state: 'error' });
   const failed = source.answer({ ...request, version: 6, range: { start: 0, count: 1 } });
-  assert.equal(failed.rows[0].cells[2].Badge.tone, 'Danger');
+  assert.equal(failed.rows[0].cells[5].Badge.tone, 'Danger');
   assert(mutations.every(([call]) => call === 'source_resize'));
 });
 

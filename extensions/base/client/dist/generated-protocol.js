@@ -1,5 +1,5 @@
 // Generated from Rust hl-extension protocol/v1.json. Do not edit.
-// Protocol artifact fnv1a64:2f1bc7a14a196493
+// Protocol artifact fnv1a64:d8ad76841c690e1e
 export const PROTOCOL_SPECIFICATION_VERSION = 1;
 export const PROTOCOL_VERSION = 1;
 export const PROTOCOL_BOUNDS = Object.freeze({
@@ -1040,10 +1040,43 @@ const definitions = {
         "schema": {
           "kind": "boolean"
         }
+      },
+      {
+        "name": "importance",
+        "optional": false,
+        "schema": {
+          "kind": "ref",
+          "name": "ColumnImportance"
+        }
+      },
+      {
+        "name": "identity",
+        "optional": false,
+        "schema": {
+          "kind": "boolean"
+        }
       }
     ],
     "kind": "struct",
     "serde": {}
+  },
+  "ColumnImportance": {
+    "kind": "enum",
+    "serde": {},
+    "variants": [
+      {
+        "name": "Essential",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
+        "name": "Optional",
+        "payload": {
+          "kind": "unit"
+        }
+      }
+    ]
   },
   "ContainerCreateSpec": {
     "fields": [

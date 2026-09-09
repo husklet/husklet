@@ -82,7 +82,14 @@ fn view() -> gtk::ScrolledWindow {
     window.set_child(Some(&view));
     window.set_hexpand(true);
     window.set_vexpand(true);
+    window.set_propagate_natural_width(false);
+    window.set_min_content_width(0);
     window.set_min_content_height(160);
+    let responsive_view = view.clone();
+    window.add_tick_callback(move |window, _| {
+        crate::collection::responsive(&responsive_view, window.width());
+        gtk::glib::ControlFlow::Continue
+    });
     window
 }
 

@@ -873,7 +873,7 @@ const PROPS: &[Entry] = &[
         group: "collection",
         editor: "schema",
         values: &["Schema"],
-        note: "table columns: key, title, width as a Length, align, sortable, editable",
+        note: "table columns: key, title, width as a Length, align, sortable, editable, importance, identity",
     },
     Entry {
         prop: Prop::Source,
@@ -1042,7 +1042,7 @@ fn quoted(item: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{FAMILIES, PROPS, catalogue, escaped, family, text};
+    use super::{catalogue, escaped, family, text, FAMILIES, PROPS};
     use hl_gui::Tag;
 
     /// The document is JSON at all: quotes pair up outside of escapes and no

@@ -100,8 +100,8 @@ export function fixtureApi(api: WorkspaceApi, mode = 'populated'): WorkspaceApi 
       ...api.containers,
       processes: async () => ({
         container_id: containerId,
-        titles: ['PID', 'USER', 'COMMAND'],
-        processes: [['412', 'developer', 'npm test']],
+        titles: ['PID', 'USER', 'CPU', 'MEMORY', 'COMMAND'],
+        processes: [['412', 'developer', '2.4', '64 MiB', 'npm test']],
         snapshot: 'f'.repeat(64),
         next: null,
         more: false,

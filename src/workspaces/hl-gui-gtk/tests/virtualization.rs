@@ -152,14 +152,20 @@ fn a_real_column_view_resizes_without_materializing_the_logical_source() {
         .build();
     window.present();
     settle();
+    let initial_requests = rows.drain().len();
     let compact = descendants(window.clone().upcast_ref()).len();
     window.set_default_size(1200, 720);
     settle();
+    let resize_requests = rows.drain().len();
     let expanded = descendants(window.clone().upcast_ref()).len();
 
     assert_eq!(u64::from(rows.n_items()), STORY_ROWS);
     assert!(compact < 1_000, "a million-row view materialized {compact} GTK widgets");
     assert!(expanded < 2_000, "resizing materialized {expanded} GTK widgets");
+    assert!(
+        resize_requests <= initial_requests.saturating_add(2),
+        "responsive resizing issued {resize_requests} requests after {initial_requests} initial requests",
+    );
     assert!(rows.held() <= hl_gui::RowCache::CAPACITY);
     window.close();
 }
