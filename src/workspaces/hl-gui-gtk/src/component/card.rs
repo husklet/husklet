@@ -1,6 +1,10 @@
 //! Cards and the other framing surfaces, with the parts a card is built from.
 
+use std::cell::OnceCell;
+
+use gtk::glib;
 use gtk::prelude::*;
+use gtk::subclass::prelude::*;
 use hl_gui::Tag;
 
 use super::{axis, slot};
@@ -8,7 +12,69 @@ use super::{axis, slot};
 /// Width a page body is limited to before it stops growing, in pixels. Long
 /// lines are unreadable, so a container stops widening rather than filling a
 /// maximised window.
-const BODY_PIXELS: i32 = 720;
+const BODY_PIXELS: i32 = 880;
+
+/// A page body whose preferred width is a ceiling rather than a minimum.
+///
+/// `set_size_request` cannot express this: a fixed request prevents GTK
+/// from shrinking the body in a narrow pane. Reporting no horizontal minimum
+/// and an 880px natural width gives the parent the intended contract instead:
+/// use every available pixel up to 880, then centre the body.
+#[derive(Default)]
+struct Body {
+    column: OnceCell<gtk::Box>,
+}
+
+#[glib::object_subclass]
+impl ObjectSubclass for Body {
+    const NAME: &'static str = "HlPageBody";
+    type Type = PageBody;
+    type ParentType = gtk::Widget;
+}
+
+impl ObjectImpl for Body {
+    fn constructed(&self) {
+        self.parent_constructed();
+        let column = axis::column(12);
+        column.set_parent(&*self.obj());
+        self.column.set(column).expect("page body constructed once");
+    }
+
+    fn dispose(&self) {
+        if let Some(column) = self.column.get() {
+            column.unparent();
+        }
+    }
+}
+
+impl WidgetImpl for Body {
+    fn measure(&self, orientation: gtk::Orientation, for_size: i32) -> (i32, i32, i32, i32) {
+        if orientation == gtk::Orientation::Horizontal {
+            (0, BODY_PIXELS, -1, -1)
+        } else {
+            self.column().measure(orientation, for_size)
+        }
+    }
+
+    fn size_allocate(&self, width: i32, height: i32, baseline: i32) {
+        let column = self.column();
+        column.measure(gtk::Orientation::Horizontal, -1);
+        column.measure(gtk::Orientation::Vertical, width);
+        column.allocate(width, height, baseline, None);
+    }
+}
+
+impl Body {
+    fn column(&self) -> &gtk::Box {
+        self.column.get().expect("page body is constructed")
+    }
+}
+
+glib::wrapper! {
+    struct PageBody(ObjectSubclass<Body>)
+        @extends gtk::Widget,
+        @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
+}
 
 /// Surfaces that frame other components.
 pub(crate) fn widget(tag: Tag) -> gtk::Widget {
@@ -73,11 +139,26 @@ fn area() -> gtk::Button {
     widget
 }
 
-fn container() -> gtk::Box {
-    let widget = axis::column(12);
+fn container() -> PageBody {
+    let widget: PageBody = glib::Object::new();
     widget.set_halign(gtk::Align::Center);
-    widget.set_size_request(BODY_PIXELS, -1);
     widget
+}
+
+/// Whether this widget is the page-body clamp, whose children are parented
+/// directly and laid out by its vertical box layout.
+pub(crate) fn container_column(widget: &gtk::Widget) -> Option<gtk::Box> {
+    widget
+        .downcast_ref::<PageBody>()
+        .map(|body| body.imp().column().clone())
+}
+
+pub(crate) fn gap(widget: &gtk::Widget, pixels: i32) -> bool {
+    let Some(container) = container_column(widget) else {
+        return false;
+    };
+    container.set_spacing(pixels);
+    true
 }
 
 fn toolbar() -> gtk::Box {

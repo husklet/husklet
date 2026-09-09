@@ -117,7 +117,54 @@ fn geometry_is_what_the_description_asked_for() {
     a_character_width_applies_to_a_scrolling_container();
     a_list_button_ellipsizes_from_its_reading_edge();
     a_scrolled_pane_shares_narrow_and_wide_host_width();
+    a_page_container_shrinks_and_caps_its_content_width();
     a_responsive_container_presents_only_its_allocated_branch();
+}
+
+fn a_page_container_shrinks_and_caps_its_content_width() {
+    let mut stage = Stage::new();
+    let container = stage.producer.create(Tag::Container);
+    let child = stage.producer.create(Tag::Column);
+    let action = stage.producer.create(Tag::Button);
+    stage.producer.set(action, Prop::Label, PropValue::text("Save"));
+    stage.producer.set(action, Prop::Align, PropValue::Align(Align::Start));
+    stage.producer.append(container, child);
+    stage.producer.append(container, action);
+    stage.producer.append(NodeId::ROOT, container);
+    stage.draw();
+
+    let widget = stage.tagged(Tag::Container);
+    let (minimum, natural, _, _) = widget.measure(gtk::Orientation::Horizontal, -1);
+    assert_eq!(minimum, 0, "a page body must be allowed to shrink with its pane");
+    assert_eq!(natural, 880, "the readable body width is a natural ceiling");
+
+    for width in [320, 520] {
+        stage.allocate(width, 240);
+        assert_eq!(widget.width(), width, "the body did not fill a {width}px pane");
+        assert_eq!(
+            widget.allocation().x(),
+            0,
+            "a body narrower than its ceiling must start at the pane edge"
+        );
+    }
+
+    stage.allocate(1280, 240);
+    assert_eq!(widget.width(), 880, "the body grew beyond its readable ceiling");
+    assert_eq!(
+        widget.allocation().x(),
+        (1280 - 880) / 2,
+        "the capped body was not centred in the wide pane"
+    );
+    assert_eq!(
+        offspring(&offspring(&widget)[0]).len(),
+        2,
+        "the clamp must not duplicate or wrap the semantic child tree"
+    );
+    let button = stage.tagged(Tag::Button);
+    assert!(
+        button.width() < widget.width(),
+        "an intrinsically aligned action stretched to the clamp width"
+    );
 }
 
 fn a_responsive_container_presents_only_its_allocated_branch() {

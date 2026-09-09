@@ -165,6 +165,9 @@ fn ellipsize(widget: &gtk::Widget, value: &PropValue) {
 
 fn gap(widget: &gtk::Widget, value: &PropValue) {
     let pixels = i32::from(value.as_length().and_then(Length::pixels).unwrap_or(0));
+    if crate::component::card::gap(widget, pixels) {
+        return;
+    }
     // A revealed surface holds its children in the column it reveals, so the
     // space between them is that column's, not the revealer's.
     let revealed = widget

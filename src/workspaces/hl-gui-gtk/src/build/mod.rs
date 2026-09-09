@@ -54,6 +54,10 @@ pub(crate) fn attach(parent: &gtk::Widget, child: &gtk::Widget, tag: Tag, index:
     if responsive::attach(parent, child, index) {
         return true;
     }
+    if let Some(container) = component::card::container_column(parent) {
+        insert_into(&container, child, index);
+        return true;
+    }
     if let Some(container) = parent.downcast_ref::<gtk::Box>() {
         insert_into(container, child, index);
         return true;

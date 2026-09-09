@@ -1103,13 +1103,13 @@ fn revealed(widget: &gtk::Widget) -> bool {
 }
 
 fn spaced(widget: &gtk::Widget) -> bool {
-    if let Some(container) = widget.downcast_ref::<gtk::Box>() {
-        return container.spacing() == 12;
-    }
-    let Some(grid) = widget.downcast_ref::<gtk::Grid>() else {
-        return false;
-    };
-    grid.row_spacing() == 12
+    subtree(widget).iter().any(|held| {
+        held.downcast_ref::<gtk::Box>()
+            .is_some_and(|container| container.spacing() == 12)
+            || held
+                .downcast_ref::<gtk::Grid>()
+                .is_some_and(|grid| grid.row_spacing() == 12)
+    })
 }
 
 fn upright(widget: &gtk::Widget) -> bool {
