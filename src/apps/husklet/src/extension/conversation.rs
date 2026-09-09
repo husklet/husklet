@@ -19,9 +19,9 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use hl_extension::{
-    codec, Authority, ChannelId, Channels, Compatibility, Emission, Failure, Frame, Hello, Kind, Limits, Outbox,
+    Authority, ChannelId, Channels, Compatibility, Emission, Failure, Frame, Hello, Kind, Limits, Outbox, PROTOCOL,
     PaneChange, PaneChangeKind, Permission, Reply, Services, Session, Snapshot, Streams, Subscriptions, SurfaceFrame,
-    SurfaceMutation, Topic, Transit, Welcome, Wire, PROTOCOL,
+    SurfaceMutation, Topic, Transit, Welcome, Wire, codec,
 };
 
 /// Interface work an extension has produced and the GUI has not collected yet.
@@ -1234,8 +1234,8 @@ mod tests {
         PaneSummary, TabSummary, TerminalSurface, WorkspaceFiles,
     };
     use hl_extension::{
-        codec, Authority, Capability, Channels, ExtensionName, Failure, Flags, Frame, Grant, Hello, Kind,
-        PreferenceValue, RelativePath, Reply, Request, Services, Transit, Wire, WorkspaceInfo, PROTOCOL,
+        Authority, Capability, Channels, ExtensionName, Failure, Flags, Frame, Grant, Hello, Kind, PROTOCOL,
+        PreferenceValue, RelativePath, Reply, Request, Services, Transit, Wire, WorkspaceInfo, codec,
     };
 
     use super::{Compatibility, Conversation, Emission, Fault, Queue, Snapshot};
@@ -4255,6 +4255,7 @@ mod tests {
                 ],
                 user: None,
                 working_directory: None,
+                stdin: false,
             },
         );
         assert!(codec::is_failure(&failure), "duplicate environment names are refused");
