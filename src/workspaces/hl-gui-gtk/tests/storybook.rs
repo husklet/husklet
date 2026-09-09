@@ -312,6 +312,12 @@ mod unix {
             let slider = find::<gtk::Scale>(&root, |scale| {
                 scale.tooltip_text().as_deref() == Some("Build cache allocation")
             });
+            let disclosure = find::<gtk::Expander>(&root, |expander| expander.label().as_deref() == Some("Show code"));
+            assert!(!disclosure.is_expanded(), "Slider code starts collapsed");
+            assert!(
+                find::<gtk::Label>(&root, |label| label.text() == "API").is_visible(),
+                "compact Slider keeps the API heading in its first wide viewport"
+            );
             assert_eq!(slider.adjustment().lower(), 0.0);
             assert_eq!(slider.adjustment().upper(), 100.0);
             assert_eq!(slider.adjustment().step_increment(), 5.0);
@@ -610,6 +616,21 @@ mod unix {
             assert_eq!(slider.value(), 45.0, "controlled Slider retains the emitted value");
             assert!(slider.grab_focus(), "controlled Slider restores native focus");
             capture_story(&realized_window, "Slider focused");
+            let disclosure = find::<gtk::Expander>(&root, |expander| expander.label().as_deref() == Some("Show code"));
+            disclosure.set_expanded(true);
+            settle_toolkit();
+            assert!(disclosure.is_expanded(), "Slider code disclosure opens natively");
+            assert!(
+                find::<gtk::Label>(&root, |label| label.text().contains("boundedStep(report.value)")).is_visible(),
+                "expanded Slider disclosure exposes the exact report handler"
+            );
+            capture_story(&realized_window, "Slider code expanded");
+            realized_window.set_size_request(600, 800);
+            realized_window.set_default_size(600, 800);
+            root.allocate(600, 800, -1, None);
+            settle_toolkit();
+            assert_contained(&root, "Slider expanded code");
+            capture_story(&realized_window, "Slider code expanded narrow");
         }
         if story == "Extension acquisition" {
             assert!(

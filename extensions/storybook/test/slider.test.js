@@ -40,9 +40,7 @@ test('Slider documents bounds, steps, disabled silence, and keyboard behavior be
   const frame = stage.render(h(SliderWorkbench));
   const text = labels(frame.patches);
   for (const label of [
-    'Minimum · 0',
-    'Middle · 50',
-    'Maximum · 100',
+    'Range anatomy · minimum 0 · midpoint 50 · maximum 100',
     'Disabled · 35',
     'Coarse · step 25',
     'Fine · step 0.1',
@@ -59,7 +57,7 @@ test('Slider documents bounds, steps, disabled silence, and keyboard behavior be
   const sliders = frame.patches
     .filter((patch) => patch.Create?.tag === 'Slider')
     .map((patch) => patch.Create.id);
-  const disabled = sliders[4];
+  const disabled = sliders[2];
   assert.equal(
     stage.surface.dispatch({
       trigger: 'Change',
@@ -69,4 +67,43 @@ test('Slider documents bounds, steps, disabled silence, and keyboard behavior be
     }),
     false,
   );
+});
+
+test('Slider code disclosure starts collapsed and reveals the exact report handler', () => {
+  const stage = host();
+  const frame = stage.render(h(SliderWorkbench));
+  const label = frame.patches.find(
+    (patch) => patch.SetProp?.prop === 'Label' && patch.SetProp.value?.Text === 'Show code',
+  )?.SetProp;
+  assert.ok(label);
+  assert(
+    frame.patches.some(
+      (patch) =>
+        patch.SetProp?.id === label.id &&
+        patch.SetProp.prop === 'Expanded' &&
+        patch.SetProp.value?.Flag === false,
+    ),
+  );
+  const before = stage.frames.length;
+  assert(
+    stage.surface.dispatch({
+      trigger: 'Expand',
+      node: label.id,
+      id: `${label.id}:Expand`,
+      value: true,
+    }),
+  );
+  const changed = stage.since(before);
+  assert(
+    changed.some(
+      (patch) =>
+        patch.SetProp?.id === label.id &&
+        patch.SetProp.prop === 'Expanded' &&
+        patch.SetProp.value?.Flag === true,
+    ),
+  );
+  const source = frame.patches.find(
+    (patch) => patch.SetProp?.prop === 'Value' && patch.SetProp.value?.Text?.includes('<Slider'),
+  )?.SetProp.value.Text;
+  assert(source.includes('setValue(boundedStep(report.value))'));
 });

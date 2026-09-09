@@ -1,6 +1,7 @@
 import React from 'react';
 import {
   Code,
+  Expander,
   FormControl,
   FormHelperText,
   FormLabel,
@@ -27,6 +28,7 @@ export function boundedStep(value: unknown) {
 
 export function SliderWorkbench() {
   const [value, setValue] = React.useState(40);
+  const [showCode, setShowCode] = React.useState(false);
   return (
     <ComponentDocument
       name="Slider"
@@ -46,37 +48,36 @@ export function SliderWorkbench() {
           <FormHelperText label="Use Left/Right arrows for one step; Home and End jump to the bounds." />
         </FormControl>
         <InlineMessage label={`Current value: ${value}%`} tone="neutral" />
-        <Code
-          value={
-            'const boundedStep = (next) =>\n' +
-            '  Math.min(100, Math.max(0, Math.round(next / 5) * 5));\n\n' +
-            '<Slider\n' +
-            '  value={value}\n' +
-            '  minimum={0}\n' +
-            '  maximum={100}\n' +
-            '  step={5}\n' +
-            '  onChange={(report) =>\n' +
-            '    setValue(boundedStep(report.value))\n' +
-            '  }\n' +
-            '/>'
-          }
-          wrap
-        />
+        <Expander
+          label="Show code"
+          expanded={showCode}
+          width="fill"
+          onExpand={(report) => setShowCode(Boolean(report.value))}
+        >
+          <Code
+            value={
+              'const boundedStep = (next) =>\n' +
+              '  Math.min(100, Math.max(0, Math.round(next / 5) * 5));\n\n' +
+              '<Slider\n' +
+              '  value={value}\n' +
+              '  minimum={0}\n' +
+              '  maximum={100}\n' +
+              '  step={5}\n' +
+              '  onChange={(report) =>\n' +
+              '    setValue(boundedStep(report.value))\n' +
+              '  }\n' +
+              '/>'
+            }
+            wrap
+          />
+        </Expander>
       </DocumentationSection>
 
       <DocumentationSection title="Range states">
         <SpecimenGrid>
           <FormControl gap={1}>
-            <FormLabel label="Minimum · 0" />
-            <Slider value={0} minimum={0} maximum={100} step={5} />
-          </FormControl>
-          <FormControl gap={1}>
-            <FormLabel label="Middle · 50" />
+            <FormLabel label="Range anatomy · minimum 0 · midpoint 50 · maximum 100" />
             <Slider value={50} minimum={0} maximum={100} step={5} />
-          </FormControl>
-          <FormControl gap={1}>
-            <FormLabel label="Maximum · 100" />
-            <Slider value={100} minimum={0} maximum={100} step={5} />
           </FormControl>
           <FormControl gap={1}>
             <FormLabel label="Disabled · 35" />
