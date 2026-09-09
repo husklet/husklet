@@ -6,7 +6,12 @@ import { fileURLToPath } from 'node:url';
 
 import * as exported from '../dist/components.js';
 import { tags } from '../dist/components.js';
-import { LOG_VIEW_CHARACTER_LIMIT, vocabulary } from '../dist/index.js';
+import {
+  LOG_VIEW_CHARACTER_LIMIT,
+  compositeComponents,
+  vocabulary,
+} from '../dist/index.js';
+import * as publicApi from '../dist/index.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const tagSource = path.resolve(here, '../../../../dist/workspaces/hl-gui/src/node/tag.rs');
@@ -22,6 +27,15 @@ test('LogView publishes its bounded append-only retention contract', () => {
   const catalogue = JSON.parse(fs.readFileSync(path.resolve(here, '../catalogue.json'), 'utf8'));
   assert.equal(LOG_VIEW_CHARACTER_LIMIT, 4096);
   assert.match(catalogue.notes.logViewRetention, /append.*newest 4096 Unicode characters/i);
+});
+
+test('every public composite publishes one documentation identity beside its export', () => {
+  const names = compositeComponents.map(({ name }) => name);
+  assert.equal(new Set(names).size, names.length);
+  for (const definition of compositeComponents) {
+    assert.equal(typeof publicApi[definition.name], 'function', `${definition.name} is not exported`);
+    assert.notEqual(definition.summary.trim(), '');
+  }
 });
 
 test('the catalogue still matches the Rust vocabulary', (t) => {

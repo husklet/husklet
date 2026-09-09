@@ -10,6 +10,7 @@ import catalogue, {
   enums,
   families,
   grouped,
+  nativeTags,
   props,
   tags,
 } from '../dist/catalogue.js';
@@ -35,7 +36,7 @@ test('the generated catalogue carries semantic absence defaults', () => {
 });
 
 test('every component in the catalogue is constructible', () => {
-  for (const tag of tags) {
+  for (const tag of nativeTags) {
     assert.equal(
       components[tag.name],
       tag.name,

@@ -72,6 +72,22 @@ function preamble() {
 import type { ComponentType, ReactNode } from 'react';
 import type { SurfaceBootstrap } from '@husklet/client';
 
+export interface CompositeComponentDefinition<Name extends string = string, Family extends string = string> {
+  readonly name: Name;
+  readonly family: Family;
+  readonly summary: string;
+}
+export const compositeComponents: readonly [
+  { readonly name: 'ConfirmAction'; readonly family: 'buttons'; readonly summary: string },
+  { readonly name: 'ResourceState'; readonly family: 'feedback'; readonly summary: string },
+  { readonly name: 'RecoveryState'; readonly family: 'feedback'; readonly summary: string },
+  { readonly name: 'TerminalTranscript'; readonly family: 'content'; readonly summary: string },
+  { readonly name: 'CommandPaletteView'; readonly family: 'navigation'; readonly summary: string },
+  { readonly name: 'JsonTree'; readonly family: 'trees'; readonly summary: string },
+  { readonly name: 'ObjectInspector'; readonly family: 'trees'; readonly summary: string },
+];
+export type CompositeComponentName = typeof compositeComponents[number]['name'];
+
 export interface CommandPaletteItem {
   id: string;
   title: string;

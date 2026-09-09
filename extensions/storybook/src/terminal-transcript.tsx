@@ -12,7 +12,7 @@ import type { TerminalTranscriptLine } from '@husklet/react';
 
 const { useState } = React;
 
-export const TERMINAL_TRANSCRIPT_STORY = 'Terminal transcript inspection';
+export const TERMINAL_TRANSCRIPT_STORY = 'TerminalTranscript';
 
 const initial: readonly TerminalTranscriptLine[] = [
   { id: 'prompt', number: 418, timestamp: '12:04:08.190', text: '$ npm test', stream: 'stdout' },

@@ -3,7 +3,7 @@ import { Column, CommandPaletteView, Heading, InlineMessage, Text } from '@huskl
 
 const { useState } = React;
 
-export const COMMAND_PALETTE_STORY = 'Command palette workflow';
+export const COMMAND_PALETTE_STORY = 'CommandPaletteView';
 
 const commands = [
   {

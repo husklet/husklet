@@ -5,6 +5,7 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { components } from '@husklet/react';
 
 import { PACKAGE } from './host.js';
 import { FLOW_STORIES } from '../dist/app.js';
@@ -209,8 +210,10 @@ test('the shipped entrypoint connects and renders the complete playground over a
       `<${tag.name}> selection exceeded the patch budget`,
     );
     assert.ok(
-      componentFrame.with.frame.patches.some((patch) => patch.Create?.tag === tag.name),
-      `selecting <${tag.name}> did not render that native component`,
+      components[tag.name]
+        ? componentFrame.with.frame.patches.some((patch) => patch.Create?.tag === tag.name)
+        : liveNode(live, 'Heading', tag.name),
+      `selecting <${tag.name}> did not render its isolated component page`,
     );
     selected.add(tag.name);
   }

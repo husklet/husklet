@@ -11,7 +11,7 @@ import {
   Text,
 } from '@husklet/react';
 
-export const RESOURCE_STATE_STORY = 'Container inventory states';
+export const RESOURCE_STATE_STORY = 'ResourceState';
 type InventoryState = 'loading' | 'empty' | 'error' | 'ready';
 export function ResourceStateStory() {
   const [state, setState] = useState<InventoryState>('loading');

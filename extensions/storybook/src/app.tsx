@@ -59,28 +59,13 @@ import { COVERAGE_STORY, CoverageInspectionStory } from './coverage-inspection.j
 import { NETWORK_WATERFALL_STORY, NetworkWaterfallStory } from './network-waterfall.js';
 import { DEPENDENCY_GRAPH_STORY, DependencyGraphStory } from './dependency-graph.js';
 import { QUERY_PLAN_STORY, QueryPlanStory } from './query-plan.js';
-import { TERMINAL_TRANSCRIPT_STORY, TerminalTranscriptStory } from './terminal-transcript.js';
-import { COMMAND_PALETTE_STORY, CommandPaletteStory } from './command-palette.js';
-import { JSON_TREE_STORY, JsonTreeStory } from './json-tree.js';
-import { CONFIRMATION_STORY, ConfirmationStory } from './confirmation.js';
 import { CONTAINER_OPERATIONS_STORY, ContainerOperationsStory } from './container-operations.js';
 import { WORKSPACE_LAYOUT_STORY, WorkspaceLayoutStory } from './workspace-layout.js';
 import { EXTENSION_LIFECYCLE_STORY, ExtensionLifecycleStory } from './extension-lifecycle.js';
 import { WORKSPACE_FILE_EDIT_STORY, WorkspaceFileEditStory } from './workspace-file-edit.js';
 import { IMAGE_PULL_STORY, ImagePullStory } from './image-pull.js';
-import { RESOURCE_STATE_STORY, ResourceStateStory } from './resource-state.js';
 import { DRAG_REORDER_STORY, DragReorderStory } from './drag-reorder.js';
-import { ButtonWorkbench } from './button.js';
-import { IconButtonWorkbench } from './icon-button.js';
-import { EntryWorkbench } from './entry.js';
-import { SelectWorkbench } from './select.js';
-import { SwitchWorkbench } from './switch.js';
-import { ToggleButtonWorkbench } from './toggle-button.js';
-import { CheckboxWorkbench } from './checkbox.js';
-import { RadioWorkbench } from './radio.js';
-import { RadioGroupWorkbench } from './radio-group.js';
-import { FormControlWorkbench } from './form-control.js';
-import { SliderWorkbench } from './slider.js';
+import { componentPage, renderComponentPage } from './component-pages.js';
 
 const { useMemo, useRef, useState } = React;
 
@@ -88,16 +73,11 @@ const INTERACTION_HISTORY = 5;
 export const SEARCH_RESULT_LIMIT = 24;
 export const FLOW_STORIES = Object.freeze([
   DRAG_REORDER_STORY,
-  RESOURCE_STATE_STORY,
   IMAGE_PULL_STORY,
   WORKSPACE_FILE_EDIT_STORY,
   EXTENSION_LIFECYCLE_STORY,
   WORKSPACE_LAYOUT_STORY,
   CONTAINER_OPERATIONS_STORY,
-  CONFIRMATION_STORY,
-  COMMAND_PALETTE_STORY,
-  JSON_TREE_STORY,
-  TERMINAL_TRANSCRIPT_STORY,
   QUERY_PLAN_STORY,
   DEPENDENCY_GRAPH_STORY,
   NETWORK_WATERFALL_STORY,
@@ -151,6 +131,7 @@ export function Playground({
 }: PlaygroundProps = {}) {
   const families = useMemo(grouped, []);
   const [selected, setSelected] = useState(initialStory);
+  const hasComponentPage = componentPage(selected) !== undefined;
   const mode = modeFor(selected);
   const [activeFamily, setActiveFamily] = useState(
     () =>
@@ -159,8 +140,8 @@ export function Playground({
       families[0]?.name,
   );
   const flow = FLOW_STORIES.includes(selected);
-  const opened = flow ? null : defaults(selected);
-  const contract = flow ? null : component(selected);
+  const opened = flow || hasComponentPage ? null : defaults(selected);
+  const contract = flow || hasComponentPage ? null : component(selected);
   const allStories = [
     ...FLOW_STORIES,
     ...families.flatMap((family) => family.tags.map((tag) => tag.name)),
@@ -199,28 +180,8 @@ export function Playground({
         onSelect={selectStory}
       />
       <Scroll grow width="fill" height="fill">
-        {selected === 'Button' ? (
-          <ButtonWorkbench />
-        ) : selected === 'IconButton' ? (
-          <IconButtonWorkbench />
-        ) : selected === 'Entry' ? (
-          <EntryWorkbench />
-        ) : selected === 'Select' ? (
-          <SelectWorkbench />
-        ) : selected === 'Switch' ? (
-          <SwitchWorkbench />
-        ) : selected === 'ToggleButton' ? (
-          <ToggleButtonWorkbench />
-        ) : selected === 'Checkbox' ? (
-          <CheckboxWorkbench />
-        ) : selected === 'Radio' ? (
-          <RadioWorkbench />
-        ) : selected === 'RadioGroup' ? (
-          <RadioGroupWorkbench />
-        ) : selected === 'FormControl' ? (
-          <FormControlWorkbench />
-        ) : selected === 'Slider' ? (
-          <SliderWorkbench />
+        {hasComponentPage ? (
+          renderComponentPage(selected)
         ) : (
           <Preview
             key={`preview-${selected}`}
@@ -230,7 +191,7 @@ export function Playground({
             timelineSource={timelineSource}
             keyValueSource={keyValueSource}
             fileSource={fileSource}
-            triggers={contract?.triggers ?? []}
+            triggers={contract ? [...contract.triggers] : []}
           />
         )}
       </Scroll>
@@ -431,9 +392,7 @@ export function Preview({
     <Column grow={true} gap={2} pad={4}>
       {flow ? null : <Heading key={'title'} label={spaced(name)} scale={'title'} wrap={true} />}
       <Section key={'stage'} pad={flow ? 0 : 4} grow={true}>
-        {name === RESOURCE_STATE_STORY ? (
-          <ResourceStateStory />
-        ) : name === DRAG_REORDER_STORY ? (
+        {name === DRAG_REORDER_STORY ? (
           <DragReorderStory />
         ) : name === QUERY_PLAN_STORY ? (
           <QueryPlanStory />
@@ -447,14 +406,6 @@ export function Preview({
           <WorkspaceLayoutStory />
         ) : name === CONTAINER_OPERATIONS_STORY ? (
           <ContainerOperationsStory />
-        ) : name === CONFIRMATION_STORY ? (
-          <ConfirmationStory />
-        ) : name === COMMAND_PALETTE_STORY ? (
-          <CommandPaletteStory />
-        ) : name === JSON_TREE_STORY ? (
-          <JsonTreeStory />
-        ) : name === TERMINAL_TRANSCRIPT_STORY ? (
-          <TerminalTranscriptStory />
         ) : name === DEPENDENCY_GRAPH_STORY ? (
           <DependencyGraphStory />
         ) : name === NETWORK_WATERFALL_STORY ? (

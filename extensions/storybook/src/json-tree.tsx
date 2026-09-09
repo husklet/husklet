@@ -3,7 +3,7 @@ import { Badge, Column, Heading, InlineMessage, JsonTree, Row, Text } from '@hus
 
 const { useMemo, useState } = React;
 
-export const JSON_TREE_STORY = 'Bounded JSON tree';
+export const JSON_TREE_STORY = 'JsonTree';
 
 export function JsonTreeStory() {
   const [activity, setActivity] = useState('Select or copy a value to inspect its callback.');

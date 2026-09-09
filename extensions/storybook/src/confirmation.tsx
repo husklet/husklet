@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Column, ConfirmAction, Heading, InlineMessage, Text } from '@husklet/react';
 
-export const CONFIRMATION_STORY = 'Safe destructive confirmation';
+export const CONFIRMATION_STORY = 'ConfirmAction';
 
 /** A complete destructive flow: reveal authority, confirm separately, and report completion. */
 export function ConfirmationStory() {

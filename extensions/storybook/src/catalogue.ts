@@ -6,10 +6,24 @@
 // written down twice: `npm run catalogue` regenerates this document from the
 // Rust side, and everything downstream follows.
 
+import { compositeComponents } from '@husklet/react';
 import catalogue from './catalogue.json' with { type: 'json' };
 
 export type Family = (typeof catalogue.families)[number];
-export type Tag = (typeof catalogue.tags)[number];
+export type NativeTag = (typeof catalogue.tags)[number];
+export type CompositeTag = {
+  name: (typeof compositeComponents)[number]['name'];
+  family: (typeof compositeComponents)[number]['family'];
+  acceptsChildren: false;
+  detached: false;
+  props: readonly [];
+  propNotes: Readonly<Record<string, never>>;
+  propConstraints: Readonly<Record<string, never>>;
+  triggers: readonly [];
+  summary: string;
+  composite: true;
+};
+export type Tag = NativeTag | CompositeTag;
 export type Property = (typeof catalogue.props)[number];
 export type Vocabulary = keyof typeof catalogue.enums;
 
@@ -23,7 +37,29 @@ if (catalogue.version !== SHAPE_VERSION) {
 }
 
 export const families = catalogue.families;
-export const tags = catalogue.tags;
+export const nativeTags = catalogue.tags;
+const nativeNames = new Set(nativeTags.map((tag) => tag.name));
+for (const definition of compositeComponents) {
+  if (nativeNames.has(definition.name)) {
+    throw new Error(`composite <${definition.name}> collides with a native component`);
+  }
+  if (!catalogue.families.some((family) => family.name === definition.family)) {
+    throw new Error(`composite <${definition.name}> claims unknown family ${definition.family}`);
+  }
+}
+export const tags: readonly Tag[] = [
+  ...nativeTags,
+  ...compositeComponents.map((definition): CompositeTag => ({
+    ...definition,
+    acceptsChildren: false,
+    detached: false,
+    props: [],
+    propNotes: {},
+    propConstraints: {},
+    triggers: [],
+    composite: true,
+  })),
+];
 export const props = catalogue.props;
 export const enums = catalogue.enums;
 export const lengths = catalogue.lengths;

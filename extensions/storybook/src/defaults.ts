@@ -6,7 +6,7 @@
 // gets a label — and the taste, the particular words and numbers, is the only
 // thing written down here.
 
-import { component, tags } from './catalogue.js';
+import { component, nativeTags } from './catalogue.js';
 
 type StoryValue = string | number | boolean | { value: string; label: string }[];
 export type StoryChild = { tag: string; props: Record<string, StoryValue> };
@@ -152,7 +152,7 @@ export function spaced(name: string): string {
 
 /** Every component's default set, for tests and for a first selection. */
 export function all(): Map<string, StoryDefaults> {
-  return new Map(tags.map((tag) => [tag.name, defaults(tag.name)]));
+  return new Map(nativeTags.map((tag) => [tag.name, defaults(tag.name)]));
 }
 
 /** The component the playground opens on. */

@@ -1,9 +1,9 @@
-import { families, props, tags } from './catalogue.js';
+import { families, nativeTags, props } from './catalogue.js';
 import { defaults } from './defaults.js';
 
 /** Machine-readable audit of what the shipped selectable catalogue can demonstrate. */
 export function storyCoverage() {
-  const componentStories = tags.map((tag) => ({
+  const componentStories = nativeTags.map((tag) => ({
     story: tag.name,
     component: tag.name,
     family: tag.family,
@@ -20,6 +20,6 @@ export function storyCoverage() {
     interactions: new Set(componentStories.flatMap((story) => story.interactions)),
     expectedFamilies: new Set(families.map((family) => family.name)),
     expectedPropertyGroups: new Set(props.map((prop) => prop.group)),
-    expectedInteractions: new Set(tags.flatMap((tag) => tag.triggers)),
+    expectedInteractions: new Set(nativeTags.flatMap((tag) => tag.triggers)),
   };
 }

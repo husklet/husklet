@@ -16,7 +16,7 @@ import {
   exampleFor,
   searchResults,
 } from '../dist/app.js';
-import { grouped, tags } from '../dist/catalogue.js';
+import { grouped, nativeTags, tags } from '../dist/catalogue.js';
 import { defaults } from '../dist/defaults.js';
 import { ButtonWorkbench } from '../dist/button.js';
 import { components } from '@husklet/react';
@@ -60,7 +60,7 @@ function node(patches, tag, label) {
 }
 
 test('every component renders with its defaults as sane patches', () => {
-  for (const tag of tags) {
+  for (const tag of nativeTags) {
     const stage = host();
     const opened = defaults(tag.name);
     const frame = stage.render(
@@ -84,7 +84,7 @@ test('every component renders with its defaults as sane patches', () => {
 });
 
 test('every catalogue component receives a complete generated reference page', () => {
-  for (const tag of tags) {
+  for (const tag of nativeTags) {
     const frame = host().render(
       h(Preview, {
         name: tag.name,
@@ -687,8 +687,11 @@ test('global component navigation reaches every catalogue component without simu
       id: `${selector}:Change`,
       value: tag.name,
     });
+    const changes = stage.since(before);
     assert.ok(
-      created(stage.since(before)).some((entry) => entry.tag === tag.name),
+      components[tag.name]
+        ? created(changes).some((entry) => entry.tag === tag.name)
+        : node(changes, 'Heading', tag.name),
       `navigation did not render ${tag.name}`,
     );
     seen.add(tag.name);
