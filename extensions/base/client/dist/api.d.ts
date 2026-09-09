@@ -1224,6 +1224,17 @@ export interface WorkspaceApi {
         topology(): Promise<TerminalTopology>;
         openTab(title: string): Promise<string>;
         pinTab(tab: string, pinned?: boolean): Promise<void>;
+        /** Arm terminal inventory before pinning, then verify the exact tab reports the requested durable state. */
+        pinTabAndWait(tab: string, pinned?: boolean, options?: {
+            timeoutMs?: number;
+        }): Promise<{
+            changed: true;
+            tab: TabSummary;
+        } | {
+            changed: false;
+            tab: string;
+            pinned: boolean;
+        }>;
         /** Arm pane observation before opening the session-owned tab and verify its exact returned identity. Observation failures retain the created tab in TerminalOperationError. */
         openTabAndWait(title: string, options?: {
             timeoutMs?: number;

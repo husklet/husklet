@@ -2481,6 +2481,49 @@ export function workspace(session, { signal } = {}) {
             await stop();
         }
     };
+    api.terminal.pinTabAndWait = async (tab, pinned = true, { timeoutMs = 30_000 } = {}) => {
+        if (typeof tab !== 'string' ||
+            tab.length === 0 ||
+            tab.includes('\0') ||
+            new TextEncoder().encode(tab).byteLength > 128) {
+            throw new TypeError('terminal pin requires a 1..128 byte NUL-free tab identity');
+        }
+        if (typeof pinned !== 'boolean')
+            throw new TypeError('terminal pin state must be boolean');
+        if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
+            throw new RangeError('terminal pin wait timeout must be between 1 and 30000ms');
+        }
+        let observed;
+        let authorityIssued = false;
+        const inventory = new Promise((resolve, reject) => {
+            observed = (tabs) => {
+                if (!authorityIssued)
+                    return;
+                const current = tabs.find((candidate) => candidate.id === tab);
+                if (!current)
+                    reject(new Error(`terminal tab ${tab} disappeared while pinning`));
+                else if (current.pinned === pinned)
+                    resolve(current);
+            };
+        });
+        const stop = await api.watchTerminal(observed);
+        let timer;
+        try {
+            authorityIssued = true;
+            await api.terminal.pinTab(tab, pinned);
+            const current = await Promise.race([
+                inventory,
+                new Promise((resolve) => {
+                    timer = setTimeout(() => resolve(null), timeoutMs);
+                }),
+            ]);
+            return current === null ? { changed: false, tab, pinned } : { changed: true, tab: current };
+        }
+        finally {
+            clearTimeout(timer);
+            await stop();
+        }
+    };
     api.terminal.actAndWait = async (slot, action, { lines, timeoutMs = 30_000 } = {}) => {
         if (typeof slot !== 'string' || slot.length === 0)
             throw new TypeError('pane semantic action requires a nonempty slot');

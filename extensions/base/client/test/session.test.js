@@ -5991,6 +5991,105 @@ test('real Unix openTabAndWait retains the created tab when inventory verificati
   }
 });
 
+test('real Unix pinTabAndWait ignores stale inventory, verifies exact state, and preserves the session', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-pin-tab-wait-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const calls = [];
+  const connections = new Set();
+  let pinCalls = 0;
+  const unpinned = { id: 'tab-agent', title: 'Agent', pinned: false, panes: [] };
+  const pinned = { ...unpinned, pinned: true };
+  const server = net.createServer((socket) => {
+    connections.add(socket);
+    socket.on('close', () => connections.delete(socket));
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.channel !== 2) continue;
+        calls.push(frame.payload);
+        if (frame.payload.call === 'event_subscribe') {
+          assert.deepEqual(frame.payload.with, { topic: 'terminal' });
+          socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+          socket.write(
+            encode({
+              channel: 131,
+              kind: KIND.event,
+              payload: { snapshot: 'terminal', of: [unpinned] },
+            }),
+          );
+        } else if (frame.payload.call === 'terminal_pin_tab') {
+          pinCalls += 1;
+          assert.deepEqual(frame.payload.with, {
+            tab: 'tab-agent',
+            pinned: pinCalls === 1,
+          });
+          socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+          socket.write(
+            encode({
+              channel: 131,
+              kind: KIND.event,
+              payload: { snapshot: 'terminal', of: pinCalls === 1 ? [pinned] : [] },
+            }),
+          );
+        } else if (frame.payload.call === 'event_unsubscribe') {
+          socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+        } else if (frame.payload.call === 'terminal_tabs') {
+          socket.write(
+            encode({
+              channel: 2,
+              kind: KIND.response,
+              payload: { reply: 'tabs', with: [pinned] },
+            }),
+          );
+        }
+      }
+    });
+    socket.write(
+      encode({
+        channel: CONTROL,
+        kind: KIND.open,
+        payload: {
+          protocol: 1,
+          peer: 'pin-tab-wait',
+          granted: ['terminals:read', 'terminals:layout-control'],
+        },
+      }),
+    );
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    const terminal = workspace(session).terminal;
+    await assert.rejects(terminal.pinTabAndWait('', true), /tab identity/);
+    await assert.rejects(terminal.pinTabAndWait('tab-agent', 'yes'), /state must be boolean/);
+    await assert.rejects(terminal.pinTabAndWait('tab-agent', true, { timeoutMs: 0 }), /timeout/);
+    assert.deepEqual(calls, [], 'invalid authority must emit no request');
+    assert.deepEqual(await terminal.pinTabAndWait('tab-agent'), { changed: true, tab: pinned });
+    await assert.rejects(
+      terminal.pinTabAndWait('tab-agent', false),
+      /tab tab-agent disappeared while pinning/,
+    );
+    assert.deepEqual(await terminal.tabs(), [pinned]);
+    assert.deepEqual(
+      calls.map(({ call }) => call),
+      [
+        'event_subscribe',
+        'terminal_pin_tab',
+        'event_unsubscribe',
+        'event_subscribe',
+        'terminal_pin_tab',
+        'event_unsubscribe',
+        'terminal_tabs',
+      ],
+    );
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('real Unix inspectAndAct validates live semantic authority before revision-bound action', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-inspect-act-'));
   const socketPath = path.join(directory, 'host.sock');
