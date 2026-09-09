@@ -53,7 +53,12 @@ const IMAGE_VERBS: { key: ImageVerb; label: string }[] = [
   { key: 'remove', label: 'Remove image' },
 ];
 
-const COPY_WIDTH = { maximum: { chars: 42 } } as const;
+const COPY_WIDTH = { maximum: { chars: 54 } } as const;
+const CATALOGUE_CARD_WIDTH = {
+  minimum: { chars: 28 },
+  maximum: { chars: 42 },
+} as const;
+const PAGE_WIDTH = { maximum: { chars: 96 } } as const;
 const FILESYSTEM_VERBS = [
   { key: 'read', label: 'View contents', meaning: 'read' },
   { key: 'write', label: 'Modify existing contents', meaning: 'write' },
@@ -276,16 +281,16 @@ function countLabel(count: number, singular: string): string {
 function RequestedPermissionSummary({ groups }: { groups: { label: string; count: number }[] }) {
   const requested = groups.filter(({ count }) => count > 0);
   if (requested.length === 0) {
-    return <Badge label="No workspace access requested" tone="positive" />;
+    return <Text label="No workspace access requested" color="text-dim" />;
   }
   return (
-    <Column gap={1}>
+    <Column gap={0}>
       <Text label="Requested access" color="text-dim" />
-      <Row gap={1} wrap>
-        {requested.map(({ label, count }) => (
-          <Badge key={label} label={`${label} · ${count}`} tone="neutral" />
-        ))}
-      </Row>
+      <Text
+        label={requested.map(({ label, count }) => `${label} · ${count}`).join('  ·  ')}
+        color="text-dim"
+        wrap
+      />
     </Column>
   );
 }
@@ -683,7 +688,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
 
   const content = (
     <Scroll grow width="fill" height="fill">
-      <Container pad={2} gap={2}>
+      <Container pad={2} gap={2} width={PAGE_WIDTH}>
         <Heading label="Extensions" scale="title" />
         <Text label="Add trusted tools and control their workspace access." color="text-dim" wrap />
         <Column gap={3} width="fill">
@@ -692,9 +697,9 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
               <Row gap={1} wrap>
                 <Heading label="Discover" scale="caption" grow={false} align="start" />
                 {catalogueState === 'ready' && availableCatalogue.length > 0 ? (
-                  <Badge
+                  <Text
                     label={countLabel(availableCatalogue.length, 'available extension')}
-                    tone="neutral"
+                    color="text-dim"
                   />
                 ) : null}
               </Row>
@@ -729,7 +734,12 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                     {availableCatalogue.map((entry) => {
                       const compatibility = catalogueCompatibility(entry, workspaceArchitecture);
                       return (
-                        <Card key={entry.id} grow={false} width="fill" variant="outline">
+                        <Card
+                          key={entry.id}
+                          grow={false}
+                          width={CATALOGUE_CARD_WIDTH}
+                          variant="outline"
+                        >
                           <CardHeader
                             label={entry.title}
                             detail={`${entry.publisher} · Version ${entry.version}`}
@@ -738,22 +748,15 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                           />
                           <CardContent gap={1}>
                             <Text label={entry.description} color="text-dim" wrap />
-                            <Row gap={1} wrap>
-                              <Badge
-                                label={
-                                  compatibility.compatible === true
-                                    ? 'Compatible with this workspace'
-                                    : compatibility.label
-                                }
-                                tone={
-                                  compatibility.compatible === false
-                                    ? 'danger'
-                                    : compatibility.compatible === true
-                                      ? 'positive'
-                                      : 'neutral'
-                                }
-                              />
-                            </Row>
+                            <Text
+                              label={
+                                compatibility.compatible === true
+                                  ? 'Compatible with this workspace'
+                                  : compatibility.label
+                              }
+                              color={compatibility.compatible === false ? 'warning' : 'text-dim'}
+                              wrap
+                            />
                             <Row>
                               <Button
                                 label={`Review ${entry.title}`}
@@ -837,11 +840,21 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
             ) : (
               <Card grow={false} width="fill" variant="outline">
                 <CardHeader
-                  label={`Review ${acquisition.candidate?.name ?? 'extension'}`}
+                  label={
+                    acquisition.candidate
+                      ? `Review ${acquisition.candidate.name}`
+                      : acquisition.state === 'failed'
+                        ? 'Couldn’t inspect extension'
+                        : acquisition.state === 'cancelled'
+                          ? 'Inspection cancelled'
+                          : 'Inspecting extension'
+                  }
                   detail={
                     acquisition.candidate?.installed_image_digest
                       ? 'Update extension'
-                      : 'Install extension'
+                      : acquisition.candidate
+                        ? 'Install extension'
+                        : acquisition.reference
                   }
                   align="start"
                   width="fill"
@@ -1191,42 +1204,58 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                 )}
                 {acquisition && acquisition.state !== 'ready' && (
                   <CardContent gap={1}>
-                    <Row gap={1} align="center" wrap>
-                      {!['failed', 'cancelled'].includes(acquisition.state) && <Spinner />}
-                      <Text label={acquisitionLabel(acquisition)} wrap />
-                      {!['failed', 'cancelled'].includes(acquisition.state) ? (
-                        <Button
-                          label={busy === 'cancel' ? 'Cancelling…' : 'Cancel'}
-                          enabled={busy !== 'cancel'}
-                          onInvoke={cancel}
+                    {acquisition.state === 'failed' ? (
+                      <Column gap={1}>
+                        <Text
+                          label={`Image · ${acquisition.reference}`}
+                          color="text-dim"
+                          tooltip={acquisition.reference}
+                          wrap
                         />
-                      ) : acquisition.state === 'failed' ? (
-                        <>
+                        <InlineMessage
+                          label={acquisitionFailure(
+                            acquisition.error ?? 'The image could not be inspected.',
+                          )}
+                          tone="danger"
+                          width={COPY_WIDTH}
+                        />
+                        <Row gap={1} wrap>
                           <Button
                             label="Retry inspection"
+                            variant="filled"
+                            tone="accent"
                             enabled={!busy}
                             onInvoke={() => inspect()}
                           />
                           <Button
-                            label="Dismiss"
+                            label="Back to catalogue"
                             variant="ghost"
                             enabled={!busy}
-                            onInvoke={() => setAcquisition(null)}
+                            onInvoke={dismissReview}
                           />
-                        </>
-                      ) : (
+                        </Row>
+                      </Column>
+                    ) : acquisition.state === 'cancelled' ? (
+                      <Column gap={1}>
+                        <Text label={acquisitionLabel(acquisition)} color="text-dim" wrap />
                         <Button
-                          label="Dismiss"
+                          label="Back to catalogue"
+                          variant="ghost"
                           enabled={!busy}
-                          onInvoke={() => setAcquisition(null)}
+                          onInvoke={dismissReview}
                         />
-                      )}
-                    </Row>
-                    {acquisition.error && (
-                      <RecoveryState
-                        operation="Inspecting extension image"
-                        error={acquisitionFailure(acquisition.error)}
-                      />
+                      </Column>
+                    ) : (
+                      <Row gap={1} align="center" wrap>
+                        <Spinner />
+                        <Text label={acquisitionLabel(acquisition)} wrap />
+                        <Button
+                          label={busy === 'cancel' ? 'Cancelling…' : 'Cancel inspection'}
+                          variant="outline"
+                          enabled={busy !== 'cancel'}
+                          onInvoke={cancel}
+                        />
+                      </Row>
                     )}
                   </CardContent>
                 )}
@@ -1242,9 +1271,9 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
           </Column>
           <Column gap={2} width="fill">
             <Row gap={1} wrap>
-              <Heading label="Installed" scale="caption" grow={false} align="start" />
+              <Heading label="Installed extensions" scale="caption" grow={false} align="start" />
               {inventoryState !== 'loading' ? (
-                <Badge label={countLabel(installed.length, 'extension')} tone="neutral" />
+                <Text label={countLabel(installed.length, 'extension')} color="text-dim" />
               ) : null}
               <IconButton
                 label="Refresh installed extensions"
@@ -1302,7 +1331,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                             tone={extension.status.startsWith('fault:') ? 'danger' : 'neutral'}
                           />
                           {extension.name === 'top' ? (
-                            <Badge label="Required workspace manager" tone="positive" />
+                            <Text label="Required workspace manager" color="text-dim" />
                           ) : null}
                         </Row>
                         <ExtensionFault extension={extension} />

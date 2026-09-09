@@ -522,7 +522,11 @@ test('Top owns workspace settings and extension management in the same tab', asy
   assert.ok(labelled(stage, 'No extensions installed'));
   assert.equal(labelled(stage, 'Workspace control'), undefined);
   assert.deepEqual(ancestorTags(stage, 'Discover').slice(0, 3), ['Row', 'Column', 'Column']);
-  assert.deepEqual(ancestorTags(stage, 'Installed').slice(0, 3), ['Row', 'Column', 'Column']);
+  assert.deepEqual(ancestorTags(stage, 'Installed extensions').slice(0, 3), [
+    'Row',
+    'Column',
+    'Column',
+  ]);
   assert.deepEqual(
     ancestorProperty(stage, 'Discover', 'Column', 'Width'),
     { Length: 'Fill' },
@@ -547,7 +551,7 @@ test('Top owns workspace settings and extension management in the same tab', asy
     'extension cards fill their responsive column instead of overriding width with start alignment',
   );
   assert.deepEqual(ancestorProperty(stage, 'Component playground', 'Card', 'Width'), {
-    Length: 'Fill',
+    Bounds: { minimum: { Chars: 28 }, maximum: { Chars: 42 } },
   });
   assert.deepEqual(
     taggedProperty(stage, 'Refresh installed extensions', 'IconButton', 'Icon'),
@@ -1166,9 +1170,8 @@ test('extension inspection keeps invalid and failed references recoverable with 
   invoke(stage, 'Inspect');
   await settled();
   await settled();
-  assert.ok(
-    labelled(stage, 'Inspection failed. The reference and details are retained for retry.'),
-  );
+  assert.ok(labelled(stage, 'Couldn’t inspect extension'));
+  assert.ok(labelled(stage, 'Image · registry.example/reviewed:1'));
   assert.ok(
     labelled(
       stage,
@@ -1176,6 +1179,20 @@ test('extension inspection keeps invalid and failed references recoverable with 
     ),
   );
   assert.ok(labelled(stage, 'Retry inspection'));
+  assert.ok(labelled(stage, 'Back to catalogue'));
+  assert.equal(labelled(stage, 'Dismiss'), undefined);
+  assert.equal(
+    stage.frames
+      .flatMap((frame) => frame.patches)
+      .filter(
+        (patch) =>
+          patch.SetProp?.prop === 'Label' &&
+          patch.SetProp.value?.Text ===
+            'Registry refused the image: requested access to the resource is denied. Check that the reference exists and is accessible.',
+      ).length,
+    1,
+    'one bounded failure is rendered without a second recovery cascade',
+  );
   invoke(stage, 'Retry inspection');
   await settled();
   await settled();
@@ -1268,7 +1285,7 @@ test('a stale cancellation refreshes the authoritative phase and remains cancell
   assert.ok(
     labelled(stage, 'Checking whether the image is available for this workspace architecture…'),
   );
-  invoke(stage, 'Cancel');
+  invoke(stage, 'Cancel inspection');
   await settled();
   assert.equal(cancellations, 1);
   assert.ok(labelled(stage, 'Reading and validating the extension manifest…'));
@@ -1278,7 +1295,7 @@ test('a stale cancellation refreshes the authoritative phase and remains cancell
       'Acquisition advanced before cancellation. Review its current phase and cancel again if needed.',
     ),
   );
-  assert.ok(labelled(stage, 'Cancel'));
+  assert.ok(labelled(stage, 'Cancel inspection'));
 });
 
 for (const updating of [false, true]) {
@@ -1371,8 +1388,10 @@ for (const updating of [false, true]) {
     ])
       assert.ok(labelled(stage, label), label);
     assert.ok(labelled(stage, 'Requested access'));
-    assert.ok(labelled(stage, 'Containers · 4'));
-    assert.ok(labelled(stage, 'Files · 6'));
+    assert.ok(
+      labelled(stage, 'Containers · 4  ·  Files · 6'),
+      'requested authority is summarized as quiet copy instead of a row of badges',
+    );
     assert.ok(labelled(stage, 'No access selected · 10 requested'));
     assert.ok(labelled(stage, 'Exact grants · 0/10 selected'));
     expand(stage, 'Exact grants · 0/10 selected');
