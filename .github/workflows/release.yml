@@ -164,6 +164,11 @@ jobs:
           RELEASE_VERSION: ${{ steps.version.outputs.version }}
         run: npm --prefix extensions run prepublish:check
 
+      - name: Bind published packages to the application release
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: .github/scripts/require-release-version.sh "$RELEASE_VERSION"
+
       - name: Refuse mismatched duplicates and make partial publication retryable
         id: publication
         env:
@@ -215,6 +220,11 @@ jobs:
       - name: Verify image contracts and pre-publish smoke wiring
         run: .github/scripts/check-first-party-images.sh
 
+      - name: Bind the base image to the application release
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: .github/scripts/require-release-version.sh "$RELEASE_VERSION"
+
       - name: Install multi-architecture emulation
         uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
 
@@ -264,6 +274,11 @@ jobs:
           RELEASE_VERSION: ${{ steps.version.outputs.version }}
           IMAGE: ghcr.io/${{ github.repository }}/extension-base:${{ steps.version.outputs.version }}
         run: .github/scripts/verify-published-extension-image.sh "$IMAGE" "$RELEASE_VERSION" base
+
+      - name: Verify the published base is anonymously readable
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}/extension-base:${{ steps.version.outputs.version }}
+        run: .github/scripts/verify-anonymous-extension-image.sh "$IMAGE"
 
   first-party-extensions:
     name: Publish ${{ matrix.extension }} / multi-architecture

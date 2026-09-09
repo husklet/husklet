@@ -25,6 +25,16 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  first-party-images:
+    name: First-party image publication contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Verify release, image, and catalogue alignment
+        run: .github/scripts/check-first-party-images.sh
+
   native-macos-arm64:
     name: Native engine / macOS ARM64
     runs-on: macos-26

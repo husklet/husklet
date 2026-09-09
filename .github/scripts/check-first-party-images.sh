@@ -58,6 +58,7 @@ node -e '
 workflow="$root/.github/workflows/release.yml"
 expect_literal .github/workflows/release.yml '              export HL_STORYBOOK_IMAGE="ghcr.io/$GITHUB_REPOSITORY/extension-storybook:$RELEASE_VERSION"'
 expect_literal .github/workflows/release.yml '        extension: [storybook, top]'
+expect_literal .github/workflows/release.yml '        run: .github/scripts/verify-anonymous-extension-image.sh "$IMAGE"'
 node -e '
   const fs = require("node:fs");
   const workflow = fs.readFileSync(process.argv[1], "utf8");
@@ -66,6 +67,8 @@ node -e '
   const needs = job.match(/^    needs: \[(?<jobs>[^\]]+)\]$/m)?.groups.jobs.split(",").map((item) => item.trim()) ?? [];
   if (!needs.includes("react-package")) throw new Error("React base publication must wait for the exact published npm package pair");
 ' "$workflow"
+[[ "$(grep -Fc '.github/scripts/require-release-version.sh "$RELEASE_VERSION"' "$workflow")" == 4 ]] \
+  || fail "npm packages, all images, and the application bundle must be bound to one release"
 [[ "$(grep -Fc 'platforms: linux/amd64,linux/arm64' "$workflow")" == 2 ]] \
   || fail "release must publish exactly two multi-architecture image manifests"
 [[ "$(grep -Fc 'for architecture in amd64 arm64; do' "$workflow")" == 2 ]] \
@@ -74,6 +77,24 @@ node -e '
   || fail "release must run the packaged-image smoke before both publication steps"
 [[ "$(grep -Fc '.github/scripts/verify-published-extension-image.sh' "$workflow")" == 2 ]] \
   || fail "release must verify both published multi-architecture registry manifests"
+[[ "$(grep -Fc '.github/scripts/verify-anonymous-extension-image.sh' "$workflow")" == 2 ]] \
+  || fail "release must prove the base and every first-party extension are anonymously readable"
+
+node - "$root" <<'NODE'
+const fs = require('node:fs');
+const path = require('node:path');
+const root = process.argv[2];
+const management = fs.readFileSync(
+  path.join(root, 'src/apps/husklet/src/extension/management.rs'),
+  'utf8',
+);
+if (!management.includes('"ghcr.io/husklet/husklet/extension-storybook:",\n        env!("CARGO_PKG_VERSION")')) {
+  throw new Error('the development catalogue is not pinned to the application version');
+}
+if (management.includes('extension-storybook:latest')) {
+  throw new Error('the first-party catalogue must never advertise a moving latest tag');
+}
+NODE
 
 for extension in storybook top; do
   dockerfile="extensions/$extension/Dockerfile"
@@ -102,5 +123,7 @@ for extension in storybook top; do
   [[ "$(grep -c '^version = "[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*"$' "$root/$manifest")" == 1 ]] \
     || fail "$manifest must contain one static X.Y.Z version for source installs"
 done
+
+"$root/.github/scripts/test-verify-anonymous-extension-image.sh"
 
 echo "first-party image Dockerfile and manifest contracts are valid"
