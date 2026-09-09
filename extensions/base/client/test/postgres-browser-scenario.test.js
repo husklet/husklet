@@ -99,7 +99,7 @@ test('Postgres browser streams credential-backed rows over real Unix framing', a
       payload: {
         protocol: 1,
         peer: 'postgres-fixture',
-        granted: ['containers:read', 'containers:execute', 'containers:input', 'credentials:read'],
+        granted: ['containers:read', 'containers:execute', 'containers:input', 'credentials:inject'],
       },
     });
   });

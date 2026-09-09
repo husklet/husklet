@@ -118,6 +118,7 @@ export type ExtensionCapability =
   | 'state:read'
   | 'state:write'
   | 'credentials:read'
+  | 'credentials:inject'
   | 'credentials:write'
   | 'interface:render'
   | 'notifications:publish';

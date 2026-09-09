@@ -216,6 +216,11 @@
     },
     {
       "executes": false,
+      "mutates": false,
+      "wire": "credentials:inject"
+    },
+    {
+      "executes": false,
       "mutates": true,
       "wire": "credentials:write"
     },
@@ -529,6 +534,12 @@
         },
         {
           "name": "credentials:read",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "credentials:inject",
           "payload": {
             "kind": "unit"
           }
@@ -13536,7 +13547,7 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:8396c54ccf17feca",
+  "source_fingerprint": "fnv1a64:0d8d0b3c7e46e7ae",
   "specification_version": 1,
   "topics": [
     {

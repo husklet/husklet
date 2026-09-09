@@ -167,7 +167,7 @@ test('real Unix range batch preserves ordered paths and one bounded frame', asyn
   }
 });
 
-test('real Unix credential execution sends only the key and requires both grants', async () => {
+test('real Unix credential injection sends only the key without granting secret reads', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-credential-exec-'));
   const socketPath = path.join(directory, 'host.sock');
   const calls = [];
@@ -196,7 +196,7 @@ test('real Unix credential execution sends only the key and requires both grants
         payload: {
           protocol: 1,
           peer: 'credential-exec',
-          granted: ['containers:execute', 'credentials:read'],
+          granted: ['containers:execute', 'credentials:inject'],
         },
       }),
     );
@@ -226,6 +226,8 @@ test('real Unix credential execution sends only the key and requires both grants
       },
     ]);
     assert.ok(!JSON.stringify(calls).includes('sentinel-password'));
+    await assert.rejects(workspace(session).credentials.read('postgres.password'), /credentials:read/);
+    assert.equal(calls.length, 1, 'denied plaintext reads never reach the Unix socket');
     await session.close();
   } finally {
     for (const connection of connections) connection.destroy();

@@ -9,9 +9,9 @@ use hl_rpc::Authority;
 
 use crate::capability::Capability;
 use crate::port::{
-    pane_lines, ContainerControl, ContainerInventory, Division, ExtensionStateStore, ExtensionStore, GridSize,
-    ImageStore, NetworkStore, NotificationSink, TerminalSurface, VolumeStore, WorkspaceConfiguration, WorkspaceControl,
-    WorkspaceFiles, WorkspaceInventory, PANE_GRID_EDGE, PANE_INPUT_BYTES,
+    ContainerControl, ContainerInventory, Division, ExtensionStateStore, ExtensionStore, GridSize, ImageStore,
+    NetworkStore, NotificationSink, PANE_GRID_EDGE, PANE_INPUT_BYTES, TerminalSurface, VolumeStore,
+    WorkspaceConfiguration, WorkspaceControl, WorkspaceFiles, WorkspaceInventory, pane_lines,
 };
 use crate::request::{Failure, Reply, Request, Topic, WorkspaceInfo};
 use crate::{ContainerGrant, ContainerSelector, FilesystemGrant};
@@ -1022,7 +1022,10 @@ impl Session {
                         detail: "credential environment is limited to 64 entries".into(),
                     });
                 }
-                let credentials_port = self.peer.authority().port(Capability::CredentialRead, services.state)?;
+                let credentials_port = self
+                    .peer
+                    .authority()
+                    .port(Capability::CredentialInject, services.state)?;
                 let target = self.resolve_mutation_container(id, services.containers)?;
                 let mut shape = environment.clone();
                 for (variable, key) in credentials {
