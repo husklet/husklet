@@ -252,10 +252,12 @@ mod tests {
 
     #[test]
     fn selection_resolves_producer_identity_only_for_current_materialized_rows() {
-        if gtk::init().is_err() || gtk::gdk::Display::default().is_none() {
+        if !crate::test_support::on_the_toolkit_thread(selection_scenario) {
             eprintln!("skipped: no display connection");
-            return;
         }
+    }
+
+    fn selection_scenario() {
         let model = Rows::new(SourceId::new(7));
         model.resize(Version::new(3), 4);
         assert!(model.selection(&[0]).is_none(), "placeholder identity fails closed");

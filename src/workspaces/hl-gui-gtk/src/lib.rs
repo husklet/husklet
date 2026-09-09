@@ -11,6 +11,8 @@ mod component;
 mod event;
 mod prop;
 mod registry;
+#[cfg(test)]
+mod test_support;
 pub mod rows;
 pub mod style;
 mod text;

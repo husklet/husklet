@@ -321,9 +321,13 @@ mod tests {
 
     #[test]
     fn compact_card_collections_use_one_full_width_row_per_card() {
-        if gtk::init().is_err() {
+        if !crate::test_support::on_the_toolkit_thread(compact_card_collection_scenario) {
+            eprintln!("skipped: no display connection");
             return;
         }
+    }
+
+    fn compact_card_collection_scenario() {
         let container = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         let flow = Flow::new(gtk::Orientation::Horizontal);
         flow.set_spacing(4);
