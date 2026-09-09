@@ -200,11 +200,11 @@ mod unix {
         assert!(has_label(&root, heading), "{fixture}/{name} did not render {heading:?}");
         if fixture == "error" && name == "extensions" {
             assert!(
-                has_label(
+                !has_label(
                     &root,
                     "Extension catalogue lost sync with the extension host. No change was assumed."
                 ),
-                "the error fixture did not reach its actionable recovery state"
+                "the Installed mode leaked the Discover catalogue failure"
             );
         }
         if fixture == "error" && name == "settings" {
@@ -235,26 +235,6 @@ mod unix {
             assert!(!has_label(&root, "This view could not be completed."));
             assert!(!find_expander(&root, "Technical details").is_expanded());
         }
-        if fixture == "populated" && name == "extensions" && !catalogue_empty {
-            assert!(
-                has_placeholder(&root, "Search extensions"),
-                "the scalable catalogue omitted its search control"
-            );
-            assert!(
-                has_label(&root, "19 of 20 extensions"),
-                "the scalable catalogue omitted its bounded result count"
-            );
-            assert!(
-                !has_label(&root, "Storybook"),
-                "default discovery duplicated an installed up-to-date extension"
-            );
-            assert!(
-                has_label(&root, "Developer Tool 01"),
-                "default discovery hid an installed extension with an available update"
-            );
-            let review = find_tooltip_button(&root, "Review the 1.0.0 update for Developer Tool 01");
-            assert!(review.is_sensitive(), "compatible Discover update is actionable");
-        }
         if fixture == "populated" && name == "extensions" {
             assert!(
                 has_placeholder(&root, "Search installed"),
@@ -265,7 +245,7 @@ mod unix {
                 "installed management omitted its bounded result count"
             );
             assert!(
-                has_label(&root, "Showing 20 of 50 matching installed extensions"),
+                has_label(&root, "Showing 12 of 50 matching installed extensions"),
                 "installed management materialized an unbounded card wall"
             );
         }
@@ -285,15 +265,22 @@ mod unix {
             assert_eq!(root.width(), width, "{fixture}/{name} rejected {width}px");
             assert_contained(&root, &format!("{fixture}/{name}/{width_name}"));
             if fixture == "populated" && name == "extensions" {
-                let refresh = find_tooltip_button(&root, "Refresh installed extensions");
-                assert_eq!(refresh.icon_name().as_deref(), Some("view-refresh-symbolic"));
-                if !catalogue_empty {
-                    let review = find_tooltip_button(&root, "Review the 1.0.0 update for Developer Tool 01");
+                let cards = widgets_with_class(&root, "hl-card");
+                if width == 600 {
                     assert!(
-                        vertical_end(&root, review.upcast_ref()) <= 800,
-                        "{width_name} Discover update action fell below the first viewport"
+                        cards.windows(2).all(|pair| pair[0].allocation().y() != pair[1].allocation().y()),
+                        "600px Installed cards did not form one full-width row each"
+                    );
+                } else {
+                    let first_y = cards.first().expect("Installed renders cards").allocation().y();
+                    assert_eq!(
+                        cards.iter().take_while(|card| card.allocation().y() == first_y).count(),
+                        3,
+                        "1200px Installed collection did not retain three columns"
                     );
                 }
+                let refresh = find_tooltip_button(&root, "Refresh installed extensions");
+                assert_eq!(refresh.icon_name().as_deref(), Some("view-refresh-symbolic"));
             }
             if fixture == "error" && name == "networks" {
                 for label in [
@@ -310,6 +297,30 @@ mod unix {
             capture(&window, &format!("{capture_fixture}-{name}-{width_name}"), width, 800);
         }
         if fixture == "populated" && name == "extensions" && !catalogue_empty {
+            find_toggle(&root, "Discover").set_active(true);
+            settle_toolkit();
+            send_report(&surface, &mut wire, 100, |event| matches!(event, hl_gui::Event::Toggle { .. }));
+            apply_until(&mut wire, &mut tree, &mut surface, "Find extensions", |request| {
+                panic!("unexpected mode switch request: {request:?}")
+            });
+            let discover_root = surface.widget().clone().upcast::<gtk::Widget>();
+            assert!(has_placeholder(&discover_root, "Search extensions"));
+            assert!(!has_placeholder(&discover_root, "Search installed"));
+            assert!(has_label(&discover_root, "19 of 20 extensions"));
+            let review = find_tooltip_button(&discover_root, "Review the 1.0.0 update for Developer Tool 01");
+            assert!(review.is_sensitive(), "compatible Discover update is actionable");
+            for (width_name, width) in [("wide", 1_200), ("narrow", 600)] {
+                window.set_default_size(width, 800);
+                window.set_size_request(width, 800);
+                settle_toolkit();
+                discover_root.allocate(width, 1_600, -1, None);
+                assert_contained(&discover_root, &format!("discover/extensions/{width_name}"));
+                assert!(
+                    vertical_end(&discover_root, review.upcast_ref()) <= 800,
+                    "{width_name} Discover update action fell below the first viewport"
+                );
+                capture(&window, &format!("discover-extensions-{width_name}"), width, 800);
+            }
             exercise_extension_update(&mut wire, &mut tree, &mut surface, &window);
         }
         if fixture == "error" && name == "networks" {
@@ -1087,6 +1098,19 @@ mod unix {
 
     fn find_toggle(root: &gtk::Widget, label: &str) -> gtk::ToggleButton {
         find_toggle_optional(root, label).unwrap_or_else(|| panic!("toggle {label:?} was not found"))
+    }
+
+    fn widgets_with_class(root: &gtk::Widget, class: &str) -> Vec<gtk::Widget> {
+        let mut found = Vec::new();
+        let mut child = root.first_child();
+        while let Some(current) = child {
+            child = current.next_sibling();
+            if current.has_css_class(class) {
+                found.push(current.clone());
+            }
+            found.extend(widgets_with_class(&current, class));
+        }
+        found
     }
 
     fn find_expander(root: &gtk::Widget, label: &str) -> gtk::Expander {

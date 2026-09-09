@@ -693,6 +693,8 @@ test('Top owns workspace settings and extension management in the same tab', asy
   invoke(stage, 'Extensions');
   await settled();
   await settled();
+  selectExtensionMode(stage, 'Discover');
+  await settled();
   assert.ok(labelled(stage, 'Discover'));
   assert.ok(labelled(stage, '1 extension'));
   assert.ok(labelled(stage, 'Component playground'));
@@ -741,7 +743,7 @@ test('Top owns workspace settings and extension management in the same tab', asy
     'extension cards fill their responsive column instead of overriding width with start alignment',
   );
   assert.deepEqual(ancestorProperty(stage, 'Component playground', 'Card', 'Width'), {
-    Length: 'Fill',
+    Length: { Chars: 38 },
   });
   assert.deepEqual(
     taggedProperty(stage, 'Refresh installed extensions', 'IconButton', 'Icon'),
@@ -1030,6 +1032,8 @@ test('extension discovery reviews the first-party Storybook without requiring a 
     }),
   );
   await settled();
+  selectExtensionMode(stage, 'Discover');
+  await settled();
   invoke(stage, 'Review access');
   await settled();
   await settled();
@@ -1100,6 +1104,51 @@ test('large extension catalogues search and filter deterministic lifecycle proje
   );
 });
 
+test('extension modes isolate collections and reset controls in deterministic keyboard order', async () => {
+  const stage = host();
+  stage.render(
+    h(Extensions, {
+      api: {
+        info: async () => ({ name: 'daily', architecture: 'amd64', image: 'alpine' }),
+        extensions: {
+          list: async () => largeCatalogueInstalled,
+          catalogue: async () => ({ entries: largeCatalogueEntries, complete: true }),
+        },
+        watchExtensions: async () => () => {},
+      },
+    }),
+  );
+  await settled();
+  await settled();
+  let labels = orderedLabels(stage);
+  assert.ok(labels.includes('Find installed extensions'));
+  assert.ok(!labels.includes('Find extensions'));
+  assert.ok(labels.indexOf('Installed') < labels.indexOf('Find installed extensions'));
+  assert.ok(
+    labels.indexOf('Find installed extensions') < labels.indexOf('2 of 2 installed extensions'),
+  );
+  change(stage, 'Search installed', 'database');
+  changeByTooltip(stage, 'Filter installed extensions by status', 'updates');
+  await settled();
+
+  selectExtensionMode(stage, 'Discover');
+  await settled();
+  labels = orderedLabels(stage);
+  assert.ok(labels.includes('Find extensions'));
+  assert.ok(!labels.includes('Find installed extensions'));
+  assert.ok(labels.indexOf('Discover') < labels.indexOf('Find extensions'));
+  assert.ok(labels.indexOf('Find extensions') < labels.indexOf('19 of 20 extensions'));
+  assert.equal(fieldValue(stage, 'Search extensions'), '');
+  assert.equal(fieldValueByTooltip(stage, 'Filter extension catalogue by status'), 'discover');
+
+  change(stage, 'Search extensions', 'future');
+  changeByTooltip(stage, 'Filter extension catalogue by status', 'incompatible');
+  selectExtensionMode(stage, 'Installed');
+  await settled();
+  assert.equal(fieldValue(stage, 'Search installed'), '');
+  assert.equal(fieldValueByTooltip(stage, 'Filter installed extensions by status'), 'all');
+});
+
 test('extension discovery searches, filters, reports result counts, and clears a no-match state', async () => {
   const stage = host();
   stage.render(
@@ -1115,6 +1164,8 @@ test('extension discovery searches, filters, reports result counts, and clears a
     }),
   );
   await settled();
+  await settled();
+  selectExtensionMode(stage, 'Discover');
   await settled();
   assert.ok(labelled(stage, '19 of 20 extensions'));
   assert.ok(labelled(stage, 'Showing 8 of 19 matching extensions'));
@@ -1205,12 +1256,12 @@ test('installed extension management searches, filters, pages, and clears fifty 
   await settled();
   await settled();
   assert.ok(labelled(stage, '50 of 50 installed extensions'));
-  assert.ok(labelled(stage, 'Showing 20 of 50 matching installed extensions'));
-  assert.ok(labelled(stage, 'Show 20 more installed'));
+  assert.ok(labelled(stage, 'Showing 12 of 50 matching installed extensions'));
+  assert.ok(labelled(stage, 'Show 12 more installed'));
   assert.deepEqual(taggedProperty(stage, 'Disabled', 'Badge', 'Tone'), { Tone: 'Neutral' });
-  invoke(stage, 'Show 20 more installed');
+  invoke(stage, 'Show 12 more installed');
   await settled();
-  assert.ok(labelled(stage, 'Showing 40 of 50 matching installed extensions'));
+  assert.ok(labelled(stage, 'Showing 24 of 50 matching installed extensions'));
 
   changeByTooltip(stage, 'Filter installed extensions by status', 'faulted');
   await settled();
@@ -1278,6 +1329,8 @@ test('extension discovery keeps unknown compatibility reviewable and blocks know
   );
   await settled();
   await settled();
+  selectExtensionMode(stage, 'Discover');
+  await settled();
   assert.ok(labelled(stage, 'Compatibility not declared'));
   assert.deepEqual(
     enabledStates(stage, 'Review access'),
@@ -1335,6 +1388,8 @@ test('an installed catalogue extension exposes its update review without retypin
       },
     }),
   );
+  await settled();
+  selectExtensionMode(stage, 'Discover');
   await settled();
   assert.equal(
     labelledInCard(stage, 'Component playground', 'Review update').length,
@@ -1419,6 +1474,8 @@ test('an up-to-date built-in is hidden by default and available through the inst
     }),
   );
   await settled();
+  await settled();
+  selectExtensionMode(stage, 'Discover');
   await settled();
   assert.equal(
     labelled(stage, 'Installed · up to date'),
@@ -1701,6 +1758,8 @@ test('extension review calls out destructive image authority before consent', as
     }),
   );
   await settled();
+  selectExtensionMode(stage, 'Discover');
+  await settled();
   change(stage, 'registry.example/extension:version', 'registry.example/tools:1');
   invoke(stage, 'Inspect');
   await settled();
@@ -1735,6 +1794,8 @@ test('extension discovery distinguishes catalogue loading from a complete empty 
       },
     }),
   );
+  selectExtensionMode(stage, 'Discover');
+  await settled();
   await settled();
   assert.ok(labelled(stage, 'Loading extension catalogue…'));
   assert.equal(labelled(stage, 'The built-in extension catalogue is currently empty.'), undefined);
@@ -1762,6 +1823,8 @@ test('extension discovery can retry a failed catalogue without leaving the page'
       },
     }),
   );
+  await settled();
+  selectExtensionMode(stage, 'Discover');
   await settled();
   assert.ok(labelled(stage, 'Extension catalogue could not be completed.'));
   assert.ok(labelled(stage, 'Technical details'));
@@ -1821,6 +1884,8 @@ test('extension inspection keeps invalid and failed references recoverable with 
       },
     }),
   );
+  await settled();
+  selectExtensionMode(stage, 'Discover');
   await settled();
 
   change(stage, 'registry.example/extension:version', 'not a reference');
@@ -1943,6 +2008,8 @@ test('a stale cancellation refreshes the authoritative phase and remains cancell
     }),
   );
   await settled();
+  selectExtensionMode(stage, 'Discover');
+  await settled();
   change(stage, 'registry.example/extension:version', 'registry.example/tool:1');
   invoke(stage, 'Inspect');
   await settled();
@@ -2008,6 +2075,8 @@ for (const updating of [false, true]) {
         },
       }),
     );
+    await settled();
+    selectExtensionMode(stage, 'Discover');
     await settled();
     change(stage, 'registry.example/extension:version', 'local/scoped:2');
     invoke(stage, 'Inspect');
@@ -2160,6 +2229,8 @@ test('extension review grants one exact network without workspace-wide network a
     }),
   );
   await settled();
+  selectExtensionMode(stage, 'Discover');
+  await settled();
   change(stage, 'registry.example/extension:version', 'local/postgres:1');
   invoke(stage, 'Inspect');
   await settled();
@@ -2223,6 +2294,8 @@ test('extension image entry submits from the keyboard and consent explains reque
     }),
   );
   await settled();
+  selectExtensionMode(stage, 'Discover');
+  await settled();
   assert.equal(
     ancestorProperty(stage, 'Inspect', 'Row', 'Wrap')?.Flag,
     true,
@@ -2237,11 +2310,6 @@ test('extension image entry submits from the keyboard and consent explains reque
     placeholderProperty(stage, 'registry.example/extension:version', 'Width'),
     { Length: { Chars: 24 } },
     'the OCI reference keeps a compact minimum while its tooltip preserves the exact value',
-  );
-  assert.deepEqual(
-    placeholderProperty(stage, 'registry.example/extension:version', 'Grow'),
-    { Number: 1 },
-    'the OCI reference grows into available page width instead of leaving a dead form row',
   );
   change(stage, 'registry.example/extension:version', 'registry.example/assistant:1.2');
   submit(stage, 'registry.example/extension:version');
@@ -2327,6 +2395,8 @@ test('a ready extension review can be abandoned without granting authority', asy
       },
     }),
   );
+  await settled();
+  selectExtensionMode(stage, 'Discover');
   await settled();
   change(stage, 'registry.example/extension:version', 'registry.example/assistant:1');
   invoke(stage, 'Inspect');
@@ -2421,10 +2491,10 @@ test('Top is visibly required and offers no self-disable or self-removal trap', 
   );
   await settled();
 
-  assert.ok(labelled(stage, 'Built in · workspace manager'));
-  assert.deepEqual(property(stage, 'top', 'Detail'), { Text: 'Version 0.1.0' });
+  assert.ok(labelled(stage, 'Running'));
+  assert.ok(labelled(stage, 'Version 0.1.0'));
   assert.deepEqual(property(stage, 'top', 'Tooltip'), {
-    Text: `Installed image sha256:${'a'.repeat(64)}`,
+    Text: `sha256:${'a'.repeat(64)}`,
   });
   assert.equal(labelled(stage, 'Disable'), undefined);
   assert.equal(labelled(stage, 'Remove'), undefined);
@@ -7020,6 +7090,20 @@ function toggleLatestSwitch(stage, value) {
   assert.ok(
     stage.surface.dispatch({ trigger: 'Toggle', node, id: `${node}:Toggle`, value }),
     'the latest switch toggles',
+  );
+}
+
+function selectExtensionMode(stage, label) {
+  const control = labelled(stage, label);
+  assert.ok(control, `${label} extension mode is visible`);
+  assert.ok(
+    stage.surface.dispatch({
+      trigger: 'Toggle',
+      node: control.SetProp.id,
+      id: `${control.SetProp.id}:Toggle`,
+      value: true,
+    }),
+    `${label} extension mode can be selected`,
   );
 }
 

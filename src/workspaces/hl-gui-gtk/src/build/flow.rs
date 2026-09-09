@@ -152,12 +152,20 @@ impl Weave {
     fn lines(&self, widget: &gtk::Widget, room: i32) -> Vec<Line> {
         let spacing = self.spacing.get();
         let vertical = self.direction.get() == gtk::Orientation::Vertical;
+        let children = children(widget);
+        let compact_cards = !vertical
+            && (0..=600).contains(&room)
+            && !children.is_empty()
+            && children.iter().all(|child| child.has_css_class("hl-card"));
         let mut lines = vec![Line::default()];
-        for child in children(widget) {
+        for child in children {
             let (main, cross) = size(&child, vertical, room);
             let line = lines.last_mut().expect("a line is always open");
             let advance = if line.children.is_empty() { main } else { main + spacing };
-            if room >= 0 && !line.children.is_empty() && line.main + advance > room {
+            if room >= 0
+                && !line.children.is_empty()
+                && (compact_cards || line.main + advance > room)
+            {
                 lines.push(Line::open(child, main, cross));
                 continue;
             }
@@ -175,7 +183,13 @@ impl Weave {
         let expanding = line
             .children
             .iter()
-            .filter(|(child, _, _)| if vertical { child.vexpands() } else { child.hexpands() })
+            .filter(|(child, _, _)| {
+                if vertical {
+                    child.vexpands()
+                } else {
+                    child.hexpands() || (room <= 600 && child.has_css_class("hl-card"))
+                }
+            })
             .count();
         let expanding = i32::try_from(expanding).unwrap_or(i32::MAX);
         let spare = room.saturating_sub(line.main);
@@ -183,7 +197,11 @@ impl Weave {
         let mut remainder = if expanding == 0 { 0 } else { spare % expanding };
         let mut main = if reverse { room } else { 0 };
         for (child, extent, child_cross) in &line.children {
-            let expands = if vertical { child.vexpands() } else { child.hexpands() };
+            let expands = if vertical {
+                child.vexpands()
+            } else {
+                child.hexpands() || (room <= 600 && child.has_css_class("hl-card"))
+            };
             let bonus = if expands {
                 let bonus = share + i32::from(remainder > 0);
                 remainder = remainder.saturating_sub(1);
@@ -294,5 +312,35 @@ impl Flow {
     pub fn set_spacing(&self, spacing: i32) {
         self.imp().spacing.set(spacing);
         self.layout_changed();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compact_card_collections_use_one_full_width_row_per_card() {
+        if gtk::init().is_err() {
+            return;
+        }
+        let container = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        let flow = Flow::new(gtk::Orientation::Horizontal);
+        flow.set_spacing(4);
+        container.set_layout_manager(Some(flow.clone()));
+        for _ in 0..3 {
+            let card = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            card.add_css_class("hl-card");
+            card.set_size_request(260, 40);
+            container.append(&card);
+        }
+        assert_eq!(flow.imp().lines(container.upcast_ref(), 600).len(), 3);
+        assert_eq!(flow.imp().lines(container.upcast_ref(), 1_200).len(), 1);
+        container.allocate(600, 140, -1, None);
+        let widths = children(container.upcast_ref())
+            .into_iter()
+            .map(|child| child.width())
+            .collect::<Vec<_>>();
+        assert_eq!(widths, vec![600, 600, 600]);
     }
 }

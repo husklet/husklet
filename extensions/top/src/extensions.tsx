@@ -25,6 +25,8 @@ import {
   Spinner,
   Switch,
   Text,
+  ToggleButton,
+  ToggleButtonGroup,
   type ExtensionAcquisitionStatus,
   type ExtensionCapability,
   type ExtensionCatalogue,
@@ -46,6 +48,7 @@ import {
 } from '@husklet/react';
 
 type Change = { value?: unknown };
+type ExtensionMode = 'installed' | 'discover';
 type LifecycleAction = 'enable' | 'disable' | 'retry' | 'remove';
 type LifecycleState = { action: LifecycleAction; name: string };
 type ProviderFailure = { key: string; detail: string; retry: boolean };
@@ -63,7 +66,7 @@ const IMAGE_VERBS: { key: ImageVerb; label: string }[] = [
 const COPY_WIDTH = { maximum: { chars: 54 } } as const;
 const PAGE_WIDTH = { maximum: { chars: 110 } } as const;
 const CATALOGUE_PAGE_SIZE = 8;
-const INSTALLED_PAGE_SIZE = 20;
+const INSTALLED_PAGE_SIZE = 12;
 const FILESYSTEM_VERBS = [
   { key: 'read', label: 'View contents', meaning: 'read' },
   { key: 'write', label: 'Modify existing contents', meaning: 'write' },
@@ -414,6 +417,7 @@ function RequestedPermissionSummary({ groups }: { groups: { label: string; count
 }
 
 export function Extensions({ api }: { api: WorkspaceApi }) {
+  const [mode, setMode] = React.useState<ExtensionMode>('installed');
   const [installed, setInstalled] = React.useState<ExtensionSummary[]>([]);
   const [catalogue, setCatalogue] = React.useState<ExtensionCatalogue | null>(null);
   const [catalogueState, setCatalogueState] = React.useState<'loading' | 'ready' | 'error'>(
@@ -475,6 +479,17 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
   const lifecycleInFlight = React.useRef(false);
   const acquisitionInFlight = React.useRef(false);
   const openingInFlight = React.useRef('');
+
+  const selectMode = (next: ExtensionMode) => {
+    if (next === mode) return;
+    setMode(next);
+    setCatalogueQuery('');
+    setCatalogueFilter('discover');
+    setCatalogueLimit(CATALOGUE_PAGE_SIZE);
+    setInstalledQuery('');
+    setInstalledFilter('all');
+    setInstalledLimit(INSTALLED_PAGE_SIZE);
+  };
 
   const reload = React.useCallback(async () => {
     const epoch = ++inventoryEpoch.current;
@@ -908,963 +923,987 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
           color="text-dim"
           wrap
         />
+        <ToggleButtonGroup gap={0} width="content">
+          <ToggleButton
+            label="Installed"
+            selected={mode === 'installed'}
+            onToggle={() => selectMode('installed')}
+          />
+          <ToggleButton
+            label="Discover"
+            selected={mode === 'discover'}
+            onToggle={() => selectMode('discover')}
+          />
+        </ToggleButtonGroup>
         {error && <RecoveryState operation="Extension change" error={error} />}
         {notice && (
           <InlineMessage label={notice.label} tone={notice.uncertain ? 'warning' : 'positive'} />
         )}
         <Column gap={3} width="fill">
-          <Column gap={2} width="fill">
-            {!acquisition && (
-              <Row gap={1} width="fill" align="center" justify="start" wrap>
-                <Heading label="Discover" scale="caption" grow={false} align="start" />
-                {catalogueState === 'ready' && catalogueEntries.length > 0 ? (
-                  <Badge
-                    label={`${countLabel(catalogueEntries.length, 'extension')}${
-                      catalogueEntries.every((entry) =>
-                        installed.some((extension) => extension.name === entry.id),
-                      )
-                        ? ' · all installed'
-                        : ''
-                    }`}
-                  />
-                ) : null}
-              </Row>
-            )}
-            {!acquisition && (
-              <Column gap={2}>
-                <Text
-                  label="Browse available tools. Husklet inspects the image first; nothing is installed until you approve its exact access."
-                  color="text-dim"
-                  width={COPY_WIDTH}
-                  wrap
-                />
-                {catalogueState === 'ready' && catalogueEntries.length > 0 ? (
-                  <Row gap={1} width="fill" wrap align="center" justify="start">
-                    <Entry
-                      grow
-                      value={catalogueQuery}
-                      placeholder="Search extensions"
-                      tooltip="Search by name, identifier, publisher, or description"
-                      width={{ minimum: { chars: 18 }, maximum: { chars: 36 } }}
-                      onChange={(event: Change) => {
-                        setCatalogueQuery(String(event.value ?? '').slice(0, 128));
-                        setCatalogueLimit(CATALOGUE_PAGE_SIZE);
-                      }}
+          {mode === 'discover' || acquisition ? (
+            <Column gap={2} width="fill">
+              {!acquisition && (
+                <Row gap={1} width="fill" align="center" justify="start" wrap>
+                  <Heading label="Discover" scale="caption" grow={false} align="start" />
+                  {catalogueState === 'ready' && catalogueEntries.length > 0 ? (
+                    <Badge
+                      label={`${countLabel(catalogueEntries.length, 'extension')}${
+                        catalogueEntries.every((entry) =>
+                          installed.some((extension) => extension.name === entry.id),
+                        )
+                          ? ' · all installed'
+                          : ''
+                      }`}
                     />
-                    <Select
-                      value={catalogueFilter}
-                      tooltip="Filter extension catalogue by status"
-                      width={{ minimum: { chars: 16 }, maximum: { chars: 22 } }}
-                      choices={[
-                        { value: 'discover', label: 'Available & updates' },
-                        { value: 'all', label: 'All extensions' },
-                        { value: 'available', label: 'Available' },
-                        { value: 'installed', label: 'Installed' },
-                        { value: 'updates', label: 'Updates' },
-                        { value: 'incompatible', label: 'Incompatible' },
-                      ]}
-                      onChange={(event: Change) => {
-                        const selected = String(event.value ?? '');
-                        if (
-                          [
-                            'discover',
-                            'all',
-                            'available',
-                            'installed',
-                            'updates',
-                            'incompatible',
-                          ].includes(selected)
-                        ) {
-                          setCatalogueFilter(selected as CatalogueFilter);
-                          setCatalogueLimit(CATALOGUE_PAGE_SIZE);
-                        }
-                      }}
-                    />
-                    <Text
-                      label={`${visibleCatalogueEntries.length} of ${countLabel(catalogueEntries.length, 'extension')}`}
-                      color="text-dim"
-                    />
-                  </Row>
-                ) : null}
-                {catalogueState === 'loading' && (
-                  <Row gap={1} align="center">
-                    <Spinner />
-                    <Text label="Loading extension catalogue…" color="text-dim" />
-                  </Row>
-                )}
-                {catalogueState === 'ready' && catalogueEntries.length === 0 && (
-                  <InlineMessage
-                    label="The built-in extension catalogue is currently empty."
+                  ) : null}
+                </Row>
+              )}
+              {!acquisition && (
+                <Column gap={2}>
+                  <Text
+                    label="Browse available tools. Husklet inspects the image first; nothing is installed until you approve its exact access."
+                    color="text-dim"
                     width={COPY_WIDTH}
-                    tone="neutral"
+                    wrap
                   />
-                )}
-                {catalogueEntries.length > 0 && visibleCatalogueEntries.length === 0 ? (
-                  <Column gap={1} align="start">
+                  {catalogueState === 'ready' && catalogueEntries.length > 0 ? (
+                    <Column gap={1} width="fill">
+                      <Text label="Find extensions" color="text-dim" />
+                      <Row gap={1} width="fill" wrap align="center" justify="start">
+                        <Entry
+                          grow
+                          value={catalogueQuery}
+                          placeholder="Search extensions"
+                          tooltip="Search by name, identifier, publisher, or description"
+                          width={{ minimum: { chars: 18 }, maximum: { chars: 36 } }}
+                          onChange={(event: Change) => {
+                            setCatalogueQuery(String(event.value ?? '').slice(0, 128));
+                            setCatalogueLimit(CATALOGUE_PAGE_SIZE);
+                          }}
+                        />
+                        <Select
+                          value={catalogueFilter}
+                          tooltip="Filter extension catalogue by status"
+                          width={{ minimum: { chars: 16 }, maximum: { chars: 22 } }}
+                          choices={[
+                            { value: 'discover', label: 'Available & updates' },
+                            { value: 'all', label: 'All extensions' },
+                            { value: 'available', label: 'Available' },
+                            { value: 'installed', label: 'Installed' },
+                            { value: 'updates', label: 'Updates' },
+                            { value: 'incompatible', label: 'Incompatible' },
+                          ]}
+                          onChange={(event: Change) => {
+                            const selected = String(event.value ?? '');
+                            if (
+                              [
+                                'discover',
+                                'all',
+                                'available',
+                                'installed',
+                                'updates',
+                                'incompatible',
+                              ].includes(selected)
+                            ) {
+                              setCatalogueFilter(selected as CatalogueFilter);
+                              setCatalogueLimit(CATALOGUE_PAGE_SIZE);
+                            }
+                          }}
+                        />
+                        <Text
+                          label={`${visibleCatalogueEntries.length} of ${countLabel(catalogueEntries.length, 'extension')}`}
+                          color="text-dim"
+                        />
+                      </Row>
+                    </Column>
+                  ) : null}
+                  {catalogueState === 'loading' && (
+                    <Row gap={1} align="center">
+                      <Spinner />
+                      <Text label="Loading extension catalogue…" color="text-dim" />
+                    </Row>
+                  )}
+                  {catalogueState === 'ready' && catalogueEntries.length === 0 && (
                     <InlineMessage
-                      label="No extensions match this search and status filter."
+                      label="The built-in extension catalogue is currently empty."
+                      width={COPY_WIDTH}
                       tone="neutral"
                     />
-                    <Button
-                      label="Clear filters"
-                      size="small"
-                      onInvoke={() => {
-                        setCatalogueQuery('');
-                        setCatalogueFilter('discover');
-                        setCatalogueLimit(CATALOGUE_PAGE_SIZE);
-                      }}
-                    />
-                  </Column>
-                ) : null}
-                {visibleCatalogueEntries.length > 0 && (
-                  <Row gap={1} width="fill" wrap>
-                    {renderedCatalogueEntries.map((entry) => {
-                      const compatibility = catalogueCompatibility(entry, workspaceArchitecture);
-                      const trust = catalogueTrust(entry);
-                      const installedExtension = installed.find(
-                        (extension) => extension.name === entry.id,
-                      );
-                      const updateAvailable = Boolean(
-                        installedExtension &&
-                        newerVersion(entry.version, installedExtension.version),
-                      );
-                      const provider = installedExtension?.pane_providers?.[0];
-                      return (
-                        <Card key={entry.id} grow={false} width="fill" variant="outline">
-                          <CardHeader
-                            label={entry.title}
-                            detail={`${entry.publisher} · Version ${entry.version}`}
-                            align="start"
-                            width="fill"
-                          />
-                          <CardContent gap={1}>
-                            <Text label={entry.description} color="text-dim" wrap />
-                            <Row gap={1} width="fill" wrap align="center" justify="start">
-                              <Badge
-                                label={
-                                  installedExtension
-                                    ? `Installed · ${updateAvailable ? 'update available' : 'up to date'}`
-                                    : 'Available'
-                                }
-                                tone={
-                                  updateAvailable || !installedExtension ? 'accent' : 'positive'
-                                }
-                              />
-                              <Text
-                                label={
-                                  trust.label === 'Husklet first-party'
-                                    ? 'Verified publisher · Husklet'
-                                    : trust.label
-                                }
-                                color="text-dim"
-                              />
-                              {compatibility.compatible !== true ? (
-                                <Badge
-                                  label={
-                                    compatibility.compatible === false
-                                      ? 'Incompatible'
-                                      : 'Compatibility undeclared'
-                                  }
-                                  tone={compatibility.compatible === false ? 'danger' : 'warning'}
-                                />
-                              ) : null}
-                            </Row>
-                            {compatibility.compatible !== true ? (
-                              <Text
-                                label={compatibility.label}
-                                color={compatibility.compatible === false ? 'warning' : 'text-dim'}
-                                wrap
-                              />
-                            ) : null}
-                            <Expander label="Trust & compatibility" expanded={false}>
-                              <Column gap={1}>
-                                <Text
-                                  label={`Published by ${entry.publisher}`}
-                                  color="text-dim"
-                                  wrap
-                                />
-                                <Text
-                                  label={`Catalogue source · ${entry.source}`}
-                                  color="text-dim"
-                                  wrap
-                                />
-                                <Text
-                                  label={`Image · ${entry.reference}`}
-                                  color="text-dim"
-                                  tooltip={entry.reference}
-                                  wrap
-                                />
-                                <Text
-                                  label={`Protocol ${entry.protocol ?? 'unavailable'} · ${entry.architectures?.join(', ') || 'architecture unavailable'}`}
-                                  color="text-dim"
-                                  wrap
-                                />
-                              </Column>
-                            </Expander>
-                            {installedExtension ? (
-                              <Expander label="Installed image" expanded={false}>
-                                <Text
-                                  label={`${capitalize(extensionState(installedExtension))} · ${compactDigest(installedExtension.image_digest)}`}
-                                  color="text-dim"
-                                  tooltip={installedExtension.image_digest}
-                                  wrap
-                                />
-                              </Expander>
-                            ) : null}
-                          </CardContent>
-                          {updateAvailable ? (
-                            <CardActions gap={1} align="start" justify="start" width="fill">
-                              <Button
-                                label="Review update"
-                                tooltip={`Review the ${entry.version} update for ${entry.title}`}
-                                variant="filled"
-                                tone="accent"
-                                enabled={!busy && compatibility.compatible !== false}
-                                onInvoke={() => inspect(entry.reference)}
-                              />
-                            </CardActions>
-                          ) : !installedExtension ? (
-                            <CardActions gap={1} align="start" justify="start" width="fill">
-                              <Button
-                                label="Review access"
-                                tooltip={`Review access requested by ${entry.title}`}
-                                variant="filled"
-                                tone="accent"
-                                enabled={!busy && compatibility.compatible !== false}
-                                onInvoke={() => inspect(entry.reference)}
-                              />
-                            </CardActions>
-                          ) : provider ? (
-                            <CardActions gap={1} align="start" justify="start" width="fill">
-                              {providerAction(installedExtension, provider)}
-                            </CardActions>
-                          ) : null}
-                        </Card>
-                      );
-                    })}
-                  </Row>
-                )}
-                {visibleCatalogueEntries.length > renderedCatalogueEntries.length ? (
-                  <Row gap={1} width="fill" wrap align="center" justify="start">
-                    <Text
-                      label={`Showing ${renderedCatalogueEntries.length} of ${visibleCatalogueEntries.length} matching extensions`}
-                      color="text-dim"
-                    />
-                    <Button
-                      label={`Show ${Math.min(CATALOGUE_PAGE_SIZE, visibleCatalogueEntries.length - renderedCatalogueEntries.length)} more`}
-                      size="small"
-                      onInvoke={() => setCatalogueLimit((current) => current + CATALOGUE_PAGE_SIZE)}
-                    />
-                  </Row>
-                ) : null}
-                {catalogue && !catalogue.complete && (
-                  <InlineMessage label="The built-in catalogue is incomplete." tone="warning" />
-                )}
-                {catalogueState === 'error' && (
-                  <Column gap={1}>
-                    <RecoveryState
-                      operation="Extension catalogue"
-                      error={catalogueError}
-                      retryLabel="Retry catalogue"
-                      onRetry={loadCatalogue}
-                    />
-                  </Column>
-                )}
-              </Column>
-            )}
-            {!acquisition ? (
-              <Expander label="Install from an OCI image" expanded={false}>
-                <Card grow={false} width="fill" variant="outline">
-                  <CardContent>
-                    <Row gap={1} width="fill" wrap>
-                      <Entry
-                        grow
-                        value={reference}
-                        placeholder="registry.example/extension:version"
-                        tooltip={
-                          reference || 'Paste a full OCI image reference; press Enter to inspect'
-                        }
-                        width={{ chars: 24 }}
-                        onChange={(event: Change) =>
-                          setReference(String(event.value ?? '').slice(0, 512))
-                        }
-                        onSubmit={() => inspect()}
+                  )}
+                  {catalogueEntries.length > 0 && visibleCatalogueEntries.length === 0 ? (
+                    <Column gap={1} align="start">
+                      <InlineMessage
+                        label="No extensions match this search and status filter."
+                        tone="neutral"
                       />
                       <Button
-                        label={busy === 'inspect' ? 'Inspecting…' : 'Inspect'}
-                        variant="filled"
-                        tone="accent"
-                        enabled={Boolean(reference.trim()) && !busy}
-                        onInvoke={() => inspect()}
+                        label="Clear filters"
+                        size="small"
+                        onInvoke={() => {
+                          setCatalogueQuery('');
+                          setCatalogueFilter('discover');
+                          setCatalogueLimit(CATALOGUE_PAGE_SIZE);
+                        }}
+                      />
+                    </Column>
+                  ) : null}
+                  {visibleCatalogueEntries.length > 0 && (
+                    <Row gap={1} width="fill" wrap>
+                      {renderedCatalogueEntries.map((entry) => {
+                        const compatibility = catalogueCompatibility(entry, workspaceArchitecture);
+                        const trust = catalogueTrust(entry);
+                        const installedExtension = installed.find(
+                          (extension) => extension.name === entry.id,
+                        );
+                        const updateAvailable = Boolean(
+                          installedExtension &&
+                          newerVersion(entry.version, installedExtension.version),
+                        );
+                        const provider = installedExtension?.pane_providers?.[0];
+                        return (
+                          <Card key={entry.id} grow width={{ chars: 38 }} variant="outline">
+                            <CardHeader
+                              label={entry.title}
+                              detail={`${entry.publisher} · Version ${entry.version}`}
+                              align="start"
+                              width="fill"
+                            />
+                            <CardContent gap={1}>
+                              <Text label={entry.description} color="text-dim" wrap />
+                              <Row gap={1} width="fill" wrap align="center" justify="start">
+                                <Badge
+                                  label={
+                                    installedExtension
+                                      ? `Installed · ${updateAvailable ? 'update available' : 'up to date'}`
+                                      : 'Available'
+                                  }
+                                  tone={
+                                    updateAvailable || !installedExtension ? 'accent' : 'positive'
+                                  }
+                                />
+                                <Text
+                                  label={
+                                    trust.label === 'Husklet first-party'
+                                      ? 'Verified publisher · Husklet'
+                                      : trust.label
+                                  }
+                                  color="text-dim"
+                                />
+                                {compatibility.compatible !== true ? (
+                                  <Badge
+                                    label={
+                                      compatibility.compatible === false
+                                        ? 'Incompatible'
+                                        : 'Compatibility undeclared'
+                                    }
+                                    tone={compatibility.compatible === false ? 'danger' : 'warning'}
+                                  />
+                                ) : null}
+                              </Row>
+                              {compatibility.compatible !== true ? (
+                                <Text
+                                  label={compatibility.label}
+                                  color={
+                                    compatibility.compatible === false ? 'warning' : 'text-dim'
+                                  }
+                                  wrap
+                                />
+                              ) : null}
+                              <Expander label="Trust & compatibility" expanded={false}>
+                                <Column gap={1}>
+                                  <Text
+                                    label={`Published by ${entry.publisher}`}
+                                    color="text-dim"
+                                    wrap
+                                  />
+                                  <Text
+                                    label={`Catalogue source · ${entry.source}`}
+                                    color="text-dim"
+                                    wrap
+                                  />
+                                  <Text
+                                    label={`Image · ${entry.reference}`}
+                                    color="text-dim"
+                                    tooltip={entry.reference}
+                                    wrap
+                                  />
+                                  <Text
+                                    label={`Protocol ${entry.protocol ?? 'unavailable'} · ${entry.architectures?.join(', ') || 'architecture unavailable'}`}
+                                    color="text-dim"
+                                    wrap
+                                  />
+                                </Column>
+                              </Expander>
+                              {installedExtension ? (
+                                <Expander label="Installed image" expanded={false}>
+                                  <Text
+                                    label={`${capitalize(extensionState(installedExtension))} · ${compactDigest(installedExtension.image_digest)}`}
+                                    color="text-dim"
+                                    tooltip={installedExtension.image_digest}
+                                    wrap
+                                  />
+                                </Expander>
+                              ) : null}
+                            </CardContent>
+                            {updateAvailable ? (
+                              <CardActions gap={1} align="start" justify="start" width="fill">
+                                <Button
+                                  label="Review update"
+                                  tooltip={`Review the ${entry.version} update for ${entry.title}`}
+                                  variant="filled"
+                                  tone="accent"
+                                  enabled={!busy && compatibility.compatible !== false}
+                                  onInvoke={() => inspect(entry.reference)}
+                                />
+                              </CardActions>
+                            ) : !installedExtension ? (
+                              <CardActions gap={1} align="start" justify="start" width="fill">
+                                <Button
+                                  label="Review access"
+                                  tooltip={`Review access requested by ${entry.title}`}
+                                  variant="filled"
+                                  tone="accent"
+                                  enabled={!busy && compatibility.compatible !== false}
+                                  onInvoke={() => inspect(entry.reference)}
+                                />
+                              </CardActions>
+                            ) : provider ? (
+                              <CardActions gap={1} align="start" justify="start" width="fill">
+                                {providerAction(installedExtension, provider)}
+                              </CardActions>
+                            ) : null}
+                          </Card>
+                        );
+                      })}
+                    </Row>
+                  )}
+                  {visibleCatalogueEntries.length > renderedCatalogueEntries.length ? (
+                    <Row gap={1} width="fill" wrap align="center" justify="start">
+                      <Text
+                        label={`Showing ${renderedCatalogueEntries.length} of ${visibleCatalogueEntries.length} matching extensions`}
+                        color="text-dim"
+                      />
+                      <Button
+                        label={`Show ${Math.min(CATALOGUE_PAGE_SIZE, visibleCatalogueEntries.length - renderedCatalogueEntries.length)} more`}
+                        size="small"
+                        onInvoke={() =>
+                          setCatalogueLimit((current) => current + CATALOGUE_PAGE_SIZE)
+                        }
                       />
                     </Row>
-                    <Text
-                      label="Paste an OCI image reference. You’ll review compatibility and requested access before installation."
-                      color="text-dim"
-                      wrap
-                    />
-                  </CardContent>
-                </Card>
-              </Expander>
-            ) : (
-              <Card grow={false} width="fill" variant="outline">
-                <CardHeader
-                  label={
-                    acquisition.candidate
-                      ? `Review ${acquisition.candidate.name}`
-                      : acquisition.state === 'failed'
-                        ? 'Couldn’t inspect extension'
-                        : acquisition.state === 'cancelled'
-                          ? 'Inspection cancelled'
-                          : 'Inspecting extension'
-                  }
-                  detail={
-                    acquisition.candidate?.installed_image_digest
-                      ? 'Update extension'
-                      : acquisition.candidate
-                        ? 'Install extension'
-                        : acquisition.reference
-                  }
-                  align="start"
-                  width="fill"
-                />
-                {acquisition?.candidate && (
-                  <CardContent gap={1}>
-                    <Text
-                      label={`${acquisition.candidate.name} · ${acquisition.candidate.version}`}
-                    />
-                    <Text label={`Source ${acquisition.reference}`} color="text-dim" wrap />
-                    <Text
-                      label={`Reviewed image ${compactDigest(acquisition.candidate.image_digest)}`}
-                      tooltip={acquisition.candidate.image_digest}
-                      wrap
-                    />
-                    {acquisition.candidate.installed_image_digest ? (
+                  ) : null}
+                  {catalogue && !catalogue.complete && (
+                    <InlineMessage label="The built-in catalogue is incomplete." tone="warning" />
+                  )}
+                  {catalogueState === 'error' && (
+                    <Column gap={1}>
+                      <RecoveryState
+                        operation="Extension catalogue"
+                        error={catalogueError}
+                        retryLabel="Retry catalogue"
+                        onRetry={loadCatalogue}
+                      />
+                    </Column>
+                  )}
+                </Column>
+              )}
+              {!acquisition ? (
+                <Expander label="Install from an OCI image" expanded={false}>
+                  <Card grow={false} width="fill" variant="outline">
+                    <CardContent>
+                      <Row gap={1} width="fill" wrap>
+                        <Entry
+                          grow={false}
+                          value={reference}
+                          placeholder="registry.example/extension:version"
+                          tooltip={
+                            reference || 'Paste a full OCI image reference; press Enter to inspect'
+                          }
+                          width={{ chars: 24 }}
+                          onChange={(event: Change) =>
+                            setReference(String(event.value ?? '').slice(0, 512))
+                          }
+                          onSubmit={() => inspect()}
+                        />
+                        <Button
+                          label={busy === 'inspect' ? 'Inspecting…' : 'Inspect'}
+                          variant="filled"
+                          tone="accent"
+                          enabled={Boolean(reference.trim()) && !busy}
+                          onInvoke={() => inspect()}
+                        />
+                      </Row>
+                      <Text
+                        label="Paste an OCI image reference. You’ll review compatibility and requested access before installation."
+                        color="text-dim"
+                        wrap
+                      />
+                    </CardContent>
+                  </Card>
+                </Expander>
+              ) : (
+                <Card grow={false} width="fill" variant="outline">
+                  <CardHeader
+                    label={
+                      acquisition.candidate
+                        ? `Review ${acquisition.candidate.name}`
+                        : acquisition.state === 'failed'
+                          ? 'Couldn’t inspect extension'
+                          : acquisition.state === 'cancelled'
+                            ? 'Inspection cancelled'
+                            : 'Inspecting extension'
+                    }
+                    detail={
+                      acquisition.candidate?.installed_image_digest
+                        ? 'Update extension'
+                        : acquisition.candidate
+                          ? 'Install extension'
+                          : acquisition.reference
+                    }
+                    align="start"
+                    width="fill"
+                  />
+                  {acquisition?.candidate && (
+                    <CardContent gap={1}>
+                      <Text
+                        label={`${acquisition.candidate.name} · ${acquisition.candidate.version}`}
+                      />
+                      <Text label={`Source ${acquisition.reference}`} color="text-dim" wrap />
+                      <Text
+                        label={`Reviewed image ${compactDigest(acquisition.candidate.image_digest)}`}
+                        tooltip={acquisition.candidate.image_digest}
+                        wrap
+                      />
+                      {acquisition.candidate.installed_image_digest ? (
+                        <InlineMessage
+                          label={`Replaces installed image ${compactDigest(acquisition.candidate.installed_image_digest)}. Access below was reset and must be approved again.`}
+                          tone="warning"
+                        />
+                      ) : null}
+                      <Heading label="Review permissions" scale="caption" />
+                      <RequestedPermissionSummary groups={requestedPermissionGroups} />
                       <InlineMessage
-                        label={`Replaces installed image ${compactDigest(acquisition.candidate.installed_image_digest)}. Access below was reset and must be approved again.`}
+                        label="All access is off. Expand exact grants and enable only what this extension needs."
                         tone="warning"
                       />
-                    ) : null}
-                    <Heading label="Review permissions" scale="caption" />
-                    <RequestedPermissionSummary groups={requestedPermissionGroups} />
-                    <InlineMessage
-                      label="All access is off. Expand exact grants and enable only what this extension needs."
-                      tone="warning"
-                    />
-                    {(requestedImages.remove.length > 0 || requestedImages.prune_all_unused) && (
-                      <InlineMessage
-                        label="Destructive access requested. Image removal deletes named images; prune deletes every unused image in this workspace."
-                        tone="warning"
-                      />
-                    )}
-                    <Expander
-                      label={`Exact grants · ${grantedPermissionCount}/${requestedPermissionCount} selected`}
-                      expanded={permissionDetailsExpanded}
-                      onExpand={(event: Change) =>
-                        setPermissionDetailsExpanded(Boolean(event.value))
-                      }
-                    >
-                      <Column gap={1}>
-                        {acquisition.candidate.requested.length > 0 && (
-                          <Text
-                            label={`Product access · ${granted.length}/${acquisition.candidate.requested.length}`}
-                            color="text-dim"
-                          />
-                        )}
-                        {acquisition.candidate.requested.length > 0 && (
-                          <Row gap={1} align="center">
-                            {granted.length > 0 && (
-                              <Button
-                                label="Clear product access"
-                                variant="ghost"
-                                onInvoke={() => setGranted([])}
-                              />
-                            )}
-                          </Row>
-                        )}
-                        {acquisition.candidate.requested.map((capability) => (
-                          <FormControlLabel
-                            key={capability}
-                            label={capabilityLabel(capability)}
-                            tooltip={capability}
-                            gap={2}
-                          >
-                            <Switch
-                              checked={granted.includes(capability)}
-                              onToggle={(event: Change) =>
-                                setGranted((current) =>
-                                  event.value
-                                    ? [...new Set([...current, capability])]
-                                    : current.filter((item) => item !== capability),
-                                )
-                              }
-                            />
-                          </FormControlLabel>
-                        ))}
-                        {(requestedContainers.selectors.length > 0 ||
-                          requestedContainers.create) && (
-                          <>
+                      {(requestedImages.remove.length > 0 || requestedImages.prune_all_unused) && (
+                        <InlineMessage
+                          label="Destructive access requested. Image removal deletes named images; prune deletes every unused image in this workspace."
+                          tone="warning"
+                        />
+                      )}
+                      <Expander
+                        label={`Exact grants · ${grantedPermissionCount}/${requestedPermissionCount} selected`}
+                        expanded={permissionDetailsExpanded}
+                        onExpand={(event: Change) =>
+                          setPermissionDetailsExpanded(Boolean(event.value))
+                        }
+                      >
+                        <Column gap={1}>
+                          {acquisition.candidate.requested.length > 0 && (
                             <Text
-                              label={`Container access · ${grantedContainers.selectors.length + Number(grantedContainers.create)}/${requestedContainers.selectors.length + Number(requestedContainers.create)}`}
+                              label={`Product access · ${granted.length}/${acquisition.candidate.requested.length}`}
                               color="text-dim"
                             />
-                            <Text
-                              label="Container access starts off. Select only what this extension needs."
-                              color="text-dim"
-                              wrap
-                            />
-                          </>
-                        )}
-                        {requestedContainers.selectors.map((selector) => {
-                          const key = selectorKey(selector);
-                          const selected = grantedContainers.selectors.some(
-                            (candidate) => selectorKey(candidate) === key,
-                          );
-                          return (
-                            <FormControlLabel key={key} label={selectorLabel(selector)} gap={2}>
+                          )}
+                          {acquisition.candidate.requested.length > 0 && (
+                            <Row gap={1} align="center">
+                              {granted.length > 0 && (
+                                <Button
+                                  label="Clear product access"
+                                  variant="ghost"
+                                  onInvoke={() => setGranted([])}
+                                />
+                              )}
+                            </Row>
+                          )}
+                          {acquisition.candidate.requested.map((capability) => (
+                            <FormControlLabel
+                              key={capability}
+                              label={capabilityLabel(capability)}
+                              tooltip={capability}
+                              gap={2}
+                            >
                               <Switch
-                                checked={selected}
+                                checked={granted.includes(capability)}
+                                onToggle={(event: Change) =>
+                                  setGranted((current) =>
+                                    event.value
+                                      ? [...new Set([...current, capability])]
+                                      : current.filter((item) => item !== capability),
+                                  )
+                                }
+                              />
+                            </FormControlLabel>
+                          ))}
+                          {(requestedContainers.selectors.length > 0 ||
+                            requestedContainers.create) && (
+                            <>
+                              <Text
+                                label={`Container access · ${grantedContainers.selectors.length + Number(grantedContainers.create)}/${requestedContainers.selectors.length + Number(requestedContainers.create)}`}
+                                color="text-dim"
+                              />
+                              <Text
+                                label="Container access starts off. Select only what this extension needs."
+                                color="text-dim"
+                                wrap
+                              />
+                            </>
+                          )}
+                          {requestedContainers.selectors.map((selector) => {
+                            const key = selectorKey(selector);
+                            const selected = grantedContainers.selectors.some(
+                              (candidate) => selectorKey(candidate) === key,
+                            );
+                            return (
+                              <FormControlLabel key={key} label={selectorLabel(selector)} gap={2}>
+                                <Switch
+                                  checked={selected}
+                                  onToggle={(event: Change) =>
+                                    setGrantedContainers((current) => ({
+                                      ...current,
+                                      selectors: event.value
+                                        ? current.selectors.some(
+                                            (candidate) => selectorKey(candidate) === key,
+                                          )
+                                          ? current.selectors
+                                          : [...current.selectors, selector]
+                                        : current.selectors.filter(
+                                            (candidate) => selectorKey(candidate) !== key,
+                                          ),
+                                    }))
+                                  }
+                                />
+                              </FormControlLabel>
+                            );
+                          })}
+                          {requestedContainers.create && (
+                            <FormControlLabel label="Create new containers" gap={2}>
+                              <Switch
+                                checked={grantedContainers.create}
                                 onToggle={(event: Change) =>
                                   setGrantedContainers((current) => ({
                                     ...current,
-                                    selectors: event.value
-                                      ? current.selectors.some(
-                                          (candidate) => selectorKey(candidate) === key,
-                                        )
-                                        ? current.selectors
-                                        : [...current.selectors, selector]
-                                      : current.selectors.filter(
-                                          (candidate) => selectorKey(candidate) !== key,
-                                        ),
+                                    create: Boolean(event.value),
                                   }))
                                 }
                               />
                             </FormControlLabel>
-                          );
-                        })}
-                        {requestedContainers.create && (
-                          <FormControlLabel label="Create new containers" gap={2}>
-                            <Switch
-                              checked={grantedContainers.create}
-                              onToggle={(event: Change) =>
-                                setGrantedContainers((current) => ({
-                                  ...current,
-                                  create: Boolean(event.value),
-                                }))
-                              }
+                          )}
+                          {imageGrantCount(requestedImages) > 0 && (
+                            <Text
+                              label={`Image access · ${imageGrantCount(grantedImages)}/${imageGrantCount(requestedImages)}`}
+                              color="text-dim"
                             />
-                          </FormControlLabel>
-                        )}
-                        {imageGrantCount(requestedImages) > 0 && (
-                          <Text
-                            label={`Image access · ${imageGrantCount(grantedImages)}/${imageGrantCount(requestedImages)}`}
-                            color="text-dim"
-                          />
-                        )}
-                        {IMAGE_VERBS.flatMap(({ key: verb, label }) =>
-                          requestedImages[verb].map((selector) => {
-                            const key = imageSelectorKey(selector);
-                            const selected = grantedImages[verb].some(
-                              (candidate) => imageSelectorKey(candidate) === key,
+                          )}
+                          {IMAGE_VERBS.flatMap(({ key: verb, label }) =>
+                            requestedImages[verb].map((selector) => {
+                              const key = imageSelectorKey(selector);
+                              const selected = grantedImages[verb].some(
+                                (candidate) => imageSelectorKey(candidate) === key,
+                              );
+                              return (
+                                <FormControlLabel
+                                  key={`${verb}:${key}`}
+                                  label={`${label} · ${imageSelectorLabel(selector)}`}
+                                  gap={2}
+                                >
+                                  <Switch
+                                    checked={selected}
+                                    onToggle={(event: Change) =>
+                                      setGrantedImages((current) => ({
+                                        ...current,
+                                        [verb]: event.value
+                                          ? current[verb].some(
+                                              (candidate) => imageSelectorKey(candidate) === key,
+                                            )
+                                            ? current[verb]
+                                            : [...current[verb], selector]
+                                          : current[verb].filter(
+                                              (candidate) => imageSelectorKey(candidate) !== key,
+                                            ),
+                                      }))
+                                    }
+                                  />
+                                </FormControlLabel>
+                              );
+                            }),
+                          )}
+                          {requestedImages.prune_all_unused && (
+                            <FormControlLabel label="Prune every unused image" gap={2}>
+                              <Switch
+                                checked={grantedImages.prune_all_unused}
+                                onToggle={(event: Change) =>
+                                  setGrantedImages((current) => ({
+                                    ...current,
+                                    prune_all_unused: Boolean(event.value),
+                                  }))
+                                }
+                              />
+                            </FormControlLabel>
+                          )}
+                          {(requestedNetworks.selectors.length > 0 || requestedNetworks.create) && (
+                            <>
+                              <Text
+                                label={`Network access · ${grantedNetworks.selectors.length + Number(grantedNetworks.create)}/${requestedNetworks.selectors.length + Number(requestedNetworks.create)}`}
+                                color="text-dim"
+                              />
+                              <Text
+                                label="Network access starts off. Select only the networks this extension needs."
+                                color="text-dim"
+                                wrap
+                              />
+                            </>
+                          )}
+                          {requestedNetworks.selectors.map((selector) => {
+                            const key = networkSelectorKey(selector);
+                            const selected = grantedNetworks.selectors.some(
+                              (candidate) => networkSelectorKey(candidate) === key,
                             );
                             return (
                               <FormControlLabel
-                                key={`${verb}:${key}`}
-                                label={`${label} · ${imageSelectorLabel(selector)}`}
+                                key={key}
+                                label={networkSelectorLabel(selector)}
                                 gap={2}
                               >
                                 <Switch
                                   checked={selected}
                                   onToggle={(event: Change) =>
-                                    setGrantedImages((current) => ({
+                                    setGrantedNetworks((current) => ({
                                       ...current,
-                                      [verb]: event.value
-                                        ? current[verb].some(
-                                            (candidate) => imageSelectorKey(candidate) === key,
+                                      selectors: event.value
+                                        ? current.selectors.some(
+                                            (candidate) => networkSelectorKey(candidate) === key,
                                           )
-                                          ? current[verb]
-                                          : [...current[verb], selector]
-                                        : current[verb].filter(
-                                            (candidate) => imageSelectorKey(candidate) !== key,
+                                          ? current.selectors
+                                          : [...current.selectors, selector]
+                                        : current.selectors.filter(
+                                            (candidate) => networkSelectorKey(candidate) !== key,
                                           ),
                                     }))
                                   }
                                 />
                               </FormControlLabel>
                             );
-                          }),
-                        )}
-                        {requestedImages.prune_all_unused && (
-                          <FormControlLabel label="Prune every unused image" gap={2}>
-                            <Switch
-                              checked={grantedImages.prune_all_unused}
-                              onToggle={(event: Change) =>
-                                setGrantedImages((current) => ({
-                                  ...current,
-                                  prune_all_unused: Boolean(event.value),
-                                }))
-                              }
-                            />
-                          </FormControlLabel>
-                        )}
-                        {(requestedNetworks.selectors.length > 0 || requestedNetworks.create) && (
-                          <>
-                            <Text
-                              label={`Network access · ${grantedNetworks.selectors.length + Number(grantedNetworks.create)}/${requestedNetworks.selectors.length + Number(requestedNetworks.create)}`}
-                              color="text-dim"
-                            />
-                            <Text
-                              label="Network access starts off. Select only the networks this extension needs."
-                              color="text-dim"
-                              wrap
-                            />
-                          </>
-                        )}
-                        {requestedNetworks.selectors.map((selector) => {
-                          const key = networkSelectorKey(selector);
-                          const selected = grantedNetworks.selectors.some(
-                            (candidate) => networkSelectorKey(candidate) === key,
-                          );
-                          return (
-                            <FormControlLabel
-                              key={key}
-                              label={networkSelectorLabel(selector)}
-                              gap={2}
-                            >
+                          })}
+                          {requestedNetworks.create && (
+                            <FormControlLabel label="Create new networks" gap={2}>
                               <Switch
-                                checked={selected}
+                                checked={grantedNetworks.create}
                                 onToggle={(event: Change) =>
                                   setGrantedNetworks((current) => ({
                                     ...current,
-                                    selectors: event.value
-                                      ? current.selectors.some(
-                                          (candidate) => networkSelectorKey(candidate) === key,
-                                        )
-                                        ? current.selectors
-                                        : [...current.selectors, selector]
-                                      : current.selectors.filter(
-                                          (candidate) => networkSelectorKey(candidate) !== key,
-                                        ),
+                                    create: Boolean(event.value),
                                   }))
                                 }
                               />
                             </FormControlLabel>
-                          );
-                        })}
-                        {requestedNetworks.create && (
-                          <FormControlLabel label="Create new networks" gap={2}>
-                            <Switch
-                              checked={grantedNetworks.create}
-                              onToggle={(event: Change) =>
-                                setGrantedNetworks((current) => ({
-                                  ...current,
-                                  create: Boolean(event.value),
-                                }))
-                              }
+                          )}
+                          {(requestedVolumes.selectors.length > 0 || requestedVolumes.create) && (
+                            <Text
+                              label={`Volume access · ${grantedVolumes.selectors.length + Number(grantedVolumes.create)}/${requestedVolumes.selectors.length + Number(requestedVolumes.create)}`}
+                              color="text-dim"
                             />
-                          </FormControlLabel>
-                        )}
-                        {(requestedVolumes.selectors.length > 0 || requestedVolumes.create) && (
-                          <Text
-                            label={`Volume access · ${grantedVolumes.selectors.length + Number(grantedVolumes.create)}/${requestedVolumes.selectors.length + Number(requestedVolumes.create)}`}
-                            color="text-dim"
-                          />
-                        )}
-                        {requestedVolumes.selectors.map((selector) => {
-                          const key = volumeSelectorKey(selector);
-                          const selected = grantedVolumes.selectors.some(
-                            (candidate) => volumeSelectorKey(candidate) === key,
-                          );
-                          return (
-                            <FormControlLabel
-                              key={key}
-                              label={volumeSelectorLabel(selector)}
-                              gap={2}
-                            >
-                              <Switch
-                                checked={selected}
-                                onToggle={(event: Change) =>
-                                  setGrantedVolumes((current) => ({
-                                    ...current,
-                                    selectors: event.value
-                                      ? [
-                                          ...current.selectors.filter(
-                                            (candidate) => volumeSelectorKey(candidate) !== key,
-                                          ),
-                                          selector,
-                                        ]
-                                      : current.selectors.filter(
-                                          (candidate) => volumeSelectorKey(candidate) !== key,
-                                        ),
-                                  }))
-                                }
-                              />
-                            </FormControlLabel>
-                          );
-                        })}
-                        {requestedVolumes.create && (
-                          <FormControlLabel label="Create new volumes" gap={2}>
-                            <Switch
-                              checked={grantedVolumes.create}
-                              onToggle={(event: Change) =>
-                                setGrantedVolumes((current) => ({
-                                  ...current,
-                                  create: Boolean(event.value),
-                                }))
-                              }
-                            />
-                          </FormControlLabel>
-                        )}
-                        {filesystemGrantCount(requestedFilesystem) > 0 && (
-                          <>
-                            <Text label="Workspace files" color="text-dim" />
-                            <FilesystemConsent
-                              requested={requestedFilesystem}
-                              granted={grantedFilesystem}
-                              onChange={setGrantedFilesystem}
-                            />
-                          </>
-                        )}
-                        {(requestedWorkspaceEnvironment.read.length > 0 ||
-                          requestedWorkspaceEnvironment.write.length > 0) && (
-                          <Text
-                            label={`Workspace environment values · ${grantedWorkspaceEnvironment.read.length + grantedWorkspaceEnvironment.write.length}/${requestedWorkspaceEnvironment.read.length + requestedWorkspaceEnvironment.write.length}`}
-                            color="text-dim"
-                          />
-                        )}
-                        {(['read', 'write'] as const).flatMap((verb) =>
-                          requestedWorkspaceEnvironment[verb].map((selector) => {
-                            const key = `${verb}:${'all' in selector ? 'all' : `${selector.workspace}:${selector.name}`}`;
-                            const checked = grantedWorkspaceEnvironment[verb].some(
-                              (candidate) => JSON.stringify(candidate) === JSON.stringify(selector),
+                          )}
+                          {requestedVolumes.selectors.map((selector) => {
+                            const key = volumeSelectorKey(selector);
+                            const selected = grantedVolumes.selectors.some(
+                              (candidate) => volumeSelectorKey(candidate) === key,
                             );
                             return (
                               <FormControlLabel
                                 key={key}
-                                label={
-                                  'all' in selector
-                                    ? `${verb === 'read' ? 'Read' : 'Change'} all workspace environment values`
-                                    : `${verb === 'read' ? 'Read' : 'Change'} ${selector.name} in workspace ${selector.workspace}`
-                                }
+                                label={volumeSelectorLabel(selector)}
                                 gap={2}
                               >
                                 <Switch
-                                  checked={checked}
+                                  checked={selected}
                                   onToggle={(event: Change) =>
-                                    setGrantedWorkspaceEnvironment((current) => ({
+                                    setGrantedVolumes((current) => ({
                                       ...current,
-                                      [verb]: event.value
-                                        ? [...current[verb], selector]
-                                        : current[verb].filter(
-                                            (candidate) =>
-                                              JSON.stringify(candidate) !==
-                                              JSON.stringify(selector),
+                                      selectors: event.value
+                                        ? [
+                                            ...current.selectors.filter(
+                                              (candidate) => volumeSelectorKey(candidate) !== key,
+                                            ),
+                                            selector,
+                                          ]
+                                        : current.selectors.filter(
+                                            (candidate) => volumeSelectorKey(candidate) !== key,
                                           ),
                                     }))
                                   }
                                 />
                               </FormControlLabel>
                             );
-                          }),
-                        )}
-                      </Column>
-                    </Expander>
-                  </CardContent>
-                )}
-                {acquisition && acquisition.state !== 'ready' && (
-                  <CardContent gap={1}>
-                    {acquisition.state === 'failed' ? (
-                      <Column gap={1}>
-                        <Text
-                          label={`Image · ${acquisition.reference}`}
-                          color="text-dim"
-                          tooltip={acquisition.reference}
-                          wrap
-                        />
-                        <InlineMessage
-                          label={acquisitionFailure(
-                            acquisition.error ?? 'The image could not be inspected.',
+                          })}
+                          {requestedVolumes.create && (
+                            <FormControlLabel label="Create new volumes" gap={2}>
+                              <Switch
+                                checked={grantedVolumes.create}
+                                onToggle={(event: Change) =>
+                                  setGrantedVolumes((current) => ({
+                                    ...current,
+                                    create: Boolean(event.value),
+                                  }))
+                                }
+                              />
+                            </FormControlLabel>
                           )}
-                          tone="danger"
-                          width={COPY_WIDTH}
-                        />
-                        <Row gap={1} wrap>
-                          <Button
-                            label="Retry inspection"
-                            variant="filled"
-                            tone="accent"
-                            enabled={!busy}
-                            onInvoke={() => inspect()}
+                          {filesystemGrantCount(requestedFilesystem) > 0 && (
+                            <>
+                              <Text label="Workspace files" color="text-dim" />
+                              <FilesystemConsent
+                                requested={requestedFilesystem}
+                                granted={grantedFilesystem}
+                                onChange={setGrantedFilesystem}
+                              />
+                            </>
+                          )}
+                          {(requestedWorkspaceEnvironment.read.length > 0 ||
+                            requestedWorkspaceEnvironment.write.length > 0) && (
+                            <Text
+                              label={`Workspace environment values · ${grantedWorkspaceEnvironment.read.length + grantedWorkspaceEnvironment.write.length}/${requestedWorkspaceEnvironment.read.length + requestedWorkspaceEnvironment.write.length}`}
+                              color="text-dim"
+                            />
+                          )}
+                          {(['read', 'write'] as const).flatMap((verb) =>
+                            requestedWorkspaceEnvironment[verb].map((selector) => {
+                              const key = `${verb}:${'all' in selector ? 'all' : `${selector.workspace}:${selector.name}`}`;
+                              const checked = grantedWorkspaceEnvironment[verb].some(
+                                (candidate) =>
+                                  JSON.stringify(candidate) === JSON.stringify(selector),
+                              );
+                              return (
+                                <FormControlLabel
+                                  key={key}
+                                  label={
+                                    'all' in selector
+                                      ? `${verb === 'read' ? 'Read' : 'Change'} all workspace environment values`
+                                      : `${verb === 'read' ? 'Read' : 'Change'} ${selector.name} in workspace ${selector.workspace}`
+                                  }
+                                  gap={2}
+                                >
+                                  <Switch
+                                    checked={checked}
+                                    onToggle={(event: Change) =>
+                                      setGrantedWorkspaceEnvironment((current) => ({
+                                        ...current,
+                                        [verb]: event.value
+                                          ? [...current[verb], selector]
+                                          : current[verb].filter(
+                                              (candidate) =>
+                                                JSON.stringify(candidate) !==
+                                                JSON.stringify(selector),
+                                            ),
+                                      }))
+                                    }
+                                  />
+                                </FormControlLabel>
+                              );
+                            }),
+                          )}
+                        </Column>
+                      </Expander>
+                    </CardContent>
+                  )}
+                  {acquisition && acquisition.state !== 'ready' && (
+                    <CardContent gap={1}>
+                      {acquisition.state === 'failed' ? (
+                        <Column gap={1}>
+                          <Text
+                            label={`Image · ${acquisition.reference}`}
+                            color="text-dim"
+                            tooltip={acquisition.reference}
+                            wrap
                           />
+                          <InlineMessage
+                            label={acquisitionFailure(
+                              acquisition.error ?? 'The image could not be inspected.',
+                            )}
+                            tone="danger"
+                            width={COPY_WIDTH}
+                          />
+                          <Row gap={1} wrap>
+                            <Button
+                              label="Retry inspection"
+                              variant="filled"
+                              tone="accent"
+                              enabled={!busy}
+                              onInvoke={() => inspect()}
+                            />
+                            <Button
+                              label="Back to catalogue"
+                              variant="ghost"
+                              enabled={!busy}
+                              onInvoke={dismissReview}
+                            />
+                          </Row>
+                        </Column>
+                      ) : acquisition.state === 'cancelled' ? (
+                        <Column gap={1}>
+                          <Text label={acquisitionLabel(acquisition)} color="text-dim" wrap />
                           <Button
                             label="Back to catalogue"
                             variant="ghost"
                             enabled={!busy}
                             onInvoke={dismissReview}
                           />
+                        </Column>
+                      ) : (
+                        <Row gap={1} align="center" wrap>
+                          <Spinner />
+                          <Text label={acquisitionLabel(acquisition)} wrap />
+                          <Button
+                            label={busy === 'cancel' ? 'Cancelling…' : 'Cancel inspection'}
+                            variant="outline"
+                            enabled={busy !== 'cancel'}
+                            onInvoke={cancel}
+                          />
                         </Row>
-                      </Column>
-                    ) : acquisition.state === 'cancelled' ? (
-                      <Column gap={1}>
-                        <Text label={acquisitionLabel(acquisition)} color="text-dim" wrap />
-                        <Button
-                          label="Back to catalogue"
-                          variant="ghost"
-                          enabled={!busy}
-                          onInvoke={dismissReview}
-                        />
-                      </Column>
-                    ) : (
-                      <Row gap={1} align="center" wrap>
-                        <Spinner />
-                        <Text label={acquisitionLabel(acquisition)} wrap />
-                        <Button
-                          label={busy === 'cancel' ? 'Cancelling…' : 'Cancel inspection'}
-                          variant="outline"
-                          enabled={busy !== 'cancel'}
-                          onInvoke={cancel}
-                        />
-                      </Row>
-                    )}
-                  </CardContent>
-                )}
-              </Card>
-            )}
-          </Column>
-          <Column gap={2} width="fill">
-            <Row gap={1} width="fill" align="center" justify="start" wrap>
-              <Heading label="Installed extensions" scale="caption" grow={false} align="start" />
-              {inventoryState !== 'loading' ? (
-                <Badge label={countLabel(installed.length, 'extension')} />
-              ) : null}
-              <IconButton
-                label="Refresh installed extensions"
-                icon="view-refresh-symbolic"
-                variant="ghost"
-                enabled={!busy && inventoryState !== 'loading'}
-                onInvoke={reload}
-              />
-            </Row>
-            {watchError && (
-              <RecoveryState
-                operation="Extension updates"
-                error={watchError}
-                retryLabel="Refresh extensions"
-                onRetry={reload}
-              />
-            )}
-            {inventoryState === 'ready' ? (
-              <Row gap={1} width="fill" wrap align="center" justify="start">
-                <Entry
-                  grow
-                  value={installedQuery}
-                  placeholder="Search installed"
-                  tooltip="Search by extension name, runtime status, or interface provider"
-                  width={{ minimum: { chars: 18 }, maximum: { chars: 36 } }}
-                  onChange={(event: Change) => {
-                    setInstalledQuery(String(event.value ?? '').slice(0, 128));
-                    setInstalledLimit(INSTALLED_PAGE_SIZE);
-                  }}
-                />
-                <Select
-                  value={installedFilter}
-                  tooltip="Filter installed extensions by status"
-                  width={{ minimum: { chars: 16 }, maximum: { chars: 22 } }}
-                  choices={[
-                    { value: 'all', label: 'All installed' },
-                    { value: 'running', label: 'Running' },
-                    { value: 'faulted', label: 'Faulted' },
-                    { value: 'updates', label: 'Updates' },
-                    { value: 'disabled', label: 'Disabled' },
-                  ]}
-                  onChange={(event: Change) => {
-                    const selected = String(event.value ?? '');
-                    if (['all', 'running', 'faulted', 'updates', 'disabled'].includes(selected)) {
-                      setInstalledFilter(selected as InstalledFilter);
-                      setInstalledLimit(INSTALLED_PAGE_SIZE);
-                    }
-                  }}
-                />
-                <Text
-                  label={`${visibleInstalled.length} of ${countLabel(installed.length, 'installed extension')}`}
-                  color="text-dim"
+                      )}
+                    </CardContent>
+                  )}
+                </Card>
+              )}
+            </Column>
+          ) : (
+            <Column gap={2} width="fill">
+              <Row gap={1} width="fill" align="center" justify="start" wrap>
+                <Heading label="Installed extensions" scale="caption" grow={false} align="start" />
+                {inventoryState !== 'loading' ? (
+                  <Badge label={countLabel(installed.length, 'extension')} />
+                ) : null}
+                <IconButton
+                  label="Refresh installed extensions"
+                  icon="view-refresh-symbolic"
+                  variant="ghost"
+                  enabled={!busy && inventoryState !== 'loading'}
+                  onInvoke={reload}
                 />
               </Row>
-            ) : null}
-            <ResourceState
-              state={inventoryState}
-              loadingLabel="Loading installed extensions…"
-              emptyLabel="No extensions installed"
-              emptyDetail="Choose an extension or inspect an OCI image."
-              error={inventoryError || 'Installed extensions could not be loaded.'}
-              onRetry={reload}
-            >
-              {visibleInstalled.length === 0 ? (
-                <Column gap={1} align="start">
-                  <InlineMessage
-                    label="No installed extensions match this search and status filter."
-                    tone="neutral"
-                  />
-                  <Button
-                    label="Clear installed filters"
-                    size="small"
-                    onInvoke={() => {
-                      setInstalledQuery('');
-                      setInstalledFilter('all');
-                      setInstalledLimit(INSTALLED_PAGE_SIZE);
-                    }}
-                  />
+              {watchError && (
+                <RecoveryState
+                  operation="Extension updates"
+                  error={watchError}
+                  retryLabel="Refresh extensions"
+                  onRetry={reload}
+                />
+              )}
+              {inventoryState === 'ready' ? (
+                <Column gap={1} width="fill">
+                  <Text label="Find installed extensions" color="text-dim" />
+                  <Row gap={1} width="fill" wrap align="center" justify="start">
+                    <Entry
+                      grow
+                      value={installedQuery}
+                      placeholder="Search installed"
+                      tooltip="Search by extension name, runtime status, or interface provider"
+                      width={{ minimum: { chars: 18 }, maximum: { chars: 36 } }}
+                      onChange={(event: Change) => {
+                        setInstalledQuery(String(event.value ?? '').slice(0, 128));
+                        setInstalledLimit(INSTALLED_PAGE_SIZE);
+                      }}
+                    />
+                    <Select
+                      value={installedFilter}
+                      tooltip="Filter installed extensions by status"
+                      width={{ minimum: { chars: 16 }, maximum: { chars: 22 } }}
+                      choices={[
+                        { value: 'all', label: 'All installed' },
+                        { value: 'running', label: 'Running' },
+                        { value: 'faulted', label: 'Faulted' },
+                        { value: 'updates', label: 'Updates' },
+                        { value: 'disabled', label: 'Disabled' },
+                      ]}
+                      onChange={(event: Change) => {
+                        const selected = String(event.value ?? '');
+                        if (
+                          ['all', 'running', 'faulted', 'updates', 'disabled'].includes(selected)
+                        ) {
+                          setInstalledFilter(selected as InstalledFilter);
+                          setInstalledLimit(INSTALLED_PAGE_SIZE);
+                        }
+                      }}
+                    />
+                    <Text
+                      label={`${visibleInstalled.length} of ${countLabel(installed.length, 'installed extension')}`}
+                      color="text-dim"
+                    />
+                  </Row>
                 </Column>
-              ) : (
-                <Row gap={1} width="fill" wrap>
-                  {renderedInstalled.map((extension) => {
-                    const update = catalogue?.entries.find(
-                      (entry) =>
-                        entry.id === extension.name &&
-                        newerVersion(entry.version, extension.version),
-                    );
-                    const updateCompatibility = update
-                      ? catalogueCompatibility(update, workspaceArchitecture)
-                      : null;
-                    const provider = extension.pane_providers?.[0];
-                    return (
-                      <Card
-                        key={`${extension.name}:${extension.image_digest}`}
-                        grow={false}
-                        width="fill"
-                        variant="outline"
-                      >
-                        <CardHeader
-                          label={extension.name}
-                          detail={
-                            extension.version
-                              ? `Version ${extension.version}`
-                              : 'Version unavailable'
-                          }
-                          tooltip={`Installed image ${extension.image_digest}`}
-                          align="start"
-                          width="fill"
-                        />
-                        <CardContent gap={1}>
-                          <Row gap={1} wrap>
-                            <Badge
-                              label={capitalize(extensionState(extension))}
-                              tone={
-                                extension.status.startsWith('fault:')
-                                  ? 'danger'
-                                  : extension.enabled
-                                    ? 'positive'
-                                    : 'neutral'
-                              }
+              ) : null}
+              <ResourceState
+                state={inventoryState}
+                loadingLabel="Loading installed extensions…"
+                emptyLabel="No extensions installed"
+                emptyDetail="Choose an extension or inspect an OCI image."
+                error={inventoryError || 'Installed extensions could not be loaded.'}
+                onRetry={reload}
+              >
+                {visibleInstalled.length === 0 ? (
+                  <Column gap={1} align="start">
+                    <InlineMessage
+                      label="No installed extensions match this search and status filter."
+                      tone="neutral"
+                    />
+                    <Button
+                      label="Clear installed filters"
+                      size="small"
+                      onInvoke={() => {
+                        setInstalledQuery('');
+                        setInstalledFilter('all');
+                        setInstalledLimit(INSTALLED_PAGE_SIZE);
+                      }}
+                    />
+                  </Column>
+                ) : (
+                  <Row gap={1} width="fill" wrap>
+                    {renderedInstalled.map((extension) => {
+                      const update = catalogue?.entries.find(
+                        (entry) =>
+                          entry.id === extension.name &&
+                          newerVersion(entry.version, extension.version),
+                      );
+                      const updateCompatibility = update
+                        ? catalogueCompatibility(update, workspaceArchitecture)
+                        : null;
+                      const provider = extension.pane_providers?.[0];
+                      return (
+                        <Card
+                          key={`${extension.name}:${extension.image_digest}`}
+                          grow
+                          width={{ chars: 30 }}
+                          variant="outline"
+                        >
+                          <CardContent gap={1}>
+                            <Row gap={1} width="fill" align="center" justify="start">
+                              <Column gap={0} grow>
+                                <Text label={extension.name} tooltip={extension.image_digest} />
+                                <Text
+                                  label={
+                                    extension.version
+                                      ? `Version ${extension.version}`
+                                      : 'Version unavailable'
+                                  }
+                                  color="text-dim"
+                                />
+                              </Column>
+                              <Badge
+                                label={capitalize(extensionState(extension))}
+                                tone={
+                                  extension.status.startsWith('fault:')
+                                    ? 'danger'
+                                    : extension.enabled
+                                      ? 'positive'
+                                      : 'neutral'
+                                }
+                              />
+                              {update && (
+                                <Button
+                                  key="review-update"
+                                  label="Review update"
+                                  variant="filled"
+                                  tone="accent"
+                                  enabled={!busy && updateCompatibility?.compatible !== false}
+                                  onInvoke={() => inspect(update.reference)}
+                                />
+                              )}
+                              {!update &&
+                              extension.name !== 'top' &&
+                              extension.status.startsWith('fault:') ? (
+                                <Button
+                                  key="lifecycle"
+                                  label="Retry"
+                                  variant="outline"
+                                  tone="accent"
+                                  enabled={!busy}
+                                  onInvoke={() => lifecycle(extension, 'retry')}
+                                />
+                              ) : !update && extension.name !== 'top' && !extension.enabled ? (
+                                <Button
+                                  key="lifecycle"
+                                  label="Enable"
+                                  variant="outline"
+                                  tone="accent"
+                                  enabled={!busy}
+                                  onInvoke={() => lifecycle(extension, 'enable')}
+                                />
+                              ) : !update && provider ? (
+                                providerAction(extension, provider)
+                              ) : null}
+                            </Row>
+                            <ExtensionFault extension={extension} />
+                            {updateCompatibility ? (
+                              <Text
+                                label={
+                                  update
+                                    ? updateCompatibility.compatible === true
+                                      ? `Update available · Version ${update.version}`
+                                      : `Update to Version ${update.version} · ${updateCompatibility.label}`
+                                    : `Update · ${updateCompatibility.label}`
+                                }
+                                color={
+                                  updateCompatibility.compatible === false ? 'warning' : 'text-dim'
+                                }
+                                wrap
+                              />
+                            ) : null}
+                            <LifecycleFeedback
+                              extensionName={extension.name}
+                              pending={pendingLifecycle}
+                              failure={lifecycleFailure}
                             />
                             {extension.name === 'top' ? (
-                              <Badge label="Built in · workspace manager" tone="accent" />
-                            ) : null}
-                          </Row>
-                          <ExtensionFault extension={extension} />
-                          {updateCompatibility ? (
-                            <Text
-                              label={
-                                update
-                                  ? updateCompatibility.compatible === true
-                                    ? `Update available · Version ${update.version}`
-                                    : `Update to Version ${update.version} · ${updateCompatibility.label}`
-                                  : `Update · ${updateCompatibility.label}`
-                              }
-                              color={
-                                updateCompatibility.compatible === false ? 'warning' : 'text-dim'
-                              }
-                              wrap
-                            />
-                          ) : null}
-                          <LifecycleFeedback
-                            extensionName={extension.name}
-                            pending={pendingLifecycle}
-                            failure={lifecycleFailure}
-                          />
-                          <Row gap={1} wrap>
-                            {provider ? providerAction(extension, provider) : null}
-                            {update && (
-                              <Button
-                                key="review-update"
-                                label="Review update"
-                                variant="filled"
-                                tone="accent"
-                                enabled={!busy && updateCompatibility?.compatible !== false}
-                                onInvoke={() => inspect(update.reference)}
-                              />
-                            )}
-                            {extension.name === 'top' ? null : extension.status.startsWith(
-                                'fault:',
-                              ) ? (
-                              <Button
-                                key="lifecycle"
-                                label="Retry"
-                                variant="outline"
-                                tone="accent"
-                                enabled={!busy}
-                                onInvoke={() => lifecycle(extension, 'retry')}
-                              />
-                            ) : !extension.enabled ? (
-                              <Button
-                                key="lifecycle"
-                                label="Enable"
-                                variant="outline"
-                                tone="accent"
-                                enabled={!busy}
-                                onInvoke={() => lifecycle(extension, 'enable')}
-                              />
-                            ) : null}
-                          </Row>
-                          {extension.name === 'top' ? (
-                            <InstalledPermissionSummary extension={extension} />
-                          ) : (
-                            <Expander label="Permissions & management" expanded={false}>
-                              <Column gap={1}>
-                                <InstalledPermissionSummary extension={extension} />
-                                <Separator orientation="horizontal" />
-                                <Row gap={1} wrap>
-                                  {extension.enabled && !extension.status.startsWith('fault:') ? (
-                                    <Button
-                                      label="Disable"
-                                      variant="ghost"
+                              <InstalledPermissionSummary extension={extension} />
+                            ) : (
+                              <Expander label="Permissions & management" expanded={false}>
+                                <Column gap={1}>
+                                  <InstalledPermissionSummary extension={extension} />
+                                  <Separator orientation="horizontal" />
+                                  <Row gap={1} wrap>
+                                    {extension.enabled && !extension.status.startsWith('fault:') ? (
+                                      <Button
+                                        label="Disable"
+                                        variant="ghost"
+                                        enabled={!busy}
+                                        onInvoke={() => lifecycle(extension, 'disable')}
+                                      />
+                                    ) : null}
+                                    <ConfirmAction
+                                      label="Remove"
+                                      confirmLabel={`Remove ${extension.name}`}
+                                      question={`Remove ${extension.name} and permanently delete its private workspace data?`}
+                                      authorityKey={extension.image_digest}
                                       enabled={!busy}
-                                      onInvoke={() => lifecycle(extension, 'disable')}
+                                      onConfirm={() => lifecycle(extension, 'remove')}
                                     />
-                                  ) : null}
-                                  <ConfirmAction
-                                    label="Remove"
-                                    confirmLabel={`Remove ${extension.name}`}
-                                    question={`Remove ${extension.name} and permanently delete its private workspace data?`}
-                                    authorityKey={extension.image_digest}
-                                    enabled={!busy}
-                                    onConfirm={() => lifecycle(extension, 'remove')}
-                                  />
-                                </Row>
-                              </Column>
-                            </Expander>
-                          )}
-                        </CardContent>
-                      </Card>
-                    );
-                  })}
-                </Row>
-              )}
-              {visibleInstalled.length > renderedInstalled.length ? (
-                <Row gap={1} width="fill" wrap align="center" justify="start">
-                  <Text
-                    label={`Showing ${renderedInstalled.length} of ${visibleInstalled.length} matching installed extensions`}
-                    color="text-dim"
-                  />
-                  <Button
-                    label={`Show ${Math.min(INSTALLED_PAGE_SIZE, visibleInstalled.length - renderedInstalled.length)} more installed`}
-                    size="small"
-                    onInvoke={() => setInstalledLimit((current) => current + INSTALLED_PAGE_SIZE)}
-                  />
-                </Row>
-              ) : null}
-            </ResourceState>
-          </Column>
+                                  </Row>
+                                </Column>
+                              </Expander>
+                            )}
+                          </CardContent>
+                        </Card>
+                      );
+                    })}
+                  </Row>
+                )}
+                {visibleInstalled.length > renderedInstalled.length ? (
+                  <Row gap={1} width="fill" wrap align="center" justify="start">
+                    <Text
+                      label={`Showing ${renderedInstalled.length} of ${visibleInstalled.length} matching installed extensions`}
+                      color="text-dim"
+                    />
+                    <Button
+                      label={`Show ${Math.min(INSTALLED_PAGE_SIZE, visibleInstalled.length - renderedInstalled.length)} more installed`}
+                      size="small"
+                      onInvoke={() => setInstalledLimit((current) => current + INSTALLED_PAGE_SIZE)}
+                    />
+                  </Row>
+                ) : null}
+              </ResourceState>
+            </Column>
+          )}
         </Column>
       </Container>
     </Scroll>
