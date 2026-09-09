@@ -27,12 +27,14 @@ impl ObjectImpl for State {
     fn properties() -> &'static [glib::ParamSpec] {
         static PROPERTIES: OnceLock<Vec<glib::ParamSpec>> = OnceLock::new();
         PROPERTIES.get_or_init(|| {
-            vec![glib::ParamSpecInt64::builder("selected")
-                .minimum(NONE)
-                .maximum(i64::from(u32::MAX))
-                .default_value(NONE)
-                .read_only()
-                .build()]
+            vec![
+                glib::ParamSpecInt64::builder("selected")
+                    .minimum(NONE)
+                    .maximum(i64::from(u32::MAX))
+                    .default_value(NONE)
+                    .read_only()
+                    .build(),
+            ]
         })
     }
 
@@ -72,11 +74,17 @@ impl ObjectImpl for State {
         let weak_popover = popover.downgrade();
         obj.connect_toggled(move |button| {
             let Some(popover) = weak_popover.upgrade() else { return };
-            if button.is_active() && button.root().is_some() { popover.popup() } else { popover.popdown() }
+            if button.is_active() && button.root().is_some() {
+                popover.popup()
+            } else {
+                popover.popdown()
+            }
         });
         let weak_obj = obj.downgrade();
         popover.connect_closed(move |_| {
-            if let Some(obj) = weak_obj.upgrade() { obj.set_active(false) }
+            if let Some(obj) = weak_obj.upgrade() {
+                obj.set_active(false)
+            }
         });
     }
 }
@@ -98,7 +106,9 @@ impl Choice {
 
     fn set_selected(&self, selected: Option<u32>) {
         let value = selected.map_or(NONE, i64::from);
-        if self.imp().selected.replace(value) != value { self.notify("selected") }
+        if self.imp().selected.replace(value) != value {
+            self.notify("selected")
+        }
         let label = selected
             .and_then(|index| self.option(index))
             .and_then(|button| button.label())
@@ -107,17 +117,27 @@ impl Choice {
     }
 
     fn option(&self, index: u32) -> Option<gtk::Button> {
-        self.imp().options.get()?.first_child()
+        self.imp()
+            .options
+            .get()?
+            .first_child()
             .and_then(|first| (0..index).try_fold(first, |child, _| child.next_sibling()))?
-            .downcast::<gtk::Button>().ok()
+            .downcast::<gtk::Button>()
+            .ok()
     }
 }
 
-pub(crate) fn widget() -> Choice { glib::Object::new() }
+pub(crate) fn widget() -> Choice {
+    glib::Object::new()
+}
 
-fn choice(widget: &gtk::Widget) -> Option<&Choice> { widget.downcast_ref::<Choice>() }
+fn choice(widget: &gtk::Widget) -> Option<&Choice> {
+    widget.downcast_ref::<Choice>()
+}
 
-pub(crate) fn selected(widget: &gtk::Widget) -> Option<u32> { choice(widget)?.selected() }
+pub(crate) fn selected(widget: &gtk::Widget) -> Option<u32> {
+    choice(widget)?.selected()
+}
 
 pub(crate) fn connect_selected(widget: &gtk::Widget, callback: impl Fn() + 'static) -> bool {
     let Some(choice) = choice(widget) else { return false };
@@ -126,13 +146,17 @@ pub(crate) fn connect_selected(widget: &gtk::Widget, callback: impl Fn() + 'stat
 }
 
 pub(crate) fn set_selected(widget: &gtk::Widget, selected: Option<u32>) {
-    if let Some(choice) = choice(widget) { choice.set_selected(selected) }
+    if let Some(choice) = choice(widget) {
+        choice.set_selected(selected)
+    }
 }
 
 pub(crate) fn set_options(widget: &gtk::Widget, labels: &[&str]) -> bool {
     let Some(choice) = choice(widget) else { return false };
     let options = choice.imp().options.get().expect("constructed choice");
-    while let Some(child) = options.last_child() { options.remove(&child) }
+    while let Some(child) = options.last_child() {
+        options.remove(&child)
+    }
     for (index, label) in labels.iter().enumerate() {
         let button = gtk::Button::with_label(label);
         button.add_css_class("flat");
