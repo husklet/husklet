@@ -111,7 +111,7 @@ groups
   .get('Files')
   .push(
     "- `host.files.changePages(...)` — exposes cursor-safe bounded filesystem change polling as a consumer-driven async generator. Slow consumers issue no next request; abort interrupts idle polling; truncation is yielded explicitly; host and transport failures reject the caller's pending `next()`.",
-    '- `host.files.watchChanges(...)` — polls cursor-safe bounded pages and delivers change, truncation, and cursor-only advances so an indexer can durably resume even when consent filtering hides every path in a revision; requires `filesystem:read`.',
+    '- `host.files.watchChanges(...)` — polls cursor-safe bounded pages and delivers change, truncation, and cursor-only advances so an indexer can durably resume even when consent filtering hides every path in a revision; its stop handle exposes `done` for immediate listener/transport failure supervision; requires `filesystem:read`.',
     '- `host.files.walk(...)` — traverses arbitrarily broad directory trees through identity-pinned bounded pages with consumer backpressure and memory proportional to active depth; rejects duplicate or backward host cursors; requires `filesystem:read`.',
     '- `host.files.readRanges(...)` — reads up to 64 separately confined stable ranges in one 64 KiB aggregate request; requires `filesystem:read`.',
     "- `host.files.write(...)`, `writeObserved(...)`, and `createObserved(...)` — consume byte iterables only through the host's 64 KiB mutation bound before framing; observed variants retain inode identity/race protection.",

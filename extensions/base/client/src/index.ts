@@ -1883,10 +1883,14 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
             signal?.removeEventListener('abort', abort);
           }
         })();
-        return async () => {
+        // Mark the background branch handled even when callers supervise it through `done` later.
+        void running.catch(() => {});
+        const stop = async () => {
           stopped.abort();
           await running;
         };
+        Object.defineProperty(stop, 'done', { value: running, enumerable: true });
+        return stop;
       },
       list: async (path) => expect(await session.call('filesystem_list', { path }), 'entries'),
       listPage: async (path, { after = null, observed = null, limit = 256 } = {}) => {

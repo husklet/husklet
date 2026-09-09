@@ -177,10 +177,11 @@ try {
       },
       { after: checkpoint.revision, signal: controller.signal },
     );
-    await new Promise<void>((resolve) => {
+    const interrupted = new Promise<void>((resolve) => {
       if (controller.signal.aborted) resolve();
       else controller.signal.addEventListener('abort', () => resolve(), { once: true });
     });
+    await Promise.race([stop.done, interrupted]);
     await stop();
   }
 } finally {

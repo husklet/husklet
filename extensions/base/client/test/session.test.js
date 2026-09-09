@@ -419,6 +419,72 @@ test('real Unix filesystem watcher publishes filtered cursor-only progress for r
   }
 });
 
+test('real Unix filesystem watcher exposes listener failure without poisoning the session', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-watch-supervision-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const connections = new Set();
+  const calls = [];
+  const server = net.createServer((socket) => {
+    connections.add(socket);
+    socket.on('close', () => connections.delete(socket));
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.kind !== KIND.request || frame.channel !== 2) continue;
+        calls.push(frame.payload.call);
+        const payload =
+          frame.payload.call === 'filesystem_changes'
+            ? {
+                reply: 'file_changes',
+                with: {
+                  changes: [{ revision: 3, kind: 'modify', path: 'src/a.ts', entry: null }],
+                  next: 3,
+                  current: 3,
+                  more: false,
+                  truncated: false,
+                },
+              }
+            : {
+                reply: 'workspace',
+                with: { name: 'index', image: 'toolbox', architecture: 'amd64' },
+              };
+        socket.write(encode({ channel: 2, kind: KIND.response, payload }));
+      }
+    });
+    socket.write(
+      encode({
+        channel: CONTROL,
+        kind: KIND.open,
+        payload: {
+          protocol: 1,
+          peer: 'fixture',
+          granted: ['filesystem:read', 'workspaces:read'],
+        },
+      }),
+    );
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    const failure = new Error('checkpoint write failed');
+    const stop = await workspace(session).files.watchChanges(
+      async () => {
+        throw failure;
+      },
+      { after: 2, pollMs: 10_000 },
+    );
+    await assert.rejects(stop.done, (error) => error === failure);
+    assert.deepEqual(calls, ['filesystem_changes']);
+    assert.equal((await workspace(session).info()).name, 'index');
+    await assert.rejects(stop(), (error) => error === failure);
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('real Unix text wait reconciles an unread revision without requiring a later event', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-text-reconcile-'));
   const socketPath = path.join(directory, 'host.sock');

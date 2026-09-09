@@ -1562,6 +1562,7 @@ test('callback filesystem watcher reports listener failure through its stop hand
     { pollMs: 10_000 },
   );
   await delivered;
+  await assert.rejects(stop.done, (error) => error === failure);
   await assert.rejects(stop(), (error) => error === failure);
 });
 

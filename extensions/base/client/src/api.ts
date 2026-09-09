@@ -1462,11 +1462,11 @@ export interface WorkspaceApi {
       pollMs?: number;
       signal?: AbortSignal;
     }): AsyncGenerator<FileChangePage, void, void>;
-    /** Cursor-safe polling watcher. Cursor-only and truncated pages are delivered for durable resume. */
+    /** Cursor-safe polling watcher. `done` rejects immediately on listener or transport failure. */
     watchChanges(
       listener: (page: FileChangePage) => void | Promise<void>,
       options?: { after?: number; pageSize?: number; pollMs?: number; signal?: AbortSignal },
-    ): Promise<() => Promise<void>>;
+    ): Promise<WatchHandle>;
     list(path: string): Promise<FileEntry[]>;
     /** Reads one bounded ordered directory window; pass `next` as the following `after`. */
     listPage(
@@ -1580,6 +1580,8 @@ export interface WorkspaceApi {
   ): Promise<() => Promise<void>>;
   watchFilesystem(listener: (inventory: FileInventory) => void): Promise<() => Promise<void>>;
 }
+
+export type WatchHandle = (() => Promise<void>) & { readonly done: Promise<void> };
 
 export declare function requestCapability(call: string): string;
 
