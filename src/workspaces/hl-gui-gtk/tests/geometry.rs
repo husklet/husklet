@@ -120,6 +120,35 @@ fn geometry_is_what_the_description_asked_for() {
     a_page_container_shrinks_and_caps_its_content_width();
     a_short_page_never_underallocates_its_content_column();
     a_responsive_container_presents_only_its_allocated_branch();
+    a_choice_shrinks_independently_of_its_options();
+}
+
+fn a_choice_shrinks_independently_of_its_options() {
+    let mut stage = Stage::new();
+    let select = stage.producer.create(Tag::Select);
+    stage.producer.set(
+        select,
+        Prop::Choices,
+        PropValue::Choices(vec![hl_gui::Choice::new(
+            "long",
+            "An intentionally very long option that must not dictate the form width",
+        )]),
+    );
+    stage.producer.set(select, Prop::Value, PropValue::text("long"));
+    stage.producer.append(NodeId::ROOT, select);
+    stage.draw();
+
+    let widget = stage.tagged(Tag::Select);
+    assert!(widget.is::<gtk::ToggleButton>(), "Select owns its shrinkable summary");
+    let (minimum, natural, _, _) = widget.measure(gtk::Orientation::Horizontal, -1);
+    assert!(minimum < 120, "the closed choice minimum was {minimum}px");
+    assert!(natural > minimum, "the readable label remains its natural width");
+    stage.allocate(96, 48);
+    assert!(
+        widget.width() <= 96,
+        "the choice exceeds its compact form allocation: {}px",
+        widget.width()
+    );
 }
 
 fn a_page_container_shrinks_and_caps_its_content_width() {

@@ -4,7 +4,7 @@ use gtk::prelude::*;
 use hl_gui::{Length, Node, Orientation, Prop, PropValue, Tag};
 
 use crate::build;
-use crate::component::field;
+use crate::component::{choice, field};
 use crate::text;
 
 /// Applies one property to an already constructed widget.
@@ -399,16 +399,17 @@ fn fraction(widget: &gtk::Widget, value: &PropValue) {
 fn choices(widget: &gtk::Widget, node: &Node, value: &PropValue, reports: &crate::event::Reports) {
     let PropValue::Choices(choices) = value else {
         reports.set_choices(node.id, Vec::new());
-        if let Some(drop) = widget.downcast_ref::<gtk::DropDown>() {
-            drop.set_model(Some(&gtk::StringList::new(&[])));
-        }
+        choice::set_options(widget, &[]);
         return;
     };
     reports.set_choices(node.id, choices.iter().map(|choice| choice.value.clone()).collect());
     let labels: Vec<&str> = choices.iter().map(|choice| choice.label.as_str()).collect();
+    if choice::set_options(widget, &labels) {
+        select_value(widget, node);
+        return;
+    }
     if let Some(drop) = widget.downcast_ref::<gtk::DropDown>() {
         drop.set_model(Some(&gtk::StringList::new(&labels)));
-        select_value(widget, node);
         return;
     }
     radios(widget, &labels);
@@ -419,9 +420,9 @@ fn choices(widget: &gtk::Widget, node: &Node, value: &PropValue, reports: &crate
 /// GTK's model displays labels while Husklet's retained value is deliberately
 /// independent of those labels, so changing copy cannot change application state.
 fn select_value(widget: &gtk::Widget, node: &Node) {
-    let Some(drop) = widget.downcast_ref::<gtk::DropDown>() else {
+    if !widget.is::<choice::Choice>() {
         return;
-    };
+    }
     let wanted = node.prop(Prop::Value).and_then(PropValue::as_text);
     let Some(PropValue::Choices(choices)) = node.prop(Prop::Choices) else {
         return;
@@ -430,7 +431,7 @@ fn select_value(widget: &gtk::Widget, node: &Node) {
         .and_then(|wanted| choices.iter().position(|choice| choice.value == wanted))
         .and_then(|index| u32::try_from(index).ok())
         .unwrap_or(gtk::INVALID_LIST_POSITION);
-    drop.set_selected(selected);
+    choice::set_selected(widget, (selected != gtk::INVALID_LIST_POSITION).then_some(selected));
 }
 
 fn radios(widget: &gtk::Widget, labels: &[&str]) {

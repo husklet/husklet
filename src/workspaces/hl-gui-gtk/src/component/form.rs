@@ -15,7 +15,7 @@ pub(crate) fn widget(tag: Tag) -> gtk::Widget {
         Tag::Checkbox | Tag::Radio => gtk::CheckButton::new().upcast(),
         Tag::RadioGroup => axis::column(4).upcast(),
         // Select is the last form tag routed here.
-        _ => gtk::DropDown::from_strings(&[]).upcast(),
+        _ => super::choice::widget().upcast(),
     }
 }
 

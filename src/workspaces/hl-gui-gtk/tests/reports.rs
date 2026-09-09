@@ -246,6 +246,10 @@ fn worked(widget: &gtk::Widget, trigger: Trigger) {
         return;
     }
     if trigger == Trigger::Select {
+        if let Some(menu) = widget.downcast_ref::<gtk::ToggleButton>() {
+            choice_option(menu, 1).emit_clicked();
+            return;
+        }
         if let Some(drop) = widget.downcast_ref::<gtk::DropDown>() {
             drop.set_selected(1);
             return;
@@ -282,6 +286,12 @@ fn worked(widget: &gtk::Widget, trigger: Trigger) {
         widget.emit_by_name::<()>("activate", &[]);
         return;
     }
+    if trigger == Trigger::Change {
+        if let Some(choice) = widget.downcast_ref::<gtk::ToggleButton>() {
+            choice_option(choice, 1).emit_clicked();
+            return;
+        }
+    }
     if let Some(button) = widget.downcast_ref::<gtk::Button>() {
         button.emit_by_name::<()>("clicked", &[]);
         return;
@@ -299,6 +309,23 @@ fn worked(widget: &gtk::Widget, trigger: Trigger) {
         return;
     }
     valued(&widget);
+}
+
+fn choice_option(choice: &gtk::ToggleButton, index: u32) -> gtk::Button {
+    let overlay = choice.child().and_downcast::<gtk::Overlay>().unwrap();
+    let mut child = overlay.first_child();
+    while let Some(current) = child {
+        child = current.next_sibling();
+        if let Ok(popover) = current.downcast::<gtk::Popover>() {
+            let options = popover.child().and_downcast::<gtk::Box>().unwrap();
+            return (0..index)
+                .try_fold(options.first_child().unwrap(), |option, _| option.next_sibling())
+                .unwrap()
+                .downcast::<gtk::Button>()
+                .unwrap();
+        }
+    }
+    panic!("choice has no popover")
 }
 
 fn editable(widget: &gtk::Widget) -> Option<gtk::Widget> {
@@ -377,6 +404,10 @@ fn valued(widget: &gtk::Widget) {
     }
     if let Some(picker) = widget.downcast_ref::<gtk::ColorDialogButton>() {
         picker.set_rgba(&gtk::gdk::RGBA::new(0.2, 0.4, 0.6, 1.0));
+        return;
+    }
+    if let Some(menu) = widget.downcast_ref::<gtk::ToggleButton>() {
+        choice_option(menu, 1).emit_clicked();
         return;
     }
     if let Some(view) = widget

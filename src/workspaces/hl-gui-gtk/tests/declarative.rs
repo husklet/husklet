@@ -174,10 +174,7 @@ fn a_described_interface_reaches_the_toolkit_and_only_its_changes_do() {
 
 fn an_icon_button_keeps_its_icon_when_accessibly_labelled() {
     let mut session = Session::new();
-    session.render(
-        &Element::icon_button("edit-clear-symbolic", EventId::new("reset"))
-            .label("Reset foreground"),
-    );
+    session.render(&Element::icon_button("edit-clear-symbolic", EventId::new("reset")).label("Reset foreground"));
 
     let button = session
         .tagged(Tag::IconButton)
@@ -202,25 +199,25 @@ fn a_select_follows_its_stable_value() {
     };
     let mut session = Session::new();
     session.render(&select("live"));
-    let drop = session
+    let menu = session
         .tagged(Tag::Select)
         .unwrap()
-        .downcast::<gtk::DropDown>()
+        .downcast::<gtk::ToggleButton>()
         .unwrap();
     assert_eq!(
-        drop.selected(),
+        menu.property::<i64>("selected"),
         1,
         "the stored value, not its label, selects the option"
     );
 
     session.render(&select("persisted"));
     assert_eq!(
-        drop.selected(),
+        menu.property::<i64>("selected"),
         0,
         "a retained value update controls the existing widget"
     );
     let _ = session.surface.reports().drain();
-    drop.set_selected(1);
+    choice_option(&menu, 1).emit_clicked();
     assert!(
         matches!(
             session.surface.reports().drain().as_slice(),
@@ -230,11 +227,38 @@ fn a_select_follows_its_stable_value() {
     );
 }
 
+fn choice_option(choice: &gtk::ToggleButton, index: u32) -> gtk::Button {
+    let overlay = choice.child().and_downcast::<gtk::Overlay>().unwrap();
+    let mut child = overlay.first_child();
+    while let Some(current) = child {
+        child = current.next_sibling();
+        if let Ok(popover) = current.downcast::<gtk::Popover>() {
+            let options = popover.child().and_downcast::<gtk::Box>().unwrap();
+            return (0..index)
+                .try_fold(options.first_child().unwrap(), |option, _| option.next_sibling())
+                .unwrap()
+                .downcast::<gtk::Button>()
+                .unwrap();
+        }
+    }
+    panic!("choice has no popover")
+}
+
 fn rebinding_a_table_retires_its_previous_source() {
-    let source_tags: Vec<_> = Tag::ALL.iter().copied().filter(|tag| tag.accepts(Prop::Source)).collect();
+    let source_tags: Vec<_> = Tag::ALL
+        .iter()
+        .copied()
+        .filter(|tag| tag.accepts(Prop::Source))
+        .collect();
     assert_eq!(
         source_tags,
-        [Tag::DataTable, Tag::KeyValueTable, Tag::TreeTable, Tag::EventStream, Tag::FileBrowser],
+        [
+            Tag::DataTable,
+            Tag::KeyValueTable,
+            Tag::TreeTable,
+            Tag::EventStream,
+            Tag::FileBrowser
+        ],
         "every source-backed component is audited"
     );
     for (offset, tag) in source_tags.into_iter().enumerate() {
@@ -254,7 +278,10 @@ fn rebinding_a_table_retires_its_previous_source() {
             session.surface.resize(first, hl_gui::Version::new(1), 100_000),
             Err(Failure::Unbound(source)) if source == first
         ));
-        session.surface.resize(second, hl_gui::Version::new(2), 100_000).unwrap();
+        session
+            .surface
+            .resize(second, hl_gui::Version::new(2), 100_000)
+            .unwrap();
         let widget = session.tagged(tag).expect("rebound source component");
         let view = widget
             .downcast::<gtk::ScrolledWindow>()
@@ -268,7 +295,11 @@ fn rebinding_a_table_retires_its_previous_source() {
             .and_then(|selection| selection.model())
             .and_downcast::<Rows>()
             .expect("windowed rows");
-        assert_eq!(rows.source(), second, "{tag:?} model follows the new sort/filter source");
+        assert_eq!(
+            rows.source(),
+            second,
+            "{tag:?} model follows the new sort/filter source"
+        );
         session.render(&Element::column().key("empty"));
         assert!(
             matches!(

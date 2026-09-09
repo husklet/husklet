@@ -435,6 +435,24 @@ fn submit(widget: &gtk::Widget, node: NodeId, slot: &Slot, reports: &Reports) {
 }
 
 fn select(widget: &gtk::Widget, node: NodeId, slot: &Slot, reports: &Reports) {
+    if widget.is::<crate::component::choice::Choice>() {
+        let reports = reports.clone();
+        let slot = slot.clone();
+        let widget = widget.clone();
+        let target = widget.clone();
+        crate::component::choice::connect_selected(target.as_ref(), move || {
+            identified(&reports, &slot, |id| Event::Select {
+                node,
+                id,
+                rows: crate::component::choice::selected(&widget)
+                    .map(u64::from)
+                    .into_iter()
+                    .collect(),
+                collection: None,
+            });
+        });
+        return;
+    }
     if let Some(drop) = widget.downcast_ref::<gtk::DropDown>() {
         let reports = reports.clone();
         let slot = slot.clone();
@@ -736,6 +754,27 @@ fn counter(widget: &gtk::Widget, node: NodeId, slot: &Slot, reports: &Reports) -
 
 /// A drop-down reports which option was picked, by its position among them.
 fn chosen(widget: &gtk::Widget, node: NodeId, slot: &Slot, reports: &Reports) -> bool {
+    if widget.is::<crate::component::choice::Choice>() {
+        let reports = reports.clone();
+        let slot = slot.clone();
+        let widget = widget.clone();
+        crate::component::choice::connect_selected(&widget.clone(), move || {
+            let Some(id) = slot.id() else {
+                return;
+            };
+            let Some(selected) = crate::component::choice::selected(&widget) else {
+                return;
+            };
+            reports.push(Event::Change {
+                node,
+                id,
+                value: reports
+                    .choice(node, selected)
+                    .map_or(PropValue::Nothing, PropValue::text),
+            });
+        });
+        return true;
+    }
     let Some(drop) = widget.downcast_ref::<gtk::DropDown>() else {
         return false;
     };
@@ -745,12 +784,11 @@ fn chosen(widget: &gtk::Widget, node: NodeId, slot: &Slot, reports: &Reports) ->
         let Some(id) = slot.id() else {
             return;
         };
-        let selected = drop.selected();
         reports.push(Event::Change {
             node,
             id,
             value: reports
-                .choice(node, selected)
+                .choice(node, drop.selected())
                 .map_or(PropValue::Nothing, PropValue::text),
         });
     });
