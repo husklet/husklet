@@ -630,10 +630,10 @@ test('Top owns workspace settings and extension management in the same tab', asy
   assert.ok(labelled(stage, 'Trust & compatibility'));
   assert.ok(labelled(stage, 'Husklet first-party'));
   assert.ok(labelled(stage, 'Compatibility undeclared'));
-  assert.ok(labelled(stage, 'Review access before install'));
+  assert.ok(labelled(stage, 'Review requested access before anything is installed.'));
   assert.deepEqual(ancestorTags(stage, 'Review Component playground').slice(0, 5), [
-    'Row',
-    'CardContent',
+    'Column',
+    'CardActions',
     'Card',
     'Row',
     'Column',

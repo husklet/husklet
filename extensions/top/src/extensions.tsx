@@ -4,6 +4,7 @@ import {
   Badge,
   Button,
   Card,
+  CardActions,
   CardContent,
   CardHeader,
   Column,
@@ -776,16 +777,6 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                                 wrap
                               />
                             ) : null}
-                            <Row gap={1} align="center" justify="start" wrap>
-                              <Button
-                                label={`Review ${entry.title}`}
-                                variant="filled"
-                                tone="accent"
-                                enabled={!busy && compatibility.compatible !== false}
-                                onInvoke={() => inspect(entry.reference)}
-                              />
-                              <Text label="Review access before install" color="text-dim" />
-                            </Row>
                             <Expander label="Trust & compatibility" expanded={false}>
                               <Column gap={1}>
                                 <Text
@@ -812,6 +803,22 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                               </Column>
                             </Expander>
                           </CardContent>
+                          <CardActions gap={1} align="start" justify="start" width="fill">
+                            <Column gap={1} align="start" width="fill">
+                              <Text
+                                label="Review requested access before anything is installed."
+                                color="text-dim"
+                                wrap
+                              />
+                              <Button
+                                label={`Review ${entry.title}`}
+                                variant="filled"
+                                tone="accent"
+                                enabled={!busy && compatibility.compatible !== false}
+                                onInvoke={() => inspect(entry.reference)}
+                              />
+                            </Column>
+                          </CardActions>
                         </Card>
                       );
                     })}
