@@ -4493,6 +4493,122 @@ test('real Unix install wait inspects revision, arms inventory, then commits exa
   }
 });
 
+test('real Unix install wait rejects broader published authority and preserves the session', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-install-authority-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const calls = [];
+  const connections = new Set();
+  const digest = `sha256:${'b'.repeat(64)}`;
+  const candidate = {
+    name: 'reviewed',
+    version: '2',
+    image_digest: digest,
+    requested: ['extensions:read'],
+    installed_image_digest: null,
+  };
+  const committed = {
+    name: 'reviewed',
+    image_digest: digest,
+    version: '2',
+    status: 'standby',
+    enabled: false,
+    pane_providers: [],
+    granted: ['extensions:read'],
+  };
+  const broadened = { ...committed, granted: ['extensions:read', 'extensions:install'] };
+  const server = net.createServer((socket) => {
+    connections.add(socket);
+    socket.on('close', () => connections.delete(socket));
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.channel !== 2) continue;
+        calls.push(frame.payload.call);
+        if (frame.payload.call === 'extension_acquisition_status') {
+          socket.write(
+            encode({
+              channel: 2,
+              kind: KIND.response,
+              payload: {
+                reply: 'extension_acquisition',
+                with: {
+                  job: 'job-authority',
+                  reference: 'reviewed:2',
+                  revision: 4,
+                  state: 'ready',
+                  progress: null,
+                  candidate,
+                  error: null,
+                },
+              },
+            }),
+          );
+        } else if (frame.payload.call === 'extension_install') {
+          socket.write(
+            encode({
+              channel: 41,
+              kind: KIND.event,
+              payload: { snapshot: 'extensions', of: [broadened] },
+            }),
+          );
+          socket.write(
+            encode({
+              channel: 2,
+              kind: KIND.response,
+              payload: { reply: 'extension', with: committed },
+            }),
+          );
+        } else if (frame.payload.call === 'extension_list') {
+          socket.write(
+            encode({
+              channel: 2,
+              kind: KIND.response,
+              payload: { reply: 'extensions', with: [committed] },
+            }),
+          );
+        } else {
+          socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+        }
+      }
+    });
+    socket.write(
+      encode({
+        channel: CONTROL,
+        kind: KIND.open,
+        payload: {
+          protocol: 1,
+          peer: 'install-authority',
+          granted: ['extensions:read', 'extensions:install'],
+        },
+      }),
+    );
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    const extensions = workspace(session).extensions;
+    await assert.rejects(
+      extensions.installAndWait('job-authority', 4, {
+        capabilities: ['extensions:read'],
+      }),
+      /replaced or disappeared after install/,
+    );
+    assert.deepEqual(await extensions.list(), [committed]);
+    assert.deepEqual(calls, [
+      'extension_acquisition_status',
+      'event_subscribe',
+      'extension_install',
+      'event_unsubscribe',
+      'extension_list',
+    ]);
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('real Unix container start wait arms first and ignores unchanged initial state', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-container-start-wait-'));
   const socketPath = path.join(directory, 'host.sock');

@@ -265,6 +265,19 @@ function exactAcquisitionStatus(
   } as unknown as ExtensionAcquisitionStatus;
 }
 
+function extensionAuthority(extension: ExtensionSummary): string {
+  return JSON.stringify({
+    granted: extension.granted ?? null,
+    containers: extension.containers ?? null,
+    images: extension.images ?? null,
+    networks: extension.networks ?? null,
+    volumes: extension.volumes ?? null,
+    filesystem: extension.filesystem ?? null,
+    workspace_environment: extension.workspace_environment ?? null,
+    pane_providers: extension.pane_providers ?? null,
+  });
+}
+
 function exactFileRange(offset: number, limit: number): [number, number] {
   if (!Number.isSafeInteger(offset) || offset < 0) {
     throw new RangeError('filesystem range offset must be a nonnegative safe integer');
@@ -4016,6 +4029,7 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
     let observed;
     let authorityReturned = false;
     let latest;
+    let committed: ExtensionSummary | undefined;
     const inventory = new Promise<ExtensionSummary>((resolve, reject) => {
       observed = (extensions) => {
         const current = extensions.find((extension) => extension.name === candidate.name);
@@ -4023,7 +4037,12 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
           latest = current ?? null;
           return;
         }
-        if (current?.image_digest === digest) resolve(current);
+        if (
+          current?.image_digest === digest &&
+          current.version === committed?.version &&
+          extensionAuthority(current) === extensionAuthority(committed)
+        )
+          resolve(current);
         else
           reject(
             new Error(`extension ${candidate.name} was replaced or disappeared after ${operation}`),
@@ -4033,7 +4052,7 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
     const stop = await api.watchExtensions(observed);
     let timer;
     try {
-      const committed = await api.extensions[operation](
+      committed = await api.extensions[operation](
         job,
         revision,
         digest,
@@ -4045,7 +4064,11 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
         filesystem,
         workspaceEnvironment,
       );
-      if (committed.name !== candidate.name || committed.image_digest !== digest) {
+      if (
+        committed.name !== candidate.name ||
+        committed.image_digest !== digest ||
+        committed.version !== candidate.version
+      ) {
         throw new Error(`extension ${operation} returned a different candidate identity`);
       }
       authorityReturned = true;

@@ -29,6 +29,8 @@ export interface ExtensionSummary {
     granted?: ExtensionCapability[];
     /** Effective container authority persisted for this exact image digest. */
     containers?: ContainerGrant;
+    /** Effective image authority persisted for this exact image digest. */
+    images?: ImageGrant;
     /** Effective network authority persisted for this exact image digest. */
     networks?: NetworkGrant;
     /** Effective volume authority persisted for this exact image digest. */

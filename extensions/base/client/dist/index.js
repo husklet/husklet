@@ -179,6 +179,18 @@ function exactAcquisitionStatus(job, status) {
         error,
     };
 }
+function extensionAuthority(extension) {
+    return JSON.stringify({
+        granted: extension.granted ?? null,
+        containers: extension.containers ?? null,
+        images: extension.images ?? null,
+        networks: extension.networks ?? null,
+        volumes: extension.volumes ?? null,
+        filesystem: extension.filesystem ?? null,
+        workspace_environment: extension.workspace_environment ?? null,
+        pane_providers: extension.pane_providers ?? null,
+    });
+}
 function exactFileRange(offset, limit) {
     if (!Number.isSafeInteger(offset) || offset < 0) {
         throw new RangeError('filesystem range offset must be a nonnegative safe integer');
@@ -3334,6 +3346,7 @@ export function workspace(session, { signal } = {}) {
         let observed;
         let authorityReturned = false;
         let latest;
+        let committed;
         const inventory = new Promise((resolve, reject) => {
             observed = (extensions) => {
                 const current = extensions.find((extension) => extension.name === candidate.name);
@@ -3341,7 +3354,9 @@ export function workspace(session, { signal } = {}) {
                     latest = current ?? null;
                     return;
                 }
-                if (current?.image_digest === digest)
+                if (current?.image_digest === digest &&
+                    current.version === committed?.version &&
+                    extensionAuthority(current) === extensionAuthority(committed))
                     resolve(current);
                 else
                     reject(new Error(`extension ${candidate.name} was replaced or disappeared after ${operation}`));
@@ -3350,8 +3365,10 @@ export function workspace(session, { signal } = {}) {
         const stop = await api.watchExtensions(observed);
         let timer;
         try {
-            const committed = await api.extensions[operation](job, revision, digest, granted, containers, images, networks, volumes, filesystem, workspaceEnvironment);
-            if (committed.name !== candidate.name || committed.image_digest !== digest) {
+            committed = await api.extensions[operation](job, revision, digest, granted, containers, images, networks, volumes, filesystem, workspaceEnvironment);
+            if (committed.name !== candidate.name ||
+                committed.image_digest !== digest ||
+                committed.version !== candidate.version) {
                 throw new Error(`extension ${operation} returned a different candidate identity`);
             }
             authorityReturned = true;
