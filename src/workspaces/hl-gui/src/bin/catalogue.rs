@@ -16,7 +16,7 @@ use hl_gui::{Align, ControlSize, Density, Prop, Scale, Tag, Token, Tone, Variant
 
 /// Version of the document shape itself, so a consumer can refuse a catalogue
 /// it does not understand instead of reading absent fields as empty ones.
-const SHAPE_VERSION: u32 = 1;
+const SHAPE_VERSION: u32 = 2;
 
 /// Largest spacing step with a generated style class, as a length editor should
 /// offer it.
@@ -94,11 +94,12 @@ fn props() -> Vec<String> {
         .iter()
         .map(|entry| {
             format!(
-                "{{\"name\": {}, \"group\": {}, \"editor\": {}, \"values\": {}, \"note\": {}}}",
+                "{{\"name\": {}, \"group\": {}, \"editor\": {}, \"values\": {}, \"default\": {}, \"note\": {}}}",
                 text(&entry.name()),
                 text(entry.group),
                 text(entry.editor),
                 inline(entry.values),
+                entry.default().map_or_else(|| "null".to_owned(), text),
                 text(entry.note)
             )
         })
@@ -771,6 +772,23 @@ const PROPS: &[Entry] = &[
 ];
 
 impl Entry {
+    /// The semantic value used when this property is absent, where absence has
+    /// one meaning across every component accepting the property.
+    fn default(&self) -> Option<&'static str> {
+        match self.prop {
+            Prop::Enabled | Prop::Visible | Prop::Busy | Prop::Monospace => Some("true"),
+            Prop::Selected | Prop::Checked | Prop::Expanded | Prop::Secret | Prop::Destructive | Prop::Wrap => {
+                Some("false")
+            }
+            Prop::Variant => Some("plain"),
+            Prop::Tone => Some("neutral"),
+            Prop::Scale => Some("body"),
+            Prop::Size => Some("small"),
+            Prop::Color => Some("text"),
+            _ => None,
+        }
+    }
+
     /// The wire spelling of the property this entry describes.
     ///
     /// Read back from `Debug`, which is the derived variant name and therefore
@@ -892,7 +910,7 @@ fn quoted(item: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{catalogue, escaped, family, text, FAMILIES, PROPS};
+    use super::{FAMILIES, PROPS, catalogue, escaped, family, text};
     use hl_gui::Tag;
 
     /// The document is JSON at all: quotes pair up outside of escapes and no

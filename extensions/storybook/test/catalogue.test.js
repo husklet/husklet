@@ -4,16 +4,33 @@ import reactCatalogue from '../../../extensions/base/react/catalogue.json' with 
 
 import { components } from '@husklet/react';
 
-import catalogue, { enums, families, grouped, props, tags } from '../dist/catalogue.js';
+import catalogue, {
+  SHAPE_VERSION,
+  enums,
+  families,
+  grouped,
+  props,
+  tags,
+} from '../dist/catalogue.js';
 
 test('the catalogue describes the whole library', () => {
-  assert.equal(catalogue.version, 1);
+  assert.equal(catalogue.version, SHAPE_VERSION);
   assert.ok(
     tags.length >= 120,
     `only ${tags.length} components; the catalogue is the whole library`,
   );
   assert.equal(props.length, 45);
   assert.ok(families.length > 0);
+});
+
+test('the generated catalogue carries semantic absence defaults', () => {
+  const defaults = Object.fromEntries(props.map((prop) => [prop.name, prop.default]));
+  assert.equal(defaults.Enabled, 'true');
+  assert.equal(defaults.Checked, 'false');
+  assert.equal(defaults.Variant, 'plain');
+  assert.equal(defaults.Tone, 'neutral');
+  assert.equal(defaults.Size, 'small');
+  assert.equal(defaults.Label, null);
 });
 
 test('every component in the catalogue is constructible', () => {

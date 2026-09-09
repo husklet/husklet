@@ -27,6 +27,7 @@ export type ControlRow = {
   note: string;
   editable: boolean;
   values: readonly string[];
+  default: string | null;
   vocabulary?: Vocabulary | null;
   members?: Choice[];
   modes?: Choice[];
@@ -52,6 +53,7 @@ export function control(prop: Property): ControlRow {
     note: prop.note,
     editable: CONTROLLABLE.has(editor),
     values: prop.values,
+    default: prop.default,
   };
   if (editor === 'enum') {
     const vocabulary = vocabularyOf(prop);

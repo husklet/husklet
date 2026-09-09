@@ -155,8 +155,7 @@ function publicType(row: ControlRow): string {
 }
 
 function defaultValue(row: ControlRow): string {
-  const match = /defaults? to ([^;]+?)(?: when absent|$)/i.exec(row.note);
-  return match?.[1] ?? '—';
+  return row.default ?? '—';
 }
 
 export function caption(value: string) {
