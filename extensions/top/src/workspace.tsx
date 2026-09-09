@@ -153,7 +153,7 @@ export function Workspace({ api }: { api: WorkspaceApi }) {
   };
   if (!configuration)
     return (
-      <Column width="fill" pad={2} gap={2}>
+      <Column width="fill" pad={4} gap={3}>
         <Heading label="Workspace" scale="title" />
         {error ? (
           <RecoveryState
@@ -174,49 +174,53 @@ export function Workspace({ api }: { api: WorkspaceApi }) {
   const dirty = hydrated && changedFrom(configuration, observed, numbers);
   return (
     <Column width="fill" height="fill">
-      <Card grow={false} width="fill" variant="plain">
-        <CardContent gap={1}>
-          <Row gap={2} wrap justify="start" align="center" width="fill">
-            <Column gap={0} grow>
-              <Heading label="Workspace" scale="title" />
-              <Text
-                label={`linux/${configuration.architecture} · ${configuration.name}`}
-                color="text-dim"
-              />
-            </Column>
-            <Row gap={1} wrap justify="start">
-              <Button
-                variant="filled"
-                tone="accent"
-                label={saving ? 'Saving…' : dirty ? 'Save changes' : saved ? 'Saved' : 'Up to date'}
-                enabled={!saving && dirty && !invalid}
-                onInvoke={save}
-              />
-              {dirty && (
-                <Button label="Discard" variant="ghost" enabled={!saving} onInvoke={load} />
-              )}
+      <Column grow={false} width="fill" pad={{ top: 4, end: 4, bottom: 0, start: 4 }}>
+        <Card grow={false} width="fill" variant="plain">
+          <CardContent gap={1} pad={3}>
+            <Row gap={2} wrap justify="start" align="center" width="fill">
+              <Column gap={0} grow>
+                <Heading label="Workspace" scale="title" />
+                <Text
+                  label={`linux/${configuration.architecture} · ${configuration.name}`}
+                  color="text-dim"
+                />
+              </Column>
+              <Row gap={1} wrap justify="start">
+                <Button
+                  variant="filled"
+                  tone="accent"
+                  label={
+                    saving ? 'Saving…' : dirty ? 'Save changes' : saved ? 'Saved' : 'Up to date'
+                  }
+                  enabled={!saving && dirty && !invalid}
+                  onInvoke={save}
+                />
+                {dirty && (
+                  <Button label="Discard" variant="ghost" enabled={!saving} onInvoke={load} />
+                )}
+              </Row>
             </Row>
-          </Row>
-          <Text
-            label={
-              invalid
-                ? 'Fix the highlighted settings before saving.'
-                : dirty
-                  ? 'Unsaved changes'
-                  : saved
-                    ? 'Changes saved'
-                    : 'Changes save without stopping the workspace.'
-            }
-            color={invalid ? 'danger' : dirty ? 'warning' : saved ? 'positive' : 'text-dim'}
-            wrap
-          />
-          {invalid && <InlineMessage label={invalid} tone="danger" />}
-          {error && <RecoveryState operation="Saving workspace settings" error={error} />}
-          {saved && <InlineMessage label={saved} tone="positive" />}
-        </CardContent>
-      </Card>
+            <Text
+              label={
+                invalid
+                  ? 'Fix the highlighted settings before saving.'
+                  : dirty
+                    ? 'Unsaved changes'
+                    : saved
+                      ? 'Changes saved'
+                      : 'Changes save without stopping the workspace.'
+              }
+              color={invalid ? 'danger' : dirty ? 'warning' : saved ? 'positive' : 'text-dim'}
+              wrap
+            />
+            {invalid && <InlineMessage label={invalid} tone="danger" />}
+            {error && <RecoveryState operation="Saving workspace settings" error={error} />}
+            {saved && <InlineMessage label={saved} tone="positive" />}
+          </CardContent>
+        </Card>
+      </Column>
       <Scroll grow width="fill" height="fill">
-        <Container pad={2} gap={2}>
+        <Container pad={4} gap={3}>
           <Card grow={false} width="fill" variant="plain">
             <CardContent gap={2}>
               <Text
@@ -443,9 +447,7 @@ function SettingsGroup({
       expanded={open}
       onExpand={(event: Change) => onExpand((event.expanded ?? event.value) ? name : '')}
     >
-      <AccordionSummary label={label}>
-        <Text label={detail} color="text-dim" wrap />
-      </AccordionSummary>
+      <AccordionSummary label={`${label} · ${detail}`} />
       <AccordionDetails gap={2}>{children}</AccordionDetails>
     </Accordion>
   );

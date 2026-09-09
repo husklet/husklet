@@ -609,7 +609,7 @@ function Page({
 }) {
   return (
     <Scroll grow width="fill" height="fill">
-      <Column width="fill" pad={2}>
+      <Column width="fill" pad={4}>
         <Container>
           <Column width="fill" gap={2}>
             <Heading label={label} scale="title" />

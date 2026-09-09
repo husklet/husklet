@@ -221,6 +221,21 @@ test('Top presents workspace, extensions, and every resource navigation choice',
     8,
     'every compact overview summary is one full-card navigation target',
   );
+  assert.deepEqual(
+    outerAncestorProperty(stageFromFrame(frame), 'Workspace overview', 'Column', 'Pad'),
+    { Length: { Step: 4 } },
+    'the overview keeps a 16px inset instead of touching the viewport edge',
+  );
+  assert.deepEqual(
+    ancestorProperty(
+      stageFromFrame(frame),
+      'Current inventory and reported runtime attention.',
+      'Column',
+      'Gap',
+    ),
+    { Length: { Step: 3 } },
+    'overview sections use a consistent 12px rhythm',
+  );
 });
 
 test('Top network attachment selects a named container while retaining immutable authority', async () => {
@@ -499,11 +514,20 @@ test('Top owns workspace settings and extension management in the same tab', asy
   assert.ok(labelled(stage, 'Terminal appearance'));
   assert.ok(labelled(stage, 'Environment variables'));
   assert.ok(labelled(stage, 'Filesystem mounts'));
+  assert.ok(
+    labelled(stage, 'Runtime · Image alpine:3.20 · Shell /bin/sh'),
+    'accordion summaries form one natural, explicitly separated phrase',
+  );
   assert.ok(labelled(stage, 'Up to date'));
   assert.equal(
     ancestorTags(stage, 'Up to date').includes('Scroll'),
     false,
     'workspace save state remains visible while the settings body scrolls',
+  );
+  assert.deepEqual(
+    outerAncestorProperty(stage, 'Up to date', 'Column', 'Pad'),
+    { Length: { Step: 4 } },
+    'the sticky workspace status card shares the page inset instead of touching the viewport',
   );
   assert.equal(labelled(stage, 'Unsaved changes'), undefined);
   change(stage, 'registry/image:tag', 'alpine:3.20');
@@ -609,6 +633,11 @@ test('Top owns workspace settings and extension management in the same tab', asy
     taggedProperty(stage, 'Install from an OCI image', 'Expander', 'Expanded')?.Flag,
     false,
     'advanced image installation is collapsed until requested',
+  );
+  assert.deepEqual(
+    outerAncestorProperty(stage, 'Extensions', 'Container', 'Pad'),
+    { Length: { Step: 4 } },
+    'the catalogue uses the same 16px page inset as operational pages',
   );
 });
 
@@ -2198,8 +2227,8 @@ test('every empty operational page explains what is absent and how to proceed', 
     assert.ok(labelled(stage, message), `${section} has a semantic empty state`);
     assert.deepEqual(
       outerAncestorProperty(stage, message, 'Column', 'Pad'),
-      { Length: { Step: 2 } },
-      `${section} uses the same compact page inset as the manager surfaces`,
+      { Length: { Step: 4 } },
+      `${section} uses the same 16px page inset as the manager surfaces`,
     );
     if (section === 'Images') {
       assert.equal(ancestorTags(stage, 'Pull')[0], 'Row');

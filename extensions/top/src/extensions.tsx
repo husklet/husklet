@@ -688,7 +688,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
 
   const content = (
     <Scroll grow width="fill" height="fill">
-      <Container pad={2} gap={2} width={PAGE_WIDTH}>
+      <Container pad={4} gap={3} width={PAGE_WIDTH}>
         <Heading label="Extensions" scale="title" />
         <Text label="Add trusted tools and control their workspace access." color="text-dim" wrap />
         <Column gap={3} width="fill">

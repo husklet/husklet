@@ -150,7 +150,7 @@ export function Overview({
   );
   return (
     <Scroll grow width="fill" height="fill">
-      <Column width="fill" pad={2} gap={2}>
+      <Column width="fill" pad={4} gap={3}>
         <Row gap={1} align="center" wrap>
           <Heading label="Workspace overview" scale="title" align="start" grow={false} />
           {refreshing ? <Spinner /> : null}
@@ -215,7 +215,7 @@ function Summary({
   return (
     <Card grow={false} width={{ minimum: { chars: 26 } }} variant="outline">
       <CardActionArea variant="ghost" tooltip={`Open ${label}`} onInvoke={onOpen}>
-        <CardContent gap={1} pad={2}>
+        <CardContent gap={1} pad={3}>
           <Row gap={1} align="center" width="fill">
             <Text label={label} color="text-dim" />
             <Spacer />
