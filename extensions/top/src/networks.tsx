@@ -86,6 +86,7 @@ export function Networks({
   const [disconnectRequest, setDisconnectRequest] = React.useState<EndpointRequest | null>(null);
   const inspectionRevision = React.useRef(0);
   const inventoryRevision = React.useRef(resource.data);
+  const verificationNetwork = React.useRef('');
   const endpointInput = React.useRef({ container: '', aliases: '' });
   endpointInput.current = { container: container.trim(), aliases };
   const currentNetworks = React.useRef(new Set<string>());
@@ -124,6 +125,7 @@ export function Networks({
   };
   const inspect = async (network: NetworkSummary) => {
     const id = resourceReference(network);
+    verificationNetwork.current = '';
     const revision = ++inspectionRevision.current;
     setInspection({ id, state: 'loading', detail: null, error: null });
     try {
@@ -139,6 +141,20 @@ export function Networks({
   React.useEffect(() => {
     if (inventoryRevision.current === resource.data) return;
     inventoryRevision.current = resource.data;
+    const verifying = verificationNetwork.current;
+    if (verifying) {
+      if ((resource.data ?? []).some((network) => resourceReference(network) === verifying)) return;
+      verificationNetwork.current = '';
+      inspectionRevision.current += 1;
+      setInspection({
+        id: verifying,
+        state: 'error',
+        detail: null,
+        error: new Error(`Network ${verifying} changed or disappeared after the operation.`),
+      });
+      setDisconnectRequest(null);
+      return;
+    }
     inspectionRevision.current += 1;
     setInspection(EMPTY_INSPECTION);
     setDisconnectRequest(null);
@@ -176,10 +192,34 @@ export function Networks({
       } else {
         await api.networks.disconnect(next.network, next.container);
       }
-      await resource.reload();
       setOperation({ state: 'success', request: next, error: null });
+      verificationNetwork.current = next.network;
+      await resource.reload();
       setDisconnectRequest(null);
+      const revision = ++inspectionRevision.current;
+      setInspection((current) => ({
+        id: next.network,
+        state: 'loading',
+        detail: current.id === next.network ? current.detail : null,
+        error: null,
+      }));
+      try {
+        const detail = await api.networks.inspect(next.network);
+        if (revision === inspectionRevision.current) {
+          setInspection({
+            id: next.network,
+            state: 'ready',
+            detail: detail.id ? detail : null,
+            error: null,
+          });
+        }
+      } catch (cause) {
+        if (revision === inspectionRevision.current) {
+          setInspection({ id: next.network, state: 'error', detail: null, error: cause });
+        }
+      }
     } catch (cause) {
+      verificationNetwork.current = '';
       setOperation({ state: 'error', request: next, error: cause });
       throw cause;
     }

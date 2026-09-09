@@ -6470,6 +6470,145 @@ test('network connect validates aliases, exposes progress, success, bounded fail
   assert.equal(calls.filter((call) => call[0] === 'a'.repeat(32)).length, 3);
 });
 
+test('successful network attachment retains its receipt and verified expanded membership', async () => {
+  const network = 'a'.repeat(32);
+  const container = 'b'.repeat(64);
+  let connected = false;
+  const calls = [];
+  const controlled = {
+    networks: {
+      ...api.networks,
+      inspect: async (reference) => {
+        calls.push(['inspect', reference]);
+        return {
+          id: network,
+          name: 'private',
+          driver: 'bridge',
+          scope: 'local',
+          kind: 'custom',
+          endpoints: { containers: connected ? [container] : [], truncated: false },
+        };
+      },
+      connect: async (reference, immutable, options) => {
+        calls.push(['connect', reference, immutable, options]);
+        connected = true;
+      },
+    },
+  };
+  const resource = {
+    data: [{ id: network, name: 'private', driver: 'bridge', scope: 'local', kind: 'custom' }],
+    loading: false,
+    error: null,
+    reload: async () => calls.push(['reload']),
+  };
+  const stage = host();
+  stage.render(
+    h(Networks, { api: controlled, resource, containers: containerResource(container) }),
+  );
+  invoke(stage, 'Manage connections');
+  await settled();
+  chooseContainer(stage, container);
+  await settled();
+  invoke(stage, 'Connect');
+  await settled();
+  await settled();
+  assert.ok(labelled(stage, `Connected container ${container} to network ${network}.`));
+  assert.ok(labelled(stage, 'Connected containers · 1'));
+  assert.ok(labelled(stage, `Container · ${container.slice(0, 12)}`));
+  assert.ok(labelled(stage, 'Refresh connections'));
+  assert.deepEqual(
+    calls.map((call) => call[0]),
+    ['inspect', 'connect', 'reload', 'inspect'],
+  );
+});
+
+test('a successful attachment retains its receipt when membership reinspection is denied', async () => {
+  const network = 'a'.repeat(32);
+  const container = 'b'.repeat(64);
+  let inspections = 0;
+  const controlled = {
+    networks: {
+      ...api.networks,
+      inspect: async () => {
+        inspections += 1;
+        if (inspections > 1) throw { kind: 'denied', capability: 'networks:read' };
+        return {
+          id: network,
+          name: 'private',
+          driver: 'bridge',
+          scope: 'local',
+          kind: 'custom',
+          endpoints: { containers: [], truncated: false },
+        };
+      },
+      connect: async () => {},
+    },
+  };
+  const resource = {
+    data: [{ id: network, name: 'private', driver: 'bridge', scope: 'local', kind: 'custom' }],
+    loading: false,
+    error: null,
+    reload: async () => {},
+  };
+  const stage = host();
+  stage.render(
+    h(Networks, { api: controlled, resource, containers: containerResource(container) }),
+  );
+  invoke(stage, 'Manage connections');
+  await settled();
+  chooseContainer(stage, container);
+  await settled();
+  invoke(stage, 'Connect');
+  await settled();
+  await settled();
+  assert.ok(labelled(stage, `Connected container ${container} to network ${network}.`));
+  assert.ok(labelled(stage, 'Open Extensions'));
+  assert.equal(labelled(stage, 'Connected containers · 1'), undefined);
+});
+
+test('successful disconnect retains its receipt and verified empty membership', async () => {
+  const network = 'a'.repeat(32);
+  const container = 'b'.repeat(64);
+  let connected = true;
+  const controlled = {
+    networks: {
+      ...api.networks,
+      inspect: async () => ({
+        id: network,
+        name: 'private',
+        driver: 'bridge',
+        scope: 'local',
+        kind: 'custom',
+        endpoints: { containers: connected ? [container] : [], truncated: false },
+      }),
+      disconnect: async () => {
+        connected = false;
+      },
+    },
+  };
+  const resource = {
+    data: [{ id: network, name: 'private', driver: 'bridge', scope: 'local', kind: 'custom' }],
+    loading: false,
+    error: null,
+    reload: async () => {},
+  };
+  const stage = host();
+  stage.render(
+    h(Networks, { api: controlled, resource, containers: containerResource(container) }),
+  );
+  invoke(stage, 'Manage connections');
+  await settled();
+  chooseContainer(stage, container);
+  await settled();
+  invoke(stage, 'Disconnect');
+  invoke(stage, 'Confirm disconnect');
+  await settled();
+  await settled();
+  assert.ok(labelled(stage, `Disconnected container ${container} from network ${network}.`));
+  assert.ok(labelled(stage, 'Connected containers · 0'));
+  assert.ok(labelled(stage, 'No connected containers'));
+});
+
 test('network creation exposes pending failure and retained retry before claiming success', async () => {
   const calls = [];
   let rejectFirst;
