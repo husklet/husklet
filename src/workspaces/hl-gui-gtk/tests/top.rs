@@ -775,6 +775,7 @@ mod unix {
     fn capture_update_surface(window: &gtk::Window, root: &gtk::Widget, state: &str) {
         window.set_child(Some(root));
         for (width_name, width) in [("narrow", 600), ("wide", 1_200)] {
+            window.set_size_request(-1, -1);
             window.set_default_size(width, 800);
             window.set_size_request(width, 800);
             window.present();
