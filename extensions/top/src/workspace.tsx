@@ -228,7 +228,7 @@ export function Workspace({ api }: { api: WorkspaceApi }) {
               <SettingsGroup
                 name="runtime"
                 label="Runtime"
-                detail={`${configuration.image} · ${configuration.shell ?? 'automatic shell'}`}
+                detail={`Image ${configuration.image} · Shell ${configuration.shell ?? 'automatic'}`}
                 expanded={expanded}
                 onExpand={setExpanded}
               >
@@ -370,7 +370,7 @@ export function Workspace({ api }: { api: WorkspaceApi }) {
               <SettingsGroup
                 name="environment"
                 label="Environment variables"
-                detail={`${configuration.environment.length} configured`}
+                detail={`${configuration.environment.length} ${configuration.environment.length === 1 ? 'variable' : 'variables'}`}
                 expanded={expanded}
                 onExpand={setExpanded}
               >
@@ -383,7 +383,7 @@ export function Workspace({ api }: { api: WorkspaceApi }) {
               <SettingsGroup
                 name="mounts"
                 label="Filesystem mounts"
-                detail={`${configuration.mounts.length} configured`}
+                detail={`${configuration.mounts.length} ${configuration.mounts.length === 1 ? 'mount' : 'mounts'}`}
                 expanded={expanded}
                 onExpand={setExpanded}
               >
@@ -617,12 +617,12 @@ function text(value: number | null): string {
   return value === null ? '' : String(value);
 }
 function terminalSummary(value: WorkspaceConfiguration): string {
-  return `${value.terminal.font_family ?? 'Host font'} · ${value.terminal.font_size ?? 'default size'} · ${value.terminal.cursor_shape ?? 'default cursor'}`;
+  return `Font ${value.terminal.font_family ?? 'host default'} · Size ${value.terminal.font_size ?? 'default'} · Cursor ${value.terminal.cursor_shape ?? 'default'}`;
 }
 function resourceSummary(value: WorkspaceConfiguration): string {
-  const cpu = value.cpus === null ? 'automatic CPU' : `${value.cpus} CPU`;
-  const memory = value.memory_mb === null ? 'automatic memory' : `${value.memory_mb} MB`;
-  return `${cpu} · ${memory}`;
+  const cpu = value.cpus === null ? 'automatic' : String(value.cpus);
+  const memory = value.memory_mb === null ? 'automatic' : `${value.memory_mb} MB`;
+  return `CPU ${cpu} · Memory ${memory}`;
 }
 function optionalInteger(value: string, label: string, maximum: number): number | null {
   if (!value.trim()) return null;
