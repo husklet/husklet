@@ -91,7 +91,7 @@ export function SpecimenGrid({ children }: { children: React.ReactNode }) {
   );
 }
 
-export function ApiReference({ example, rows }: { example: string; rows: ControlRow[] }) {
+export function ApiReference({ example, rows }: { example?: string; rows: ControlRow[] }) {
   const inheritedLayout = rows.filter((row) => INHERITED_LAYOUT.has(row.name));
   const inheritedBehavior = rows.filter((row) => INHERITED_BEHAVIOR.has(row.name));
   const own = rows.filter(
@@ -99,7 +99,7 @@ export function ApiReference({ example, rows }: { example: string; rows: Control
   );
   return (
     <Column gap={3} width="fill">
-      <Code value={example} wrap />
+      {example ? <Code value={example} wrap /> : null}
       <ApiTable rows={own} />
       {inheritedBehavior.length > 0 ? (
         <Expander

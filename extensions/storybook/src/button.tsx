@@ -1,6 +1,7 @@
 import React from 'react';
 import {
   Button,
+  Code,
   Column,
   Entry,
   Expander,
@@ -52,13 +53,11 @@ export function ButtonWorkbench() {
           />
           <InlineMessage label={event} tone="neutral" />
         </Row>
-      </SectionBlock>
-      <DocumentationSection title="API">
-        <ApiReference
-          example={`<Button label="${label}" size="${size}" variant="${variant}" tone="${tone}" onInvoke={runTask} />`}
-          rows={rows('Button')}
+        <Code
+          value={`<Button label="${label}" size="${size}" variant="${variant}" tone="${tone}" onInvoke={runTask} />`}
+          wrap
         />
-      </DocumentationSection>
+      </SectionBlock>
       <SpecimenGrid>
         <SectionBlock title="Basic">
           <Row gap={2} wrap>
@@ -144,6 +143,9 @@ export function ButtonWorkbench() {
           wrap
         />
       </SectionBlock>
+      <DocumentationSection title="API">
+        <ApiReference rows={rows('Button')} />
+      </DocumentationSection>
       <Expander label="Playground" expanded={false} width="fill">
         <Column gap={2} pad={2}>
           <FieldSpecimen
@@ -180,10 +182,7 @@ export function ButtonWorkbench() {
               />
             </FieldSpecimen>
             <FieldSpecimen label="Availability" width={{ chars: 14 }}>
-              <Switch
-                checked={enabled}
-                onToggle={(report) => setEnabled(Boolean(report.value))}
-              />
+              <Switch checked={enabled} onToggle={(report) => setEnabled(Boolean(report.value))} />
             </FieldSpecimen>
           </Row>
         </Column>
