@@ -90,14 +90,14 @@ test(
       await until(() => labelled(stage, 'stale/image:1'));
       assert.ok(labelled(stage, 'Remove'));
       assert.ok(labelled(stage, 'Prune unused images'));
-      invoke(stage, 'Overview');
+      invoke(stage, 'Workspace');
       await until(() => labelled(stage, 'Available locally') && labelled(stage, '1'));
       invoke(stage, 'Images');
 
       const refreshStart = stage.frames.length;
       invoke(stage, 'Refresh');
       await until(() => attempts === 2 && labelled(stage, 'Reading images…'));
-      invoke(stage, 'Overview');
+      invoke(stage, 'Workspace');
       await until(() => labelled(stage, 'Reading inventory…'));
       const overviewLoading = stage.frames.slice(refreshStart).flatMap((frame) => frame.patches);
       assert.equal(

@@ -9,6 +9,7 @@ import {
   CardContent,
   CardHeader,
   Column,
+  Heading,
   InlineMessage,
   Progress,
   Row,
@@ -85,6 +86,7 @@ export function AcquisitionProgressStory() {
   const state = acquisitionStates.find(({ key }) => key === selected) ?? acquisitionStates[0];
   return (
     <Column gap={3} width="fill">
+      <Heading key={'title'} label={'Extension acquisition'} scale={'title'} wrap={true} />
       <Text
         key={'explanation'}
         label={

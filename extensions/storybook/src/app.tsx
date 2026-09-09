@@ -341,10 +341,11 @@ export function Preview({
   // The final branch below is reachable only for catalogue components; flow
   // stories are exhausted by the branches above and intentionally have no defaults.
   const instance = opened as StoryDefaults;
+  const flow = FLOW_STORIES.includes(name);
   return (
     <Column grow={true} gap={2} pad={4}>
-      <Heading key={'title'} label={spaced(name)} scale={'title'} wrap={true} />
-      <Section key={'stage'} pad={4} grow={true}>
+      {flow ? null : <Heading key={'title'} label={spaced(name)} scale={'title'} wrap={true} />}
+      <Section key={'stage'} pad={flow ? 0 : 4} grow={true}>
         {name === RESOURCE_STATE_STORY ? (
           <ResourceStateStory />
         ) : name === DRAG_REORDER_STORY ? (

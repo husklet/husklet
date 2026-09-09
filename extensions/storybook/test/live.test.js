@@ -153,7 +153,7 @@ test('the shipped entrypoint connects and renders the complete playground over a
     rendered.with.frame.patches,
     'Entry',
     'Placeholder',
-    'Search flows and components',
+    'Search components',
   );
   assert.ok(search, 'the live playground has no global component search');
   const selected = new Set();
