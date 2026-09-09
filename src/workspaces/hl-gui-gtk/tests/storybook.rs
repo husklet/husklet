@@ -278,6 +278,15 @@ mod unix {
             settle_toolkit();
             let _ = surface.reports().drain();
         }
+        if story == "Switch" {
+            let focus = find::<gtk::Switch>(&root, |switch| {
+                switch.tooltip_text().as_deref() == Some("Focused restore switch")
+            });
+            assert!(focus.grab_focus(), "Switch accepts deterministic keyboard focus");
+            focus.set_state_flags(gtk::StateFlags::FOCUSED, false);
+            settle_toolkit();
+            let _ = surface.reports().drain();
+        }
         if story == "Select" {
             let focus = find::<gtk::ToggleButton>(&root, |button| {
                 button.tooltip_text().as_deref() == Some("Focused shell selector")

@@ -158,6 +158,31 @@ test('Select teaches controlled selection and bounded states before its API', ()
   assert(headings.indexOf('Accessibility') < headings.indexOf('API'));
 });
 
+test('Switch distinguishes every state and explains its control boundary before API', () => {
+  const frame = host().render(h(SwitchWorkbench));
+  const labels = frame.patches
+    .filter((patch) => patch.SetProp?.prop === 'Label')
+    .map((patch) => patch.SetProp.value?.Text);
+  for (const state of [
+    'Restore panes · on',
+    'Restore panes · off',
+    'Focused',
+    'Disabled · off',
+    'Disabled · on',
+  ]) {
+    assert(labels.includes(state), `Switch is missing ${state}`);
+  }
+  assert(labels.some((label) => label?.includes('ToggleButton')));
+  assert(labels.some((label) => label?.includes('Checkbox')));
+  const headings = created(frame.patches, 'Heading').flatMap((id) =>
+    frame.patches
+      .filter((patch) => patch.SetProp?.id === id && patch.SetProp.prop === 'Label')
+      .map((patch) => patch.SetProp.value.Text),
+  );
+  assert(headings.indexOf('States') < headings.indexOf('API'));
+  assert(headings.indexOf('Choose the right control') < headings.indexOf('API'));
+});
+
 test('playground controls keep visible labels in the rendered tree', () => {
   for (const [Workbench, labels] of [
     [EntryWorkbench, ['Field width', 'Validation tone', 'Field enabled', 'Hide value']],

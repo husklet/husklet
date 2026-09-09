@@ -52,6 +52,7 @@ fn controls(css: &mut String, theme: &Theme) {
          notebook tab:checked {{ color: {text}; }}\n\
          switch {{ background: {line}; }}\n\
          switch:checked {{ background: {accent}; }}\n\
+         switch:focus, switch:focus-visible {{ outline: 2px solid {accent}; outline-offset: 2px; box-shadow: 0 0 0 3px {ground}; }}\n\
          switch:disabled {{ opacity: .55; }}\n\
          scale trough {{ background: {line}; }}\n\
          scale highlight {{ background: {accent}; }}\n\
@@ -377,6 +378,9 @@ mod tests {
     #[test]
     fn form_controls_expose_boundaries_focus_and_validation() {
         let css = super::sheet(&Theme::dark());
+        assert!(css.contains(
+            "switch:focus, switch:focus-visible { outline: 2px solid #559df7; outline-offset: 2px; box-shadow: 0 0 0 3px #0f1115;"
+        ));
         assert!(css.contains(".hl-select { background: #0f1115; border: 1px solid #323843;"));
         assert!(css.contains(".hl-select:focus-within { border-color: #559df7; box-shadow: 0 0 0 1px #559df7;"));
         assert!(css.contains(".hl-select:disabled, .hl-select button:disabled { border-color: #87909f;"));
