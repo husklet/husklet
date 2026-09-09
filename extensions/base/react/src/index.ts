@@ -225,7 +225,7 @@ export function render(
   let closed = false;
   let failed: unknown = null;
   let withdrawal: Promise<void> | null = null;
-  const deliveries = new Set<Promise<void>>();
+  let delivery = Promise.resolve();
   const transmit = (frame: RenderFrame) => {
     if (closed || failed) return;
     if (slot === null) {
@@ -236,18 +236,21 @@ export function render(
       queued.push(frame);
       return;
     }
-    const delivery: Promise<void> = (async () => {
-      const reply = await session.call('interface_render_at', { slot, frame: frame as Frame });
-      if (reply?.reply !== 'done') {
-        throw new Error(`host replied ${reply?.reply ?? 'without a tag'}, expected done`);
-      }
-    })();
-    deliveries.add(delivery);
-    delivery
-      .catch((error) => {
+    const target = slot;
+    delivery = delivery.then(async () => {
+      if (closed || failed) return;
+      try {
+        const reply = await session.call('interface_render_at', {
+          slot: target,
+          frame: frame as Frame,
+        });
+        if (reply?.reply !== 'done') {
+          throw new Error(`host replied ${reply?.reply ?? 'without a tag'}, expected done`);
+        }
+      } catch (error) {
         failed = error;
-      })
-      .finally(() => deliveries.delete(delivery));
+      }
+    });
   };
   if (
     bootstrap !== null &&
@@ -322,7 +325,7 @@ export function render(
     },
     async flush() {
       await ready;
-      while (deliveries.size > 0) await Promise.all(deliveries);
+      await delivery;
       if (failed) throw failed;
     },
     async source(mutation: SourceMutation) {
