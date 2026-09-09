@@ -200,17 +200,15 @@ test('playground controls keep visible labels in the rendered tree', () => {
   }
 });
 
-test('dense state specimens use the shared two-column layout', () => {
+test('dense state specimens use the shared source-ordered narrow layout', () => {
   for (const Workbench of [EntryWorkbench, SelectWorkbench, SwitchWorkbench]) {
     const frame = host().render(h(Workbench));
-    const grids = new Set(created(frame.patches, 'Grid'));
-    assert.ok(
-      frame.patches.some(
-        (patch) =>
-          grids.has(patch.SetProp?.id) &&
-          patch.SetProp.prop === 'Columns' &&
-          patch.SetProp.value?.Integer === 2,
-      ),
+    assert.equal(
+      frame.patches.filter(
+        (patch) => patch.SetProp?.prop === 'Columns' && patch.SetProp.value?.Integer === 2,
+      ).length,
+      0,
+      'shared specimens must not force two columns into a narrow allocation',
     );
   }
 });

@@ -37,6 +37,7 @@ export function ButtonWorkbench() {
     <ComponentDocument
       name="Button"
       summary="Buttons start an immediate action. Use semantic size, emphasis, and tone; keep labels short and specific."
+      contentWidth={{ maximum: { chars: 64 } }}
     >
       <SectionBlock title="Overview">
         <Row gap={2} wrap>
@@ -54,7 +55,14 @@ export function ButtonWorkbench() {
           <InlineMessage label={event} tone="neutral" />
         </Row>
         <Code
-          value={`<Button label="${label}" size="${size}" variant="${variant}" tone="${tone}" onInvoke={runTask} />`}
+          width="fill"
+          value={`<Button
+  label="${label}"
+  size="${size}"
+  variant="${variant}"
+  tone="${tone}"
+  onInvoke={runTask}
+/>`}
           wrap
         />
       </SectionBlock>
@@ -79,28 +87,22 @@ export function ButtonWorkbench() {
         </SectionBlock>
       </SpecimenGrid>
       <SectionBlock title="Sizes">
-        <Row gap={2}>
-          <Text label="Size" width={{ chars: 8 }} color="text-dim" />
-          {(['filled', 'outline', 'ghost', 'plain'] as const).map((emphasis) => (
-            <Text key={emphasis} label={title(emphasis)} width={{ chars: 10 }} color="text-dim" />
-          ))}
-        </Row>
         {(['small', 'medium', 'large'] as const).map((controlSize) => (
-          <Row key={controlSize} gap={2} wrap>
-            <Text label={title(controlSize)} width={{ chars: 8 }} color="text-dim" />
-            {(['filled', 'outline', 'ghost', 'plain'] as const).map((emphasis) => (
-              <Button
-                key={emphasis}
-                label="Action"
-                width={{ chars: 10 }}
-                size={controlSize}
-                variant={emphasis}
-                tone="accent"
-              />
-            ))}
-          </Row>
+          <Column key={controlSize} gap={1} width="fill">
+            <Text label={`${title(controlSize)} · ${height(controlSize)}px`} color="text-dim" />
+            <Row gap={2} wrap width="fill">
+              {(['filled', 'outline', 'ghost', 'plain'] as const).map((emphasis) => (
+                <Button
+                  key={emphasis}
+                  label={title(emphasis)}
+                  size={controlSize}
+                  variant={emphasis}
+                  tone="accent"
+                />
+              ))}
+            </Row>
+          </Column>
         ))}
-        <Text label="28px · 36px · 44px control heights" color="text-dim" />
       </SectionBlock>
       <SpecimenGrid>
         <SectionBlock title="Icons">
@@ -132,14 +134,18 @@ export function ButtonWorkbench() {
           <Button label="Disabled" enabled={false} />
         </Row>
         <Text
-          label="Hover, pressed, and keyboard focus are rendered by the native host—interact with the live controls above."
+          label={
+            'Hover, pressed, and keyboard focus are rendered by the native host.\nInteract with the live controls above.'
+          }
           color="text-dim"
           wrap
         />
       </SectionBlock>
       <SectionBlock title="Accessibility">
         <Text
-          label="Use a unique action label. Icon buttons still need an accessible label. Disabled actions should explain their prerequisite nearby."
+          label={
+            'Use a unique action label. Icon buttons still need an accessible label.\nDisabled actions should explain their prerequisite nearby.'
+          }
           wrap
         />
       </SectionBlock>
@@ -202,6 +208,9 @@ function SectionBlock({ title: heading, children }: { title: string; children: R
 
 function title(value: string) {
   return `${value[0].toUpperCase()}${value.slice(1)}`;
+}
+function height(size: Size) {
+  return { small: 28, medium: 36, large: 44 }[size];
 }
 function choices(values: readonly string[]) {
   return values.map((value) => ({ value, label: title(value) }));

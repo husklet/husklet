@@ -4,6 +4,7 @@ import { createElement as h } from 'react';
 
 import { ButtonWorkbench } from '../dist/button.js';
 import { host } from './host.js';
+import { readFile } from 'node:fs/promises';
 
 function propsFor(patches, tag) {
   const ids = patches.filter((patch) => patch.Create?.tag === tag).map((patch) => patch.Create.id);
@@ -53,4 +54,22 @@ test('Button teaches specimens before its full API and keeps the playground seco
   assert.deepEqual(headings.slice(0, 4), ['Button', 'Overview', 'Basic', 'Variants']);
   assert.ok(headings.indexOf('States') < headings.indexOf('API'));
   assert(expanders.includes('Playground'));
+});
+
+test('shared specimen pairs preserve source order in a narrow single column', async () => {
+  const source = await readFile(new URL('../src/component-document.tsx', import.meta.url), 'utf8');
+  const specimen = source.slice(
+    source.indexOf('export function SpecimenGrid'),
+    source.indexOf('export function ApiReference'),
+  );
+  assert.match(specimen, /<Column gap=\{3\} width="fill">/);
+  assert.doesNotMatch(specimen, /columns=\{2\}/);
+});
+
+test('Button keeps its overview code and every size row bounded to the document width', async () => {
+  const source = await readFile(new URL('../src/button.tsx', import.meta.url), 'utf8');
+  assert.match(source, /<Code\s+width="fill"[\s\S]*?wrap/);
+  assert.match(source, /<Row gap=\{2\} wrap width="fill">/);
+  assert.match(source, /label=\{`\$\{title\(controlSize\)\} · \$\{height\(controlSize\)\}px`\}/);
+  assert.match(source, /label=\{title\(emphasis\)\}/);
 });

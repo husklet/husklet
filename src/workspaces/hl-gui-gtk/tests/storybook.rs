@@ -230,6 +230,87 @@ mod unix {
             assert!(realized_window.width() <= 600, "{story} narrow capture remained wide");
             assert_contained(&root, story);
             capture_story(&realized_window, &format!("{story} narrow"));
+            if story == "Button" {
+                let document = descendants::<gtk::ScrolledWindow>(&root)
+                    .into_iter()
+                    .filter(|scroll| scroll.has_css_class("hl-scroll"))
+                    .max_by(|left, right| left.vadjustment().upper().total_cmp(&right.vadjustment().upper()))
+                    .expect("Button document owns a scrolling viewport");
+                let horizontal = document.hadjustment();
+                let wide_labels = descendants::<gtk::Label>(&root)
+                    .into_iter()
+                    .filter(|label| label.width() > 600)
+                    .map(|label| {
+                        (
+                            label.text().to_string(),
+                            label.width(),
+                            label.measure(gtk::Orientation::Horizontal, -1),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                assert!(
+                    horizontal.upper() <= horizontal.page_size() + 1.0,
+                    "600px Button page widened to {}px for a {}px viewport; wide labels: {wide_labels:?}",
+                    horizontal.upper(),
+                    horizontal.page_size()
+                );
+                let allocated = descendants::<gtk::Button>(&root)
+                    .into_iter()
+                    .filter(|button| button.is_mapped() && !button.has_css_class("hl-listitembutton"))
+                    .filter_map(|button| {
+                        button_caption(&button)
+                            .zip(button.compute_bounds(&root))
+                            .map(|(caption, bounds)| (Some(caption), bounds))
+                    })
+                    .collect::<Vec<_>>();
+                assert!(!allocated.is_empty(), "Button document has no mapped controls");
+                for (caption, bounds) in &allocated {
+                    assert!(
+                        bounds.x() >= 16.0 && bounds.x() + bounds.width() <= 584.0,
+                        "Button {caption:?} escaped 16px narrow insets: {bounds:?}"
+                    );
+                }
+                for caption in ["Plain", "Warning"] {
+                    assert!(
+                        allocated.iter().any(|(label, bounds)| {
+                            label.as_deref() == Some(caption) && bounds.x() + bounds.width() <= 584.0
+                        }),
+                        "rightmost {caption} specimen is absent or clipped"
+                    );
+                }
+                for (class, expected) in [("size-small", 28), ("size-medium", 36), ("size-large", 44)] {
+                    let heights = descendants::<gtk::Button>(&root)
+                        .into_iter()
+                        .filter(|button| button.has_css_class(class) && !button.has_css_class("hl-listitembutton"))
+                        .map(|button| button.height())
+                        .collect::<Vec<_>>();
+                    assert!(
+                        heights.iter().all(|height| *height == expected),
+                        "narrow Button {class} specimens allocated {heights:?}, expected {expected}px"
+                    );
+                }
+                capture_story(&realized_window, "Button narrow top");
+                let vertical = document.vadjustment();
+                let end = (vertical.upper() - vertical.page_size()).max(0.0);
+                vertical.set_value(end / 2.0);
+                settle_toolkit();
+                capture_story(&realized_window, "Button narrow middle");
+                vertical.set_value(end);
+                settle_toolkit();
+                assert!(
+                    find::<gtk::Label>(&root, |label| label.text() == "API").height() > 0,
+                    "Button API remains reachable at the end of the document"
+                );
+                assert!(
+                    find::<gtk::Expander>(&root, |expander| { expander.label().as_deref() == Some("Playground") })
+                        .height()
+                        > 0,
+                    "Button Playground remains reachable after API"
+                );
+                capture_story(&realized_window, "Button narrow bottom");
+                vertical.set_value(0.0);
+                settle_toolkit();
+            }
             realized_window.set_size_request(1_200, 800);
             realized_window.set_default_size(1_200, 800);
             root.allocate(1_200, 800, -1, None);

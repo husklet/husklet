@@ -6,7 +6,6 @@ import {
   FormControl,
   FormHelperText,
   FormLabel,
-  Grid,
   Heading,
   Section,
   Table,
@@ -33,17 +32,25 @@ const INHERITED_BEHAVIOR = new Set(['destructive', 'visible', 'tooltip']);
 export function ComponentDocument({
   name,
   summary,
+  contentWidth,
   children,
 }: {
   name: string;
   summary: string;
+  contentWidth?: React.ComponentProps<typeof Column>['width'];
   children: React.ReactNode;
 }) {
   return (
     <Column width="fill" pad={4} gap={4}>
       <Heading label={name} scale="display" />
-      <Text label={summary} color="text-dim" wrap />
-      {children}
+      <Text label={summary} color="text-dim" width={contentWidth ?? 'fill'} wrap />
+      {contentWidth ? (
+        <Column gap={4} width={contentWidth}>
+          {children}
+        </Column>
+      ) : (
+        children
+      )}
     </Column>
   );
 }
@@ -85,9 +92,9 @@ export function DocumentationSection({
 
 export function SpecimenGrid({ children }: { children: React.ReactNode }) {
   return (
-    <Grid columns={2} gap={3} width="fill">
+    <Column gap={3} width="fill">
       {children}
-    </Grid>
+    </Column>
   );
 }
 
@@ -130,18 +137,18 @@ function ApiTable({ rows }: { rows: ControlRow[] }) {
     <Table width="fill">
       <TableHead>
         <TableRow>
-          <TableCell label="Property" width={{ chars: 16 }} wrap ellipsize={false} />
-          <TableCell label="Type" width={{ chars: 20 }} wrap ellipsize={false} />
-          <TableCell label="Default" width={{ chars: 12 }} wrap ellipsize={false} />
+          <TableCell label="Property" width={{ chars: 12 }} wrap ellipsize={false} />
+          <TableCell label="Type" width={{ chars: 13 }} wrap ellipsize={false} />
+          <TableCell label="Default" width={{ chars: 8 }} wrap ellipsize={false} />
           <TableCell label="Description" width="fill" wrap ellipsize={false} />
         </TableRow>
       </TableHead>
       <TableBody>
         {rows.map((row) => (
           <TableRow key={row.name}>
-            <TableCell label={row.name} width={{ chars: 16 }} wrap ellipsize={false} />
-            <TableCell label={publicType(row)} width={{ chars: 20 }} wrap ellipsize={false} />
-            <TableCell label={defaultValue(row)} width={{ chars: 12 }} wrap ellipsize={false} />
+            <TableCell label={row.name} width={{ chars: 12 }} wrap ellipsize={false} />
+            <TableCell label={publicType(row)} width={{ chars: 13 }} wrap ellipsize={false} />
+            <TableCell label={defaultValue(row)} width={{ chars: 8 }} wrap ellipsize={false} />
             <TableCell label={row.note} width="fill" wrap ellipsize={false} />
           </TableRow>
         ))}
