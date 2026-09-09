@@ -1,5 +1,6 @@
 import React from 'react';
 import {
+  Code,
   Column,
   Expander,
   Heading,
@@ -15,6 +16,7 @@ import {
   ComponentDocument,
   DocumentationSection,
   SpecimenGrid,
+  FieldSpecimen,
 } from './component-document.js';
 import { rows } from './editors.js';
 
@@ -33,7 +35,13 @@ export function IconButtonWorkbench() {
       name="IconButton"
       summary="Icon buttons expose a familiar action where space is constrained. Every icon still needs a concise accessible label and tooltip."
     >
-      <Block title="Basic">
+      <Block title="Overview">
+        <Code
+          value={
+            '<IconButton icon="view-refresh-symbolic" label="Refresh" tooltip="Refresh" onInvoke={refresh} />'
+          }
+          wrap
+        />
         <Row gap={2} wrap>
           <IconButton
             icon="view-refresh-symbolic"
@@ -45,12 +53,6 @@ export function IconButtonWorkbench() {
           <Text label={event} color="text-dim" />
         </Row>
       </Block>
-      <DocumentationSection title="API">
-        <ApiReference
-          example={'<IconButton icon="view-refresh-symbolic" label="Refresh" onInvoke={refresh} />'}
-          rows={rows('IconButton')}
-        />
-      </DocumentationSection>
       <SpecimenGrid>
         <Block title="Sizes">
           <Row gap={2} wrap>
@@ -87,33 +89,41 @@ export function IconButtonWorkbench() {
             ))}
           </Row>
         </Block>
-        <Block title="Tones">
-          <Row gap={2} wrap>
-            {(['neutral', 'accent', 'positive', 'warning', 'danger'] as const).map((value) => (
-              <Column key={value} gap={1} align="center">
-                <IconButton
-                  icon="edit-copy-symbolic"
-                  label={`Copy, ${value}`}
-                  tooltip={title(value)}
-                  tone={value}
-                  align="center"
-                />
-                <Text label={title(value)} color="text-dim" />
-              </Column>
-            ))}
-          </Row>
-        </Block>
         <Block title="States">
-          <Row gap={4} wrap>
+          <Row gap={3} wrap>
             <Column gap={1} align="center">
               <IconButton
                 icon="view-refresh-symbolic"
-                label="Refresh enabled"
-                tooltip="Refresh enabled"
+                label="Refresh"
+                tooltip="Resting"
+                variant="outline"
                 tone="accent"
                 align="center"
               />
-              <Text label="Enabled" color="text-dim" />
+              <Text label="Rest" color="text-dim" />
+            </Column>
+            <Column gap={1} align="center">
+              <IconButton
+                icon="view-refresh-symbolic"
+                label="Refresh"
+                tooltip="Keyboard focus"
+                variant="outline"
+                tone="accent"
+                align="center"
+                onFocus={() => setEvent('Keyboard focus visible')}
+              />
+              <Text label="Focus" color="text-dim" />
+            </Column>
+            <Column gap={1} align="center">
+              <IconButton
+                icon="view-refresh-symbolic"
+                label="Refresh"
+                tooltip="Pressed"
+                variant="filled"
+                tone="accent"
+                align="center"
+              />
+              <Text label="Pressed" color="text-dim" />
             </Column>
             <Column gap={1} align="center">
               <IconButton
@@ -126,6 +136,11 @@ export function IconButtonWorkbench() {
               <Text label="Disabled" color="text-dim" />
             </Column>
           </Row>
+          <Text
+            label="Focus is a persistent keyboard ring; pressed feedback uses the filled surface during activation."
+            color="text-dim"
+            wrap
+          />
         </Block>
       </SpecimenGrid>
       <Block title="Accessibility">
@@ -134,21 +149,26 @@ export function IconButtonWorkbench() {
           wrap
         />
       </Block>
+      <DocumentationSection title="API">
+        <ApiReference rows={rows('IconButton')} />
+      </DocumentationSection>
       <Expander label="Playground" expanded={false} width="fill">
         <Column gap={2} pad={2}>
           <Row gap={3} wrap align="end">
-            <Text label="Variant" color="text-dim" />
-            <Select
-              value={variant}
-              choices={choices(['filled', 'outline', 'ghost', 'plain'])}
-              onChange={(report) => setVariant(report.value as Variant)}
-            />
-            <Text label="Size" color="text-dim" />
-            <Select
-              value={size}
-              choices={choices(['small', 'medium', 'large'])}
-              onChange={(report) => setSize(report.value as Size)}
-            />
+            <FieldSpecimen label="Variant" width={{ chars: 14 }}>
+              <Select
+                value={variant}
+                choices={choices(['filled', 'outline', 'ghost', 'plain'])}
+                onChange={(report) => setVariant(report.value as Variant)}
+              />
+            </FieldSpecimen>
+            <FieldSpecimen label="Size" width={{ chars: 12 }}>
+              <Select
+                value={size}
+                choices={choices(['small', 'medium', 'large'])}
+                onChange={(report) => setSize(report.value as Size)}
+              />
+            </FieldSpecimen>
             <Text label="Tone" color="text-dim" />
             <Select
               value={tone}

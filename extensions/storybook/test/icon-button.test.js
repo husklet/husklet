@@ -24,6 +24,12 @@ test('IconButton owns a focused document with square semantic sizes and accessib
       `missing ${size} size`,
     );
   }
+  for (const variant of ['Filled', 'Outline', 'Ghost', 'Plain']) {
+    assert(
+      props.some((value) => value.Variant?.Variant === variant),
+      `missing ${variant} variant`,
+    );
+  }
   assert(
     props.every((value) => value.Label?.Text),
     'an icon-only action has no accessible label',
@@ -43,4 +49,13 @@ test('IconButton owns a focused document with square semantic sizes and accessib
   for (const heading of ['Property', 'Type', 'Default', 'Description']) {
     assert(cellLabels.includes(heading), `IconButton API is missing ${heading}`);
   }
+  const headings = cellLabels.filter((label) =>
+    ['IconButton', 'Overview', 'Sizes', 'Variants', 'States', 'Accessibility', 'API'].includes(
+      label,
+    ),
+  );
+  assert(headings.indexOf('Overview') < headings.indexOf('Sizes'));
+  assert(headings.indexOf('States') < headings.indexOf('API'));
+  assert(cellLabels.includes('Focus'));
+  assert(cellLabels.includes('Pressed'));
 });

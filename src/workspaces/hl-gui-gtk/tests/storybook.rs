@@ -252,6 +252,13 @@ mod unix {
                     "IconButton {class} specimens allocated {sizes:?}, expected {expected}px square"
                 );
             }
+            let focus = find::<gtk::Button>(&root, |button| {
+                button.tooltip_text().as_deref() == Some("Keyboard focus")
+            });
+            assert!(focus.grab_focus(), "IconButton accepts deterministic keyboard focus");
+            settle_toolkit();
+            assert!(focus.has_focus(), "IconButton exposes its native focus state");
+            let _ = surface.reports().drain();
         }
         let toggle_before = if story == "ToggleButton" {
             let toggle = find::<gtk::ToggleButton>(&root, |button| {
