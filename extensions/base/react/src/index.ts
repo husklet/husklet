@@ -59,6 +59,8 @@ interface RenderHandle {
   rowProvider: RenderOptions['rows'];
   rowActive: Set<RowTask>;
   rowQueue: RowRequest[];
+  /** Highest host revision observed for each source on this surface. */
+  rowVersions: Map<number, number>;
 }
 interface RowTask {
   request: RowRequest;
@@ -124,6 +126,19 @@ function deliverRows(
   const handle = request.slot === undefined ? undefined : registry?.slots.get(request.slot);
   const provider = handle?.rowProvider;
   if (!registry || !handle || !provider) return false;
+  const latestVersion = handle.rowVersions.get(request.source);
+  if (latestVersion !== undefined && request.version < latestVersion) return true;
+  if (latestVersion === undefined || request.version > latestVersion) {
+    handle.rowVersions.set(request.source, request.version);
+    handle.rowQueue = handle.rowQueue.filter(
+      (candidate) => candidate.source !== request.source || candidate.version >= request.version,
+    );
+    for (const task of handle.rowActive) {
+      if (task.request.source === request.source && task.request.version < request.version) {
+        task.controller.abort(new Error('row source version was superseded'));
+      }
+    }
+  }
   const sameWindow = (candidate: RowRequest) =>
     candidate.source === request.source &&
     candidate.version === request.version &&
@@ -276,6 +291,7 @@ export function render(
     rowProvider: rows,
     rowActive: new Set<RowTask>(),
     rowQueue: [],
+    rowVersions: new Map<number, number>(),
   } as unknown as RenderHandle;
   registry.handles.add(handle);
 
@@ -343,6 +359,7 @@ export function render(
     },
     setRowProvider(provider: RowProvider | null) {
       handle.rowQueue.length = 0;
+      handle.rowVersions.clear();
       for (const task of handle.rowActive) {
         task.controller.abort(new Error('row provider was replaced'));
       }
@@ -353,6 +370,7 @@ export function render(
       if (closed) return withdrawal ?? Promise.resolve();
       closed = true;
       handle.rowQueue.length = 0;
+      handle.rowVersions.clear();
       for (const task of handle.rowActive) task.controller.abort(new Error('surface closed'));
       handle.rowActive.clear();
       reconciler.updateContainer(null, container, null, null);

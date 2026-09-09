@@ -455,6 +455,85 @@ test('a newer request cancels obsolete work for the same row window', async () =
   stage.close();
 });
 
+test('a newer source version cancels every stale range and rejects late stale requests', async () => {
+  const stage = await host();
+  const session = await connect({ path: stage.socket });
+  const seen = [];
+  const surface = render(h(DataTable, { source: 3, schema: [] }), session, {
+    rows: (request, { signal }) => {
+      seen.push({ request, signal });
+      if (request.version === 2) {
+        return [{ key: request.range.start, cells: [{ Text: 'current' }] }];
+      }
+      return new Promise((_resolve, reject) => {
+        signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+      });
+    },
+  });
+  await surface.ready;
+  for (let id = 1; id <= 5; id += 1) {
+    await stage.push({
+      id,
+      source: 3,
+      version: 1,
+      range: { start: id * 128, count: 128 },
+      sort: null,
+      filter: null,
+      slot: surface.slot,
+    });
+  }
+  await until(() => seen.length === 4);
+
+  await stage.push({
+    id: 6,
+    source: 3,
+    version: 2,
+    range: { start: 0, count: 128 },
+    sort: null,
+    filter: null,
+    slot: surface.slot,
+  });
+  await until(() => seen.some(({ request }) => request.version === 2));
+  assert.equal(
+    seen.filter(({ request }) => request.version === 1).length,
+    4,
+    'the queued stale range never reaches extension code',
+  );
+  assert.equal(
+    seen.filter(({ request }) => request.version === 1).every(({ signal }) => signal.aborted),
+    true,
+  );
+  await until(() =>
+    stage.calls.some(
+      (call) => call.call === 'source_resize_at' && call.with.mutation.Window?.version === 2,
+    ),
+  );
+
+  await stage.push({
+    id: 7,
+    source: 3,
+    version: 1,
+    range: { start: 256, count: 128 },
+    sort: null,
+    filter: null,
+    slot: surface.slot,
+  });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(seen.length, 5, 'a delayed stale host request is consumed without querying');
+
+  await surface.source({ Length: { source: 3, version: 3, rows: 0 } });
+  assert.equal(
+    stage.calls.some(
+      (call) => call.call === 'source_resize_at' && call.with.mutation.Length?.version === 3,
+    ),
+    true,
+    'the same Unix session remains usable after cancellation and stale input',
+  );
+  await surface.close();
+  await session.close();
+  stage.close();
+});
+
 test('replacing a row provider cancels stale query work without blocking the new query', async () => {
   const stage = await host();
   const session = await connect({ path: stage.socket });
