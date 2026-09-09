@@ -258,7 +258,7 @@ test('the shipped entrypoint connects and renders the complete playground over a
     `selecting the interactive Button never crossed the socket; stderr=${stderr}`,
   );
   apply(live, buttonFrame.with.frame.patches);
-  const previewButton = node(buttonFrame.with.frame.patches, 'Button', 'Button');
+  const previewButton = node(buttonFrame.with.frame.patches, 'Button', 'Run task');
   assert.ok(previewButton, 'the selected Button preview is absent');
   for (const payload of [
     { interaction: 'key', trigger: 'Key', key: 'Enter', keycode: 36, pressed: true, modifiers: 0 },

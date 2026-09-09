@@ -66,6 +66,9 @@ import { RESOURCE_STATE_STORY, ResourceStateStory } from './resource-state.js';
 import { DRAG_REORDER_STORY, DragReorderStory } from './drag-reorder.js';
 import { ButtonWorkbench } from './button.js';
 import { IconButtonWorkbench } from './icon-button.js';
+import { EntryWorkbench } from './entry.js';
+import { SelectWorkbench } from './select.js';
+import { SwitchWorkbench } from './switch.js';
 
 const { useMemo, useRef, useState } = React;
 
@@ -173,6 +176,12 @@ export function Playground({
           <ButtonWorkbench />
         ) : selected === 'IconButton' ? (
           <IconButtonWorkbench />
+        ) : selected === 'Entry' ? (
+          <EntryWorkbench />
+        ) : selected === 'Select' ? (
+          <SelectWorkbench />
+        ) : selected === 'Switch' ? (
+          <SwitchWorkbench />
         ) : (
           <Preview
             key={`preview-${selected}`}

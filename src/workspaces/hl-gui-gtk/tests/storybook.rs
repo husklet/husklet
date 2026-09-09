@@ -18,6 +18,9 @@ mod unix {
     const STORIES: &[&str] = &[
         "Button",
         "IconButton",
+        "Entry",
+        "Select",
+        "Switch",
         "Extension acquisition",
         "Validated settings form",
         "Keyboard and semantic actions",
@@ -685,6 +688,24 @@ mod unix {
             }
             "IconButton" => {
                 find::<gtk::Button>(root, |button| button.tooltip_text().as_deref() == Some("Refresh")).emit_clicked();
+            }
+            "Entry" => {
+                let entry = find::<gtk::Entry>(root, |entry| {
+                    entry.tooltip_text().as_deref() == Some("Extension name")
+                });
+                entry.set_text("rendered-entry");
+            }
+            "Select" => {
+                let choice = find::<gtk::ToggleButton>(root, |button| {
+                    button.tooltip_text().as_deref() == Some("Default shell")
+                });
+                assert!(choice.grab_focus(), "Select accepts keyboard focus");
+            }
+            "Switch" => {
+                find::<gtk::Switch>(root, |switch| {
+                    switch.tooltip_text().as_deref() == Some("Restore panes on launch")
+                })
+                .set_active(false);
             }
             "DataTable" => {
                 let entry = find::<gtk::Entry>(root, |entry| entry.text().starts_with("record-"));

@@ -44,6 +44,8 @@ export function ButtonWorkbench() {
             enabled={enabled}
             onInvoke={() => setEvent(`${label} invoked`)}
             onFocus={() => setEvent(`${label} focused`)}
+            onKey={() => setEvent('Key received')}
+            onPointer={() => setEvent('Pointer received')}
           />
           <InlineMessage label={event} tone="neutral" />
         </Row>
