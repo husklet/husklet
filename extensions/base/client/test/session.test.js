@@ -1671,6 +1671,92 @@ test('real Unix streaming abort interrupts a stalled consumer and cancels before
   }
 });
 
+test('real Unix helper EOF releases an idle dynamic input iterator without cancellation', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-lsp-eof-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const containerId = 'c'.repeat(64);
+  const executionId = 'e'.repeat(32);
+  const calls = [];
+  const connections = new Set();
+  const server = net.createServer((socket) => {
+    connections.add(socket);
+    socket.on('close', () => connections.delete(socket));
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.kind !== KIND.request || frame.channel !== 2) continue;
+        calls.push(frame.payload.call);
+        const payload =
+          frame.payload.call === 'container_exec'
+            ? { reply: 'identity', with: executionId }
+            : frame.payload.call === 'execution_output'
+              ? {
+                  reply: 'execution_output',
+                  with: { entries: [], next: 0, more: false, eof: true, gap: false },
+                }
+              : frame.payload.call === 'execution_inspect'
+                ? {
+                    reply: 'execution',
+                    with: {
+                      id: executionId,
+                      container_id: containerId,
+                      running: false,
+                      exit_code: 0,
+                      pid: 22,
+                      command: ['language-helper'],
+                      user: 'developer',
+                    },
+                  }
+                : {
+                    reply: 'workspace',
+                    with: { name: 'language', image: 'toolbox', architecture: 'amd64' },
+                  };
+        socket.write(encode({ channel: 2, kind: KIND.response, payload }));
+      }
+    });
+    socket.write(
+      encode({
+        channel: CONTROL,
+        kind: KIND.open,
+        payload: {
+          protocol: 1,
+          peer: 'fixture',
+          granted: ['containers:execute', 'containers:input', 'containers:read', 'workspaces:read'],
+        },
+      }),
+    );
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    const host = workspace(session);
+    async function* idleMessages() {
+      await new Promise(() => {});
+    }
+    const result = await Promise.race([
+      host.containers.execStreaming(
+        containerId,
+        3,
+        { command: ['language-helper'], input: idleMessages() },
+        async () => {},
+      ),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('helper EOF left stdin lifecycle stuck')), 250),
+      ),
+    ]);
+    assert.equal(result.execution.exit_code, 0);
+    assert.deepEqual(calls, ['container_exec', 'execution_output', 'execution_inspect']);
+    assert.equal(calls.includes('execution_close_input'), false);
+    assert.equal(calls.includes('execution_cancel'), false);
+    assert.equal((await host.info()).name, 'language');
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('real Unix output iteration rejects a stalled continuation without looping or poisoning the session', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-output-stall-'));
   const socketPath = path.join(directory, 'host.sock');

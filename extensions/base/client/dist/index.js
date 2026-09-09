@@ -790,8 +790,15 @@ export function workspace(session, { signal } = {}) {
                 }
                 let chunks = 0;
                 let bytes = 0;
-                for await (const chunk of source) {
+                const iterator = typeof source[Symbol.asyncIterator] === 'function'
+                    ? source[Symbol.asyncIterator]()
+                    : source[Symbol.iterator]();
+                for (;;) {
                     requireOutputActive(signal);
+                    const item = await outputStep(() => iterator.next(), signal);
+                    if (item.done)
+                        break;
+                    const chunk = item.value;
                     const contents = exactExecutionInput(chunk);
                     await api.containers.writeExecutionStdin(executionId, contents);
                     chunks += 1;
@@ -907,7 +914,11 @@ export function workspace(session, { signal } = {}) {
                     });
                 let phase = 'output';
                 const streaming = new AbortController();
-                const stopStreaming = () => streaming.abort(signal?.reason);
+                const inputStreaming = new AbortController();
+                const stopStreaming = () => {
+                    streaming.abort(signal?.reason);
+                    inputStreaming.abort(signal?.reason);
+                };
                 if (signal?.aborted)
                     stopStreaming();
                 else
@@ -917,6 +928,7 @@ export function workspace(session, { signal } = {}) {
                     if (onStarted)
                         await outputStep(() => onStarted(executionId), streaming.signal);
                     const consumeOutput = async () => {
+                        let complete = false;
                         try {
                             for await (const page of api.containers.executionOutputPages(executionId, {
                                 limit: pageLimit,
@@ -925,9 +937,14 @@ export function workspace(session, { signal } = {}) {
                             })) {
                                 await outputStep(() => onPage(page), streaming.signal);
                             }
+                            complete = true;
                         }
                         catch (cause) {
                             throw { phase: 'output', cause };
+                        }
+                        finally {
+                            if (complete)
+                                inputStreaming.abort('execution output reached EOF');
                         }
                     };
                     const sendInput = async () => {
@@ -935,11 +952,16 @@ export function workspace(session, { signal } = {}) {
                             return;
                         try {
                             await api.containers.pipeExecutionStdin(executionId, input, {
-                                signal: streaming.signal,
+                                signal: inputStreaming.signal,
                                 close: true,
                             });
                         }
                         catch (cause) {
+                            if (inputStreaming.signal.aborted &&
+                                !streaming.signal.aborted &&
+                                cause instanceof Error &&
+                                cause.name === 'AbortError')
+                                return;
                             throw { phase: 'input', cause };
                         }
                     };
@@ -948,6 +970,7 @@ export function workspace(session, { signal } = {}) {
                     }
                     catch (failure) {
                         streaming.abort();
+                        inputStreaming.abort();
                         if (failure !== null &&
                             typeof failure === 'object' &&
                             'phase' in failure &&
