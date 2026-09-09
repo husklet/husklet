@@ -54,11 +54,7 @@ const IMAGE_VERBS: { key: ImageVerb; label: string }[] = [
 ];
 
 const COPY_WIDTH = { maximum: { chars: 54 } } as const;
-const CATALOGUE_CARD_WIDTH = {
-  minimum: { chars: 28 },
-  maximum: { chars: 42 },
-} as const;
-const PAGE_WIDTH = { maximum: { chars: 96 } } as const;
+const PAGE_WIDTH = { maximum: { chars: 110 } } as const;
 const FILESYSTEM_VERBS = [
   { key: 'read', label: 'View contents', meaning: 'read' },
   { key: 'write', label: 'Modify existing contents', meaning: 'write' },
@@ -122,6 +118,15 @@ function catalogueCompatibility(entry: ExtensionCatalogueEntry, architecture: st
     compatible: true,
     label: `Compatible${entry.protocol === undefined ? '' : ` · protocol ${entry.protocol}`}${entry.architectures === undefined ? '' : ` · ${architecture}`}`,
   } as const;
+}
+
+function catalogueTrust(entry: ExtensionCatalogueEntry) {
+  const firstParty =
+    entry.publisher.trim().toLowerCase() === 'husklet' &&
+    entry.source.startsWith('husklet:first-party/');
+  return firstParty
+    ? { label: 'Husklet first-party', tone: 'accent' as const }
+    : { label: `Publisher · ${entry.publisher}`, tone: 'neutral' as const };
 }
 
 function FilesystemConsent({
@@ -690,24 +695,25 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
     <Scroll grow width="fill" height="fill">
       <Container pad={4} gap={3} width={PAGE_WIDTH}>
         <Heading label="Extensions" scale="title" />
-        <Text label="Add trusted tools and control their workspace access." color="text-dim" wrap />
+        <Text
+          label="Discover tools, review their access, and manage what runs in this workspace."
+          color="text-dim"
+          wrap
+        />
         <Column gap={3} width="fill">
           <Column gap={2} width="fill">
             {!acquisition && (
-              <Row gap={1} wrap>
+              <Row gap={1} width="fill" align="center" justify="start" wrap>
                 <Heading label="Discover" scale="caption" grow={false} align="start" />
                 {catalogueState === 'ready' && availableCatalogue.length > 0 ? (
-                  <Text
-                    label={countLabel(availableCatalogue.length, 'available extension')}
-                    color="text-dim"
-                  />
+                  <Badge label={countLabel(availableCatalogue.length, 'available extension')} />
                 ) : null}
               </Row>
             )}
             {!acquisition && (
               <Column gap={2}>
                 <Text
-                  label="Curated for Husklet. Nothing is installed until you review its exact access."
+                  label="Browse available tools. Husklet inspects the image first; nothing is installed until you approve its exact access."
                   color="text-dim"
                   width={COPY_WIDTH}
                   wrap
@@ -733,13 +739,9 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                   <Row gap={1} width="fill" wrap>
                     {availableCatalogue.map((entry) => {
                       const compatibility = catalogueCompatibility(entry, workspaceArchitecture);
+                      const trust = catalogueTrust(entry);
                       return (
-                        <Card
-                          key={entry.id}
-                          grow={false}
-                          width={CATALOGUE_CARD_WIDTH}
-                          variant="outline"
-                        >
+                        <Card key={entry.id} grow={false} width="fill" variant="outline">
                           <CardHeader
                             label={entry.title}
                             detail={`${entry.publisher} · Version ${entry.version}`}
@@ -748,16 +750,33 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                           />
                           <CardContent gap={1}>
                             <Text label={entry.description} color="text-dim" wrap />
-                            <Text
-                              label={
-                                compatibility.compatible === true
-                                  ? 'Compatible with this workspace'
-                                  : compatibility.label
-                              }
-                              color={compatibility.compatible === false ? 'warning' : 'text-dim'}
-                              wrap
-                            />
-                            <Row>
+                            <Row gap={1} wrap>
+                              <Badge label={trust.label} tone={trust.tone} />
+                              <Badge
+                                label={
+                                  compatibility.compatible === true
+                                    ? 'Workspace compatible'
+                                    : compatibility.compatible === false
+                                      ? 'Incompatible'
+                                      : 'Compatibility undeclared'
+                                }
+                                tone={
+                                  compatibility.compatible === true
+                                    ? 'positive'
+                                    : compatibility.compatible === false
+                                      ? 'danger'
+                                      : 'warning'
+                                }
+                              />
+                            </Row>
+                            {compatibility.compatible !== true ? (
+                              <Text
+                                label={compatibility.label}
+                                color={compatibility.compatible === false ? 'warning' : 'text-dim'}
+                                wrap
+                              />
+                            ) : null}
+                            <Row gap={1} align="center" justify="start" wrap>
                               <Button
                                 label={`Review ${entry.title}`}
                                 variant="filled"
@@ -765,16 +784,26 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                                 enabled={!busy && compatibility.compatible !== false}
                                 onInvoke={() => inspect(entry.reference)}
                               />
+                              <Text label="Review access before install" color="text-dim" />
                             </Row>
-                            <Expander label="Technical details" expanded={false}>
+                            <Expander label="Trust & compatibility" expanded={false}>
                               <Column gap={1}>
+                                <Text
+                                  label={`Published by ${entry.publisher}`}
+                                  color="text-dim"
+                                  wrap
+                                />
+                                <Text
+                                  label={`Catalogue source · ${entry.source}`}
+                                  color="text-dim"
+                                  wrap
+                                />
                                 <Text
                                   label={`Image · ${entry.reference}`}
                                   color="text-dim"
                                   tooltip={entry.reference}
                                   wrap
                                 />
-                                <Text label={`Source · ${entry.source}`} color="text-dim" wrap />
                                 <Text
                                   label={`Protocol ${entry.protocol ?? 'unavailable'} · ${entry.architectures?.join(', ') || 'architecture unavailable'}`}
                                   color="text-dim"
@@ -1270,10 +1299,10 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
             )}
           </Column>
           <Column gap={2} width="fill">
-            <Row gap={1} wrap>
+            <Row gap={1} width="fill" align="center" justify="start" wrap>
               <Heading label="Installed extensions" scale="caption" grow={false} align="start" />
               {inventoryState !== 'loading' ? (
-                <Text label={countLabel(installed.length, 'extension')} color="text-dim" />
+                <Badge label={countLabel(installed.length, 'extension')} />
               ) : null}
               <IconButton
                 label="Refresh installed extensions"
@@ -1328,10 +1357,10 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                         <Row gap={1} wrap>
                           <Badge
                             label={capitalize(extensionState(extension))}
-                            tone={extension.status.startsWith('fault:') ? 'danger' : 'neutral'}
+                            tone={extension.status.startsWith('fault:') ? 'danger' : 'positive'}
                           />
                           {extension.name === 'top' ? (
-                            <Text label="Required workspace manager" color="text-dim" />
+                            <Badge label="Built in · workspace manager" tone="accent" />
                           ) : null}
                         </Row>
                         <ExtensionFault extension={extension} />
@@ -1391,7 +1420,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                         {extension.name === 'top' ? (
                           <InstalledPermissionSummary extension={extension} />
                         ) : (
-                          <Expander label="Manage extension" expanded={false}>
+                          <Expander label="Permissions & management" expanded={false}>
                             <Column gap={1}>
                               <InstalledPermissionSummary extension={extension} />
                               <Separator orientation="horizontal" />

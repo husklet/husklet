@@ -608,7 +608,10 @@ test('Top owns workspace settings and extension management in the same tab', asy
     'Husklet · Version 2.0.0',
   );
   assert.equal(labelled(stage, 'Version 2.0.0'), undefined, 'the header version is not repeated');
-  assert.ok(labelled(stage, 'Technical details'));
+  assert.ok(labelled(stage, 'Trust & compatibility'));
+  assert.ok(labelled(stage, 'Husklet first-party'));
+  assert.ok(labelled(stage, 'Compatibility undeclared'));
+  assert.ok(labelled(stage, 'Review access before install'));
   assert.deepEqual(ancestorTags(stage, 'Review Component playground').slice(0, 5), [
     'Row',
     'CardContent',
@@ -622,7 +625,7 @@ test('Top owns workspace settings and extension management in the same tab', asy
     'extension cards fill their responsive column instead of overriding width with start alignment',
   );
   assert.deepEqual(ancestorProperty(stage, 'Component playground', 'Card', 'Width'), {
-    Bounds: { minimum: { Chars: 28 }, maximum: { Chars: 42 } },
+    Length: 'Fill',
   });
   assert.deepEqual(
     taggedProperty(stage, 'Refresh installed extensions', 'IconButton', 'Icon'),
@@ -1833,7 +1836,7 @@ test('Top is visibly required and offers no self-disable or self-removal trap', 
   );
   await settled();
 
-  assert.ok(labelled(stage, 'Required workspace manager'));
+  assert.ok(labelled(stage, 'Built in · workspace manager'));
   assert.deepEqual(property(stage, 'top', 'Detail'), { Text: 'Version 0.1.0' });
   assert.deepEqual(property(stage, 'top', 'Tooltip'), {
     Text: `Installed image sha256:${'a'.repeat(64)}`,
@@ -1884,7 +1887,7 @@ test('installed extensions expose truthful enabled, disabled, fault and retry st
     }),
   );
   await settled();
-  assert.ok(labelled(stage, 'Manage extension'));
+  assert.ok(labelled(stage, 'Permissions & management'));
   assert.ok(
     ancestorTags(stage, 'Disable').includes('Expander'),
     'secondary lifecycle controls stay inside one compact management disclosure',
