@@ -96,6 +96,7 @@ test('Postgres browser streams credential-backed rows over real Unix framing', a
   try {
     const session = await connect({ path: socketPath });
     const rows = [];
+    let liveExecution;
     const result = await workspace(session).containers.execJsonLines(
       containerId,
       7,
@@ -105,6 +106,9 @@ test('Postgres browser streams credential-backed rows over real Unix framing', a
         credentials: [['PGPASSWORD', 'postgres.password']],
         pageLimit: 1,
         maxLineBytes: 1024,
+        onStarted: async (id) => {
+          liveExecution = await workspace(session).containers.execution(id);
+        },
       },
       async (value) => {
         rows.push(value);
@@ -115,6 +119,7 @@ test('Postgres browser streams credential-backed rows over real Unix framing', a
     assert.equal(result.lines, 2);
     assert.equal(result.executionId, executionId);
     assert.equal(result.execution.exit_code, 0);
+    assert.equal(liveExecution.id, executionId);
     assert.deepEqual(requests, [
       {
         call: 'container_exec_credential',
@@ -128,6 +133,7 @@ test('Postgres browser streams credential-backed rows over real Unix framing', a
           working_directory: null,
         },
       },
+      { call: 'execution_inspect', with: { id: executionId } },
       { call: 'execution_output', with: { id: executionId, after: 0, limit: 1 } },
       { call: 'execution_output', with: { id: executionId, after: 1, limit: 1 } },
       { call: 'execution_inspect', with: { id: executionId } },

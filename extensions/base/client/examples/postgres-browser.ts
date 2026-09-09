@@ -60,6 +60,10 @@ try {
         cancelSignal: 'SIGINT',
         pageLimit: 32,
         maxLineBytes: 1024 * 1024,
+        onStarted: (id) => {
+          // Make the live identity available to Stop/Inspect UI immediately, not after psql exits.
+          executionId = id;
+        },
       },
       (value) => {
         rows += 1;

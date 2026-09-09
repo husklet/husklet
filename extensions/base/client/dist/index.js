@@ -690,9 +690,11 @@ export function workspace(session, { signal } = {}) {
                     throw new ExecutionOperationError(executionId, phase, cause, execution);
                 }
             },
-            execStreaming: async (id, generation, { command, environment = [], credentials, user, workingDirectory, pageLimit = 16, pollIntervalMs = 25, signal, cancelSignal = 'SIGTERM', cancelTimeoutMs = 1_000, }, onPage) => {
+            execStreaming: async (id, generation, { command, environment = [], credentials, user, workingDirectory, pageLimit = 16, pollIntervalMs = 25, signal, cancelSignal = 'SIGTERM', cancelTimeoutMs = 1_000, onStarted, }, onPage) => {
                 if (typeof onPage !== 'function')
                     throw new TypeError('streaming execution requires an output callback');
+                if (onStarted !== undefined && typeof onStarted !== 'function')
+                    throw new TypeError('streaming execution onStarted must be a function');
                 requireOutputActive(signal);
                 const executionId = credentials
                     ? await api.containers.execWithCredentials(id, generation, {
@@ -710,6 +712,8 @@ export function workspace(session, { signal } = {}) {
                     });
                 let phase = 'output';
                 try {
+                    if (onStarted)
+                        await onStarted(executionId);
                     for await (const page of api.containers.executionOutputPages(executionId, {
                         limit: pageLimit,
                         pollIntervalMs,

@@ -940,6 +940,8 @@ export interface WorkspaceApi {
             signal?: AbortSignal;
             cancelSignal?: string;
             cancelTimeoutMs?: number;
+            /** Runs once the host returns the live execution identity, before output is consumed. */
+            onStarted?: (executionId: string) => void | Promise<void>;
         }, onPage: (page: ExecutionOutputPage) => void | Promise<void>): Promise<{
             executionId: string;
             execution: ExecutionSummary;
@@ -958,6 +960,8 @@ export interface WorkspaceApi {
             signal?: AbortSignal;
             cancelSignal?: string;
             cancelTimeoutMs?: number;
+            /** Runs once the host returns the live execution identity, before output is consumed. */
+            onStarted?: (executionId: string) => void | Promise<void>;
         }): Promise<{
             executionId: string;
             execution: ExecutionSummary;
@@ -978,6 +982,8 @@ export interface WorkspaceApi {
             signal?: AbortSignal;
             cancelSignal?: string;
             cancelTimeoutMs?: number;
+            /** Runs once the host returns the live execution identity, before output is consumed. */
+            onStarted?: (executionId: string) => void | Promise<void>;
             onStderr?: (text: string) => void | Promise<void>;
         }, onValue: (value: unknown, line: number) => void | Promise<void>): Promise<{
             executionId: string;
