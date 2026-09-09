@@ -748,7 +748,7 @@ fn offers(prop: Prop) -> Vec<PropValue> {
         Prop::Icon => vec![PropValue::text(EMBLEM)],
         Prop::Uri => vec![PropValue::text(REFERENCE)],
         Prop::Enabled | Prop::Visible => vec![PropValue::Flag(false)],
-        Prop::Selected | Prop::Checked => vec![PropValue::Flag(true)],
+        Prop::Selected | Prop::Checked | Prop::Indeterminate => vec![PropValue::Flag(true)],
         Prop::Expanded
         | Prop::Busy
         | Prop::Secret

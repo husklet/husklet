@@ -9,71 +9,99 @@ import {
 } from './component-document.js';
 import { rows } from './editors.js';
 
-export function CheckboxWorkbench() {
-  const [checked, setChecked] = React.useState(true);
+const OPTIONS = ['Logs', 'Metrics', 'Traces'];
 
-  function toggle(value: unknown) {
-    const next = value === null ? !checked : Boolean(value);
-    setChecked(next);
+export function CheckboxWorkbench() {
+  const [selected, setSelected] = React.useState(() => new Set(['Logs']));
+  const all = selected.size === OPTIONS.length;
+  const mixed = selected.size > 0 && !all;
+
+  function toggleAll() {
+    setSelected(all ? new Set() : new Set(OPTIONS));
+  }
+
+  function toggleOption(option: string, value: unknown) {
+    setSelected((current) => {
+      const next = new Set(current);
+      if (value) next.add(option);
+      else next.delete(option);
+      return next;
+    });
   }
 
   return (
     <ComponentDocument
       name="Checkbox"
-      summary="Checkbox lets people include or exclude one option in a form. Its label and indicator form one compact click target."
+      summary="Checkbox represents an independent choice; indeterminate communicates a partially selected group."
     >
       <DocumentationSection title="Overview">
         <Column gap={1}>
           <Checkbox
-            label="Include diagnostics"
-            checked={checked}
-            tooltip="Include diagnostics"
-            onToggle={(report) => toggle(report.value)}
+            label={`Select all · ${selected.size} of ${OPTIONS.length}`}
+            checked={all}
+            indeterminate={mixed}
+            tooltip="Select all diagnostics"
+            onToggle={toggleAll}
           />
+          {OPTIONS.map((option) => (
+            <Checkbox
+              key={option}
+              label={option}
+              checked={selected.has(option)}
+              onToggle={(report) => toggleOption(option, report.value)}
+            />
+          ))}
           <InlineMessage
-            label={`Include diagnostics is ${checked ? 'checked' : 'unchecked'}.`}
+            label={
+              all
+                ? 'All diagnostics selected.'
+                : mixed
+                  ? 'Some diagnostics selected.'
+                  : 'No diagnostics selected.'
+            }
             tone="neutral"
           />
         </Column>
         <Code
-          value={
-            '<Checkbox label="Include diagnostics" checked={included} onToggle={setIncluded} />'
-          }
+          value="<Checkbox checked={all} indeterminate={some && !all} onToggle={selectAll} />"
           wrap
         />
       </DocumentationSection>
 
-      <DocumentationSection title="States">
+      <DocumentationSection title="State matrix">
         <SpecimenGrid>
-          <FieldSpecimen label="Enabled · unchecked">
-            <Checkbox label="Email updates" checked={false} />
-          </FieldSpecimen>
-          <FieldSpecimen label="Enabled · checked">
-            <Checkbox label="Email updates" checked />
-          </FieldSpecimen>
-          <FieldSpecimen label="Disabled · unchecked" helper="Unavailable under current policy">
-            <Checkbox label="Email updates" checked={false} enabled={false} />
-          </FieldSpecimen>
-          <FieldSpecimen label="Disabled · checked" helper="Required by current policy">
-            <Checkbox label="Email updates" checked enabled={false} />
-          </FieldSpecimen>
+          {[
+            ['Enabled · unchecked', false, false, true],
+            ['Enabled · checked', true, false, true],
+            ['Enabled · mixed', false, true, true],
+            ['Disabled · unchecked', false, false, false],
+            ['Disabled · checked', true, false, false],
+            ['Disabled · mixed', false, true, false],
+          ].map(([label, checked, indeterminate, enabled]) => (
+            <FieldSpecimen key={String(label)} label={String(label)}>
+              <Checkbox
+                label="Diagnostics"
+                checked={Boolean(checked)}
+                indeterminate={Boolean(indeterminate)}
+                enabled={Boolean(enabled)}
+              />
+            </FieldSpecimen>
+          ))}
         </SpecimenGrid>
       </DocumentationSection>
 
-      <DocumentationSection title="Keyboard and accessibility">
+      <DocumentationSection title="Interaction and accessibility">
         <Text
-          label="Tab moves focus to the labeled checkbox. Its native focus ring remains visible, and Space toggles the checked state. Keep the label clickable and describe the option, not the action."
+          label="Mixed is a presentation state, not a third submitted value. Clicking the label or pressing Space on a mixed parent resolves it to checked; the next activation clears it. Keep native focus visible and announce the selected count in the label."
           wrap
         />
       </DocumentationSection>
-
       <DocumentationSection title="Choose the right control">
         <Text
-          label="Use Checkbox for independent choices submitted together, Switch for a setting applied immediately, and Radio when exactly one option in a group may be selected."
+          label="Use Checkbox for independent choices, Switch for an immediately applied setting, and Radio for exactly one choice in a group."
           wrap
         />
       </DocumentationSection>
-
       <DocumentationSection title="API">
         <ApiReference rows={rows('Checkbox')} />
       </DocumentationSection>

@@ -33,6 +33,7 @@ const KIND = {
   Visible: 'flag',
   Selected: 'flag',
   Checked: 'flag',
+  Indeterminate: 'flag',
   Expanded: 'flag',
   Busy: 'flag',
   Secret: 'flag',

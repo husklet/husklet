@@ -148,6 +148,14 @@ fn prop_notes(tag: Tag) -> String {
                 "When false, prevents toggling. Explain the unmet prerequisite nearby.",
             ),
         ],
+        Tag::Checkbox => &[
+            ("Checked", "Controlled submitted boolean state."),
+            (
+                "Indeterminate",
+                "Partial-selection presentation. The producer resolves the next Toggle report to checked or unchecked.",
+            ),
+            ("Enabled", "When false, prevents toggling and focus-driven input."),
+        ],
         _ => &[],
     };
     let fields = notes
@@ -633,6 +641,13 @@ const PROPS: &[Entry] = &[
         note: "for a check button, a toggle button or a switch",
     },
     Entry {
+        prop: Prop::Indeterminate,
+        group: "state",
+        editor: "switch",
+        values: &["Flag"],
+        note: "partial selection state for a checkbox",
+    },
+    Entry {
         prop: Prop::Expanded,
         group: "state",
         editor: "switch",
@@ -871,9 +886,13 @@ impl Entry {
     fn default(&self) -> Option<&'static str> {
         match self.prop {
             Prop::Enabled | Prop::Visible | Prop::Busy | Prop::Monospace => Some("true"),
-            Prop::Selected | Prop::Checked | Prop::Expanded | Prop::Secret | Prop::Destructive | Prop::Wrap => {
-                Some("false")
-            }
+            Prop::Selected
+            | Prop::Checked
+            | Prop::Indeterminate
+            | Prop::Expanded
+            | Prop::Secret
+            | Prop::Destructive
+            | Prop::Wrap => Some("false"),
             Prop::Variant => Some("plain"),
             Prop::Tone => Some("neutral"),
             Prop::Scale => Some("body"),
@@ -905,6 +924,7 @@ impl Entry {
             | Prop::Visible
             | Prop::Selected
             | Prop::Checked
+            | Prop::Indeterminate
             | Prop::Expanded
             | Prop::Busy
             | Prop::Secret

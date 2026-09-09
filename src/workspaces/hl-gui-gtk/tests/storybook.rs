@@ -308,6 +308,15 @@ mod unix {
             settle_toolkit();
             let _ = surface.reports().drain();
         }
+        if story == "Checkbox" {
+            let checkbox =
+                find::<gtk::CheckButton>(&root, |button| button.label().as_deref() == Some("Select all · 1 of 3"));
+            assert!(checkbox.is_inconsistent(), "parent Checkbox exposes native mixed state");
+            assert!(checkbox.grab_focus(), "mixed Checkbox accepts native keyboard focus");
+            settle_toolkit();
+            capture_story(&realized_window, "Checkbox focused mixed");
+            let _ = surface.reports().drain();
+        }
         if story == "Slider" {
             let slider = find::<gtk::Scale>(&root, |scale| {
                 scale.tooltip_text().as_deref() == Some("Build cache allocation")
@@ -542,6 +551,16 @@ mod unix {
         }
 
         let event = emit_representative(story, &root, &surface, &tree);
+        if story == "Checkbox" {
+            let hl_gui::Event::Toggle { value, .. } = &event else {
+                panic!("mixed Checkbox did not emit its typed Toggle interaction: {event:?}")
+            };
+            assert_eq!(
+                value,
+                &hl_gui::PropValue::Flag(true),
+                "activating mixed Checkbox emits the resolved checked value"
+            );
+        }
         let payload = codec::interaction(&event, Some(PRIMARY_SLOT))
             .unwrap_or_else(|| panic!("{story} interaction has no production wire encoding"));
         wire.send(&Frame::new(ChannelId::new(3), Kind::Event, payload))
@@ -572,13 +591,11 @@ mod unix {
         if story == "Checkbox" {
             settle_toolkit();
             let checkbox =
-                find::<gtk::CheckButton>(&root, |button| button.label().as_deref() == Some("Include diagnostics"));
-            assert!(
-                !checkbox.is_active(),
-                "controlled Checkbox did not retain Space activation"
-            );
+                find::<gtk::CheckButton>(&root, |button| button.label().as_deref() == Some("Select all · 3 of 3"));
+            assert!(checkbox.is_active(), "mixed parent did not resolve to checked");
+            assert!(!checkbox.is_inconsistent(), "resolved parent remained indeterminate");
             assert!(checkbox.grab_focus(), "controlled Checkbox restores native focus");
-            capture_story(&realized_window, "Checkbox focused unchecked");
+            capture_story(&realized_window, "Checkbox focused checked");
         }
         if story == "Radio" {
             settle_toolkit();
@@ -971,12 +988,11 @@ mod unix {
             }
             "Checkbox" => {
                 let checkbox =
-                    find::<gtk::CheckButton>(root, |button| button.label().as_deref() == Some("Include diagnostics"));
+                    find::<gtk::CheckButton>(root, |button| button.label().as_deref() == Some("Select all · 1 of 3"));
+                assert!(checkbox.is_inconsistent(), "parent Checkbox exposes native mixed state");
                 assert!(checkbox.grab_focus(), "Checkbox accepts native keyboard focus");
                 assert!(checkbox.has_focus(), "Checkbox exposes its focus-visible state");
-                let before = checkbox.is_active();
                 checkbox.activate();
-                assert_ne!(checkbox.is_active(), before, "Space activation toggles Checkbox state");
             }
             "Radio" => {
                 let zsh = find::<gtk::CheckButton>(root, |button| button.label().as_deref() == Some("Z shell"));

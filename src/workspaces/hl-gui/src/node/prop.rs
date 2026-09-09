@@ -20,6 +20,8 @@ pub enum Prop {
     Visible,
     Selected,
     Checked,
+    /// A checkbox represents a partial selection rather than on or off.
+    Indeterminate,
     Expanded,
     Busy,
     Secret,

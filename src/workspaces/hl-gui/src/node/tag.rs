@@ -257,7 +257,7 @@ catalogue! {
     FormControlLabel: children, props[Label, Gap], triggers[],
     FormGroup: children, props[Gap], triggers[],
     Switch: leaf, props[Checked, Selected, Enabled], triggers[Toggle],
-    Checkbox: leaf, props[Label, Checked, Selected, Enabled], triggers[Toggle],
+    Checkbox: leaf, props[Label, Checked, Indeterminate, Selected, Enabled], triggers[Toggle],
     Radio: leaf, props[Label, Checked, Selected, Enabled], triggers[Toggle],
     RadioGroup: children, props[Gap, Orientation], triggers[],
     Select: leaf, props[Value, Choices, Enabled], triggers[Change, Select, Key, Focus],

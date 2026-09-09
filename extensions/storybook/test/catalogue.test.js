@@ -19,7 +19,7 @@ test('the catalogue describes the whole library', () => {
     tags.length >= 120,
     `only ${tags.length} components; the catalogue is the whole library`,
   );
-  assert.equal(props.length, 45);
+  assert.equal(props.length, 46);
   assert.ok(families.length > 0);
 });
 

@@ -21,6 +21,7 @@ pub(crate) fn apply(widget: &gtk::Widget, node: &Node, prop: Prop, value: &PropV
         Prop::Enabled => widget.set_sensitive(value.as_flag().unwrap_or(true)),
         Prop::Visible => widget.set_visible(value.as_flag().unwrap_or(true)),
         Prop::Selected | Prop::Checked => checked(widget, value),
+        Prop::Indeterminate => indeterminate(widget, value),
         Prop::Expanded => expanded(widget, value),
         Prop::Busy => busy(widget, value),
         Prop::Secret => secret(widget, value),
@@ -75,6 +76,12 @@ fn checked(widget: &gtk::Widget, value: &PropValue) {
     }
     if let Some(switch) = widget.downcast_ref::<gtk::Switch>() {
         switch.set_active(state);
+    }
+}
+
+fn indeterminate(widget: &gtk::Widget, value: &PropValue) {
+    if let Some(check) = widget.downcast_ref::<gtk::CheckButton>() {
+        check.set_inconsistent(value.as_flag().unwrap_or(false));
     }
 }
 

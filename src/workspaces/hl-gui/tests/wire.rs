@@ -116,6 +116,7 @@ fn every_property_name_survives_the_wire() {
         Prop::Placeholder,
         Prop::Enabled,
         Prop::Checked,
+        Prop::Indeterminate,
         Prop::Variant,
         Prop::Tone,
         Prop::Scale,

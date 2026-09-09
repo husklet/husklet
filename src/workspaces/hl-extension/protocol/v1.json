@@ -4594,6 +4594,12 @@
           }
         },
         {
+          "name": "Indeterminate",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
           "name": "Expanded",
           "payload": {
             "kind": "unit"
@@ -13641,7 +13647,7 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:f876033459adc8f1",
+  "source_fingerprint": "fnv1a64:c7afeefce0478b6b",
   "specification_version": 1,
   "topics": [
     {
