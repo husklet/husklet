@@ -336,6 +336,11 @@ mod unix {
             }
             assert!(has_label(&expanded_root, "Connected containers · 0"));
             assert!(has_label(&expanded_root, "Refresh connections"));
+            assert!(!find_expander(&expanded_root, "Danger zone").is_expanded());
+            assert_label_order(
+                &expanded_root,
+                &["Network details", "Container attachment", "Danger zone"],
+            );
 
             let selector = find_toggle(&expanded_root, "Choose…");
             selector.set_active(true);
@@ -443,6 +448,26 @@ mod unix {
                 &format!("Container · {}", &container_id[..12])
             ));
             assert!(has_label(&success_root, "Technical details"));
+            assert!(!find_expander(&success_root, "Danger zone").is_expanded());
+            assert_label_order(
+                &success_root,
+                &[
+                    "Network details",
+                    "Container attachment",
+                    &success,
+                    "Technical details",
+                    "Danger zone",
+                ],
+            );
+            assert_focus_order(
+                &success_root,
+                &[
+                    "api-worker · aaaaaaaaaaaa · exited",
+                    "Disconnect",
+                    "Technical details",
+                    "Danger zone",
+                ],
+            );
             find_expander(&success_root, "Technical details").set_expanded(true);
             settle_toolkit();
             assert!(has_label(&success_root, &format!("Container ID · {container_id}")));
@@ -613,6 +638,57 @@ mod unix {
             }
         }
         false
+    }
+
+    fn assert_label_order(root: &gtk::Widget, wanted: &[&str]) {
+        fn collect(root: &gtk::Widget, labels: &mut Vec<String>) {
+            if let Some(label) = root.downcast_ref::<gtk::Label>() {
+                labels.push(label.text().to_string());
+            }
+            let mut child = root.first_child();
+            while let Some(current) = child {
+                child = current.next_sibling();
+                collect(&current, labels);
+            }
+        }
+
+        let mut labels = Vec::new();
+        collect(root, &mut labels);
+        let mut previous = None;
+        for expected in wanted {
+            let position = labels
+                .iter()
+                .position(|label| label == expected)
+                .unwrap_or_else(|| panic!("label {expected:?} was not found in {labels:?}"));
+            if let Some(before) = previous {
+                assert!(
+                    before < position,
+                    "labels are not in visual traversal order {wanted:?}: {labels:?}"
+                );
+            }
+            previous = Some(position);
+        }
+    }
+
+    fn assert_focus_order(root: &gtk::Widget, wanted: &[&str]) {
+        fn collect(root: &gtk::Widget, wanted: &[&str], labels: &mut Vec<String>) {
+            if root.is_focusable() {
+                if let Some(label) = wanted.iter().find(|label| has_label(root, label)) {
+                    if labels.last().is_none_or(|previous| previous != label) {
+                        labels.push((*label).to_owned());
+                    }
+                }
+            }
+            let mut child = root.first_child();
+            while let Some(current) = child {
+                child = current.next_sibling();
+                collect(&current, wanted, labels);
+            }
+        }
+
+        let mut labels = Vec::new();
+        collect(root, wanted, &mut labels);
+        assert_eq!(labels, wanted, "focus traversal does not follow the visual order");
     }
 
     fn has_placeholder(root: &gtk::Widget, wanted: &str) -> bool {

@@ -407,85 +407,93 @@ export function Networks({
                   </CardContent>
                   {disconnectRequest?.network === id ? (
                     <DisconnectConsent
+                      key="disconnect-consent"
                       request={disconnectRequest}
                       loading={operation.state === 'loading'}
                       onConfirm={attach}
                       onCancel={() => setDisconnectRequest(null)}
                     />
                   ) : null}
-                  {inspection.id === id ? (
-                    <>
-                      <NetworkDetail inspection={inspection} onOpenExtensions={onOpenExtensions} />
-                      {inspection.state === 'ready' ? (
-                        <CardContent gap={1}>
-                          <Heading label="Container attachment" scale="caption" />
-                          <Text
-                            label="Connect or disconnect one inspected container from this network."
-                            color="text-dim"
-                            wrap
-                          />
-                          {containerChoices.length ? (
-                            <Row gap={1} align="center" wrap width="fill">
-                              <Select
-                                value={container}
-                                choices={containerChoices}
-                                tooltip={container || 'Choose a container by name and immutable ID'}
+                  <Column key="connection-management" gap={0} width="fill">
+                    {inspection.id === id ? (
+                      <>
+                        <NetworkDetail
+                          inspection={inspection}
+                          onOpenExtensions={onOpenExtensions}
+                        />
+                        {inspection.state === 'ready' ? (
+                          <CardContent gap={1}>
+                            <Heading label="Container attachment" scale="caption" />
+                            <Text
+                              label="Connect or disconnect one inspected container from this network."
+                              color="text-dim"
+                              wrap
+                            />
+                            {containerChoices.length ? (
+                              <Row gap={1} align="center" wrap width="fill">
+                                <Select
+                                  value={container}
+                                  choices={containerChoices}
+                                  tooltip={
+                                    container || 'Choose a container by name and immutable ID'
+                                  }
+                                  width={{ minimum: { chars: 10 }, maximum: { chars: 38 } }}
+                                  enabled={operation.state !== 'loading'}
+                                  onChange={(event) => {
+                                    setContainer(String(event.value ?? ''));
+                                    setOperation({ state: 'idle', request: null, error: null });
+                                    setDisconnectRequest(null);
+                                  }}
+                                />
+                                {endpointAction === 'connect' ? (
+                                  <Button
+                                    label="Connect"
+                                    variant="filled"
+                                    tone="accent"
+                                    enabled={operation.state !== 'loading'}
+                                    onInvoke={() => begin(network, 'connect')}
+                                  />
+                                ) : null}
+                                {endpointAction === 'disconnect' ? (
+                                  <Button
+                                    label="Disconnect"
+                                    variant="outline"
+                                    tone="danger"
+                                    enabled={operation.state !== 'loading'}
+                                    onInvoke={() => begin(network, 'disconnect')}
+                                  />
+                                ) : null}
+                              </Row>
+                            ) : (
+                              <InlineMessage
+                                label={
+                                  containers.loading
+                                    ? 'Reading containers…'
+                                    : 'No containers are available to attach.'
+                                }
+                                tone="neutral"
+                              />
+                            )}
+                            {endpointAction === 'connect' ? (
+                              <Entry
+                                value={aliases}
+                                placeholder="Aliases, comma-separated (optional)"
                                 width={{ minimum: { chars: 10 }, maximum: { chars: 38 } }}
                                 enabled={operation.state !== 'loading'}
                                 onChange={(event) => {
-                                  setContainer(String(event.value ?? ''));
+                                  setAliases(String(event.value ?? ''));
                                   setOperation({ state: 'idle', request: null, error: null });
-                                  setDisconnectRequest(null);
                                 }}
                               />
-                              {endpointAction === 'connect' ? (
-                                <Button
-                                  label="Connect"
-                                  variant="filled"
-                                  tone="accent"
-                                  enabled={operation.state !== 'loading'}
-                                  onInvoke={() => begin(network, 'connect')}
-                                />
-                              ) : null}
-                              {endpointAction === 'disconnect' ? (
-                                <Button
-                                  label="Disconnect"
-                                  variant="outline"
-                                  tone="danger"
-                                  enabled={operation.state !== 'loading'}
-                                  onInvoke={() => begin(network, 'disconnect')}
-                                />
-                              ) : null}
-                            </Row>
-                          ) : (
-                            <InlineMessage
-                              label={
-                                containers.loading
-                                  ? 'Reading containers…'
-                                  : 'No containers are available to attach.'
-                              }
-                              tone="neutral"
-                            />
-                          )}
-                          {endpointAction === 'connect' ? (
-                            <Entry
-                              value={aliases}
-                              placeholder="Aliases, comma-separated (optional)"
-                              width={{ minimum: { chars: 10 }, maximum: { chars: 38 } }}
-                              enabled={operation.state !== 'loading'}
-                              onChange={(event) => {
-                                setAliases(String(event.value ?? ''));
-                                setOperation({ state: 'idle', request: null, error: null });
-                              }}
-                            />
-                          ) : null}
-                          <OperationStatus operation={operation} onRetry={attach} />
-                        </CardContent>
-                      ) : null}
-                    </>
-                  ) : null}
+                            ) : null}
+                            <OperationStatus operation={operation} onRetry={attach} />
+                          </CardContent>
+                        ) : null}
+                      </>
+                    ) : null}
+                  </Column>
                   {network.kind !== 'builtin' ? (
-                    <CardContent key={`danger-${inspection.id === id ? 'expanded' : 'collapsed'}`}>
+                    <CardContent key="danger-zone">
                       <Expander label="Danger zone">
                         <Column gap={1}>
                           <Text

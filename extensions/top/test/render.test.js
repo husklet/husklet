@@ -6515,6 +6515,28 @@ test('successful network attachment retains its receipt and verified expanded me
   assert.ok(labelled(stage, `Container · ${container.slice(0, 12)}`));
   assert.ok(labelled(stage, 'Refresh connections'));
   assert.deepEqual(
+    orderedLabels(stage).filter((label) =>
+      [
+        'Network details',
+        'Container attachment',
+        'Connected container-1 to private',
+        'Technical details',
+        'Danger zone',
+      ].includes(label),
+    ),
+    [
+      'Network details',
+      'Container attachment',
+      'Connected container-1 to private',
+      'Technical details',
+      'Danger zone',
+    ],
+    'reinspection retains the daily attachment workflow and its receipt before destructive controls',
+  );
+  assert.notDeepEqual(taggedProperty(stage, 'Danger zone', 'Expander', 'Expanded'), {
+    Flag: true,
+  });
+  assert.deepEqual(
     calls.map((call) => call[0]),
     ['inspect', 'connect', 'reload', 'inspect'],
   );
@@ -6606,6 +6628,28 @@ test('successful disconnect retains its receipt and verified empty membership', 
   assert.equal(labelled(stage, 'Aliases, comma-separated (optional)'), undefined);
   assert.ok(labelled(stage, 'Connected containers · 0'));
   assert.ok(labelled(stage, 'No connected containers'));
+  assert.deepEqual(
+    orderedLabels(stage).filter((label) =>
+      [
+        'Network details',
+        'Container attachment',
+        'Disconnected container-1 from private',
+        'Technical details',
+        'Danger zone',
+      ].includes(label),
+    ),
+    [
+      'Network details',
+      'Container attachment',
+      'Disconnected container-1 from private',
+      'Technical details',
+      'Danger zone',
+    ],
+    'disconnect reinspection retains its receipt before the final destructive disclosure',
+  );
+  assert.notDeepEqual(taggedProperty(stage, 'Danger zone', 'Expander', 'Expanded'), {
+    Flag: true,
+  });
 });
 
 test('network creation exposes pending failure and retained retry before claiming success', async () => {
@@ -7022,6 +7066,42 @@ function latestProperty(stage, node, prop) {
     .flatMap((frame) => frame.patches)
     .filter((patch) => patch.SetProp?.id === node && patch.SetProp.prop === prop)
     .at(-1)?.SetProp.value;
+}
+
+function orderedLabels(stage) {
+  const children = new Map();
+  const parents = new Map();
+  const labels = new Map();
+  const detach = (child) => {
+    const parent = parents.get(child);
+    if (parent === undefined) return;
+    children.set(
+      parent,
+      (children.get(parent) ?? []).filter((candidate) => candidate !== child),
+    );
+    parents.delete(child);
+  };
+  for (const patch of stage.frames.flatMap((frame) => frame.patches)) {
+    if (patch.Insert || patch.Move) {
+      const { parent, child, before } = patch.Insert ?? patch.Move;
+      detach(child);
+      const siblings = children.get(parent) ?? [];
+      const position = before === null ? siblings.length : siblings.indexOf(before);
+      siblings.splice(position < 0 ? siblings.length : position, 0, child);
+      children.set(parent, siblings);
+      parents.set(child, parent);
+    }
+    if (patch.Remove) detach(patch.Remove.id);
+    if (patch.SetProp?.prop === 'Label') labels.set(patch.SetProp.id, patch.SetProp.value?.Text);
+  }
+  const result = [];
+  const visit = (node) => {
+    const label = labels.get(node);
+    if (label !== undefined) result.push(label);
+    for (const child of children.get(node) ?? []) visit(child);
+  };
+  for (const child of children.get(0) ?? []) visit(child);
+  return result;
 }
 
 function stageFromFrame(frame) {
