@@ -9,11 +9,13 @@ mod unix {
     use std::time::{Duration, Instant};
 
     use gtk::prelude::*;
-    use hl_extension::port::{ExtensionCatalogue, ExtensionCatalogueEntry};
+    use hl_extension::port::{
+        ExtensionCatalogue, ExtensionCatalogueEntry, NetworkEndpointInventory, NetworkKind, NetworkSummary,
+    };
     use hl_extension::{
-        Capability, ExtensionName, ExtensionPreferences, ExtensionSummary, Frame, Grant, Hello, PROTOCOL, PaneProvider,
-        PreferenceValue, Reply, Request, Welcome, Wire, WorkspaceConfiguration, WorkspaceInfo, WorkspaceTerminal,
-        codec,
+        Capability, ChannelId, ExtensionName, ExtensionPreferences, ExtensionSummary, Frame, Grant, Hello, PROTOCOL,
+        PaneProvider, PreferenceValue, Reply, Request, Welcome, Wire, WorkspaceConfiguration, WorkspaceInfo,
+        WorkspaceTerminal, codec,
     };
     use hl_gui::{Renderer as _, Theme, Tree};
     use hl_gui_gtk::Surface;
@@ -264,6 +266,68 @@ mod unix {
             assert_contained(&root, &format!("{fixture}/{name}/{width_name}"));
             capture(&window, &format!("{capture_fixture}-{name}-{width_name}"), width, 800);
         }
+        if fixture == "populated" && name == "networks" {
+            find_button(&root, "Manage connections").emit_clicked();
+            settle_toolkit();
+            let interaction = surface
+                .reports()
+                .drain()
+                .into_iter()
+                .find(|event| matches!(event, hl_gui::Event::Invoke { .. }))
+                .expect("Manage connections emits an invocation");
+            let payload = codec::interaction(&interaction, Some(""))
+                .expect("Manage connections invocation has a wire representation");
+            wire.send(&Frame::new(ChannelId::new(97), hl_extension::Kind::Event, payload))
+                .expect("Manage connections invocation reaches Top");
+            let deadline = Instant::now() + DEADLINE;
+            while Instant::now() < deadline
+                && !has_label(surface.widget().upcast_ref::<gtk::Widget>(), "Refresh connections")
+            {
+                match receive_until(&mut wire, (Instant::now() + Duration::from_millis(80)).min(deadline)) {
+                    Ok(frame) if frame.kind == hl_extension::Kind::Credit => {}
+                    Ok(frame) => {
+                        let request = codec::read_request(&frame).expect("expanded network request decodes");
+                        let reply = match request {
+                            Request::InterfaceRender { frame } | Request::InterfaceRenderAt { frame, .. } => {
+                                tree.apply(&frame, &mut surface).expect("expanded network frame applies");
+                                Reply::Done
+                            }
+                            Request::NetworkInspect { reference } => Reply::Network(NetworkSummary {
+                                id: reference,
+                                name: "development".into(),
+                                driver: "bridge".into(),
+                                scope: "local".into(),
+                                kind: NetworkKind::Custom,
+                                endpoints: Some(NetworkEndpointInventory {
+                                    containers: vec!["a".repeat(64)],
+                                    truncated: false,
+                                }),
+                            }),
+                            other => panic!("unexpected expanded network call: {other:?}"),
+                        };
+                        wire.send(&codec::reply(&reply).expect("expanded reply encodes"))
+                            .expect("expanded reply sends");
+                    }
+                    Err(hl_extension::Transit::Pending) => settle_toolkit(),
+                    Err(error) => panic!("expanded network socket failed: {error:?}"),
+                }
+            }
+            let expanded_root = surface.widget().clone().upcast::<gtk::Widget>();
+            window.set_child(Some(&expanded_root));
+            for (width_name, width) in [("narrow", 600), ("wide", 1_200)] {
+                window.set_default_size(width, 800);
+                window.set_size_request(width, 800);
+                window.present();
+                settle_toolkit();
+                expanded_root.measure(gtk::Orientation::Horizontal, -1);
+                expanded_root.measure(gtk::Orientation::Vertical, width);
+                expanded_root.allocate(width, 1_600, -1, None);
+                assert_contained(&expanded_root, &format!("expanded/networks/{width_name}"));
+                capture(&window, &format!("expanded-networks-{width_name}"), width, 800);
+            }
+            assert!(has_label(&expanded_root, "Connected containers · 1"));
+            assert!(has_label(&expanded_root, "Refresh connections"));
+        }
         let stderr = child.stop();
         assert!(stderr.is_empty(), "{fixture}/{name} wrote to stderr: {stderr}");
         std::fs::remove_file(socket).expect("Top test socket is removed");
@@ -502,6 +566,38 @@ mod unix {
             .render_texture(&node, None)
             .save_to_png(directory.join(format!("{name}.png")))
             .expect("Top screenshot is written");
+    }
+
+    fn find_button(root: &gtk::Widget, label: &str) -> gtk::Button {
+        if let Some(button) = root.downcast_ref::<gtk::Button>() {
+            if has_label(root, label) {
+                return button.clone();
+            }
+        }
+        let mut child = root.first_child();
+        while let Some(current) = child {
+            child = current.next_sibling();
+            if let Some(button) = find_button_optional(&current, label) {
+                return button;
+            }
+        }
+        panic!("button {label:?} was not rendered");
+    }
+
+    fn find_button_optional(root: &gtk::Widget, label: &str) -> Option<gtk::Button> {
+        if let Some(button) = root.downcast_ref::<gtk::Button>() {
+            if has_label(root, label) {
+                return Some(button.clone());
+            }
+        }
+        let mut child = root.first_child();
+        while let Some(current) = child {
+            child = current.next_sibling();
+            if let Some(button) = find_button_optional(&current, label) {
+                return Some(button);
+            }
+        }
+        None
     }
 
     fn repository() -> PathBuf {

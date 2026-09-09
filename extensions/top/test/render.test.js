@@ -388,7 +388,7 @@ test('Top network attachment selects a named container while retaining immutable
   );
   invoke(stage, 'Networks');
   await settled();
-  invoke(stage, 'Inspect');
+  invoke(stage, 'Manage connections');
   await settled();
   await settled();
   assert.equal(
@@ -4318,8 +4318,8 @@ test('volume and network panels render bounded real inventories and controls', (
   assert.ok(taggedProperty(networkInventoryStage, 'private', 'Heading', 'Scale'));
   assert.equal(
     networkFrame.patches.filter((patch) => patch.Create?.tag === 'CardContent').length,
-    2,
-    'each network keeps its summary and actions in one compact content band',
+    3,
+    'custom-network danger controls stay in a separate subordinate content band',
   );
   assert.ok(
     !labels(networkFrame).includes('Disconnect'),
@@ -4351,10 +4351,10 @@ test('volume and network panels render bounded real inventories and controls', (
     'inventory cards retain horizontal fill instead of overriding it with start alignment',
   );
   assert.ok(
-    ancestorTags(networkStage, 'Inspect').includes('CardContent'),
-    'the primary inspection action appears before the collapsed danger zone',
+    ancestorTags(networkStage, 'Manage connections').includes('CardContent'),
+    'the primary connection-management action appears in the summary band',
   );
-  assert.equal(ancestorTags(networkStage, 'Inspect').includes('CardActions'), false);
+  assert.equal(ancestorTags(networkStage, 'Manage connections').includes('CardActions'), false);
   const destructive = (frame, label) => {
     const id = frame.patches.find(
       (patch) =>
@@ -4401,18 +4401,34 @@ test('network inspection exposes loading, retry, empty and domain-specific detai
   };
   const stage = host();
   stage.render(h(Networks, { api: controlled, resource, containers: containerResource() }));
-  invoke(stage, 'Inspect');
+  assert.ok(labelled(stage, 'Connections unknown'));
+  invoke(stage, 'Manage connections');
   await settled();
   await settled();
   assert.ok(labelled(stage, 'Reading network details…'));
+  assert.ok(labelled(stage, 'Managing connections…'));
+  const managingNode = labelled(stage, 'Managing connections…').SetProp.id;
+  assert.ok(
+    stage.frames
+      .flatMap((frame) => frame.patches)
+      .some(
+        (patch) =>
+          patch.SetProp?.id === managingNode &&
+          patch.SetProp?.prop === 'Enabled' &&
+          patch.SetProp.value?.Flag === false,
+      ),
+    'connection management cannot be invoked again while inspection is pending',
+  );
   assert.ok(labelled(stage, 'network inspect unavailable'));
-  invoke(stage, 'Retry inspect');
+  invoke(stage, 'Retry managing connections');
   await settled();
   await settled();
   assert.ok(labelled(stage, 'Network details'));
   assert.ok(labelled(stage, 'Driver · bridge'));
   assert.ok(labelled(stage, 'Scope · local'));
   assert.ok(labelled(stage, 'Connected containers · 1'));
+  assert.ok(labelled(stage, '1 connected'));
+  assert.ok(labelled(stage, 'Refresh connections'));
   assert.ok(labelled(stage, `Immutable network ID · ${'b'.repeat(12)}`));
   assert.deepEqual(property(stage, `Immutable network ID · ${'b'.repeat(12)}`, 'Tooltip'), {
     Text: networkId,
@@ -4436,7 +4452,7 @@ test('network inspection exposes loading, retry, empty and domain-specific detai
       containers: containerResource(),
     }),
   );
-  invoke(empty, 'Inspect');
+  invoke(empty, 'Manage connections');
   await settled();
   await settled();
   assert.ok(labelled(empty, 'No network details'));
@@ -6136,7 +6152,7 @@ test('volume and network mutations expose danger only on final confirm and cance
       containers: containerResource(containerId),
     }),
   );
-  invoke(networks, 'Inspect');
+  invoke(networks, 'Manage connections');
   await settled();
   await settled();
   chooseContainer(networks, containerId);
@@ -6309,12 +6325,48 @@ test('truncated network membership explains why inspection is required and resol
     false,
     'attachment controls stay hidden until a network is inspected',
   );
-  invoke(stage, 'Inspect');
+  assert.ok(labelled(stage, '0 shown · more omitted'));
+  invoke(stage, 'Manage connections');
   await settled();
   await settled();
   chooseContainer(stage, container);
   await settled();
   assert.ok(labelled(stage, 'Connect'), 'complete inspection exposes the contextual action');
+});
+
+test('network management offers only stopped containers', async () => {
+  const stopped = 'b'.repeat(64);
+  const running = 'c'.repeat(64);
+  const network = {
+    id: 'a'.repeat(32),
+    name: 'private',
+    driver: 'bridge',
+    scope: 'local',
+    kind: 'custom',
+    endpoints: { containers: [], truncated: false },
+  };
+  const containers = containerResource(stopped, running);
+  containers.data[1].state = 'running';
+  const stage = host();
+  stage.render(
+    h(Networks, {
+      api: { networks: { ...api.networks, inspect: async () => network } },
+      resource: { data: [network], loading: false, error: null, reload: async () => {} },
+      containers,
+    }),
+  );
+  invoke(stage, 'Manage connections');
+  await settled();
+  await settled();
+  const choices = stage.frames
+    .flatMap((frame) => frame.patches)
+    .filter((patch) => patch.SetProp?.prop === 'Choices')
+    .at(-1)?.SetProp.value.Choices;
+  assert.deepEqual(
+    choices.map((choice) => choice.value),
+    [stopped],
+    'a running container is not offered for an operation the host will refuse',
+  );
 });
 
 test('network connect validates aliases, exposes progress, success, bounded failure and retained retry', async () => {
@@ -6354,7 +6406,7 @@ test('network connect validates aliases, exposes progress, success, bounded fail
   stage.render(
     h(Networks, { api: controlled, resource, containers: containerResource('b'.repeat(64)) }),
   );
-  invoke(stage, 'Inspect');
+  invoke(stage, 'Manage connections');
   await settled();
   await settled();
   chooseContainer(stage, 'b'.repeat(64));
@@ -6503,7 +6555,7 @@ test('disconnect consent snapshots immutable identities and can be cancelled wit
       containers: containerResource(first, second),
     }),
   );
-  invoke(stage, 'Inspect');
+  invoke(stage, 'Manage connections');
   await settled();
   await settled();
   chooseContainer(stage, first);

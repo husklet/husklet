@@ -1162,8 +1162,13 @@ test(
       assert.deepEqual(requests.find((request) => request.call === 'network_create').with, {
         name: 'socket-net',
       });
+      await until(() => calls.filter((call) => call === 'network_list').length >= 2);
       peer.write(
-        encode({ channel: 81, kind: KIND.event, payload: invocation(requests, 'Inspect') }),
+        encode({
+          channel: 81,
+          kind: KIND.event,
+          payload: invocation(requests, 'Manage connections'),
+        }),
       );
       await until(() => calls.includes('network_inspect'));
       await until(() =>
@@ -1217,7 +1222,11 @@ test(
         ),
       );
       peer.write(
-        encode({ channel: 40, kind: KIND.event, payload: invocation(requests, 'Inspect') }),
+        encode({
+          channel: 40,
+          kind: KIND.event,
+          payload: invocation(requests, 'Refresh connections'),
+        }),
       );
       await until(
         () =>
@@ -1239,7 +1248,11 @@ test(
       });
       const inspectionsBeforeDisconnect = calls.filter((call) => call === 'network_inspect').length;
       peer.write(
-        encode({ channel: 42, kind: KIND.event, payload: invocation(requests, 'Inspect') }),
+        encode({
+          channel: 42,
+          kind: KIND.event,
+          payload: invocation(requests, 'Refresh connections'),
+        }),
       );
       await until(
         () =>
@@ -1279,7 +1292,11 @@ test(
         container: containerId,
       });
       peer.write(
-        encode({ channel: 45, kind: KIND.event, payload: invocation(requests, 'Inspect') }),
+        encode({
+          channel: 45,
+          kind: KIND.event,
+          payload: invocation(requests, 'Refresh connections'),
+        }),
       );
       await until(
         () =>

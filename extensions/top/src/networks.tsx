@@ -197,7 +197,10 @@ export function Networks({
 
   const view = bounded(resource.data);
   const containerChoices = (containers?.data ?? [])
-    .filter((candidate) => immutableContainerId(candidate.id))
+    .filter(
+      (candidate) =>
+        immutableContainerId(candidate.id) && ['created', 'exited'].includes(candidate.state),
+    )
     .map((candidate) => ({
       value: candidate.id,
       label: `${candidate.name || 'Unnamed container'} · ${shortId(candidate.id)} · ${candidate.state}`,
@@ -308,22 +311,36 @@ export function Networks({
                 inspection.id === id &&
                 inspection.state === 'error' &&
                 isAuthorityDenial(inspection.error);
+              const membershipLabel = !membership
+                ? 'Connections unknown'
+                : membership.truncated
+                  ? `${membership.containers.length} shown · more omitted`
+                  : `${membership.containers.length} connected`;
               return (
-                <Card key={id} width="fill" variant={inspection.id === id ? 'filled' : 'outline'}>
+                <Card key={id} width="fill" variant="outline">
                   <CardContent gap={1}>
                     <Row gap={2} align="center" justify="start" wrap width="fill">
                       <Column gap={0}>
                         <Heading label={network.name} scale="body" />
                         <Text label={`${network.driver} · ${network.scope}`} color="text-dim" />
                       </Column>
+                      <Badge
+                        label={membershipLabel}
+                        tone={!membership || membership.truncated ? 'warning' : 'neutral'}
+                      />
                       {!inspectionNeedsAccess ? (
                         <Button
                           label={
-                            inspection.id === id && inspection.state === 'error'
-                              ? 'Retry inspect'
-                              : 'Inspect'
+                            inspection.id === id && inspection.state === 'loading'
+                              ? 'Managing connections…'
+                              : inspection.id === id && inspection.state === 'error'
+                                ? 'Retry managing connections'
+                                : inspection.id === id && inspection.state === 'ready'
+                                  ? 'Refresh connections'
+                                  : 'Manage connections'
                           }
                           variant="outline"
+                          enabled={inspection.state !== 'loading'}
                           onInvoke={() => inspect(network)}
                         />
                       ) : null}
@@ -335,31 +352,10 @@ export function Networks({
                     ) : null}
                     {membershipUnknown ? (
                       <Text
-                        label="Attachment status unknown for this container · Inspect to resolve"
+                        label="Attachment status unknown for this container · Manage connections to resolve"
                         color="warning"
                         wrap
                       />
-                    ) : null}
-                    {network.kind !== 'builtin' ? (
-                      <Expander label="Danger zone">
-                        <Column gap={1}>
-                          <Text
-                            label="Removing this network disconnects it from the workspace and cannot be undone."
-                            color="text-dim"
-                            wrap
-                          />
-                          <Row>
-                            <ConfirmAction
-                              authorityKey={`network:${id}:remove`}
-                              label="Remove"
-                              confirmLabel="Confirm remove"
-                              pendingLabel="Confirm remove"
-                              question={`Remove immutable network ${id} (${network.name})?`}
-                              onConfirm={() => remove(network)}
-                            />
-                          </Row>
-                        </Column>
-                      </Expander>
                     ) : null}
                   </CardContent>
                   {disconnectRequest?.network === id ? (
@@ -440,6 +436,29 @@ export function Networks({
                         </CardContent>
                       ) : null}
                     </>
+                  ) : null}
+                  {network.kind !== 'builtin' ? (
+                    <CardContent key={`danger-${inspection.id === id ? 'expanded' : 'collapsed'}`}>
+                      <Expander label="Danger zone">
+                        <Column gap={1}>
+                          <Text
+                            label="Removing this network disconnects it from the workspace and cannot be undone."
+                            color="text-dim"
+                            wrap
+                          />
+                          <Row>
+                            <ConfirmAction
+                              authorityKey={`network:${id}:remove`}
+                              label="Remove"
+                              confirmLabel="Confirm remove"
+                              pendingLabel="Confirm remove"
+                              question={`Remove immutable network ${id} (${network.name})?`}
+                              onConfirm={() => remove(network)}
+                            />
+                          </Row>
+                        </Column>
+                      </Expander>
+                    </CardContent>
                   ) : null}
                 </Card>
               );
