@@ -3,6 +3,7 @@ import {
   Accordion,
   AccordionDetails,
   AccordionSummary,
+  Badge,
   Button,
   Card,
   CardActions,
@@ -30,6 +31,7 @@ import {
 type Change = { value?: unknown; expanded?: boolean };
 type Numbers = { cpus: string; memory: string; scrollback: string; fontSize: string };
 const CONTROL_WIDTH = 'fill' as const;
+const PAGE_WIDTH = { maximum: { chars: 110 } } as const;
 
 export function Workspace({ api }: { api: WorkspaceApi }) {
   const [configuration, setConfiguration] = React.useState<WorkspaceConfiguration | null>(null);
@@ -174,53 +176,63 @@ export function Workspace({ api }: { api: WorkspaceApi }) {
   const dirty = hydrated && changedFrom(configuration, observed, numbers);
   return (
     <Column width="fill" height="fill">
-      <Column grow={false} width="fill" pad={{ top: 4, end: 4, bottom: 0, start: 4 }}>
-        <Card grow={false} width="fill" variant="plain">
-          <CardContent gap={1} pad={3}>
-            <Row gap={2} wrap justify="start" align="center" width="fill">
-              <Column gap={0} grow>
-                <Heading label="Workspace" scale="title" />
-                <Text
-                  label={`linux/${configuration.architecture} · ${configuration.name}`}
-                  color="text-dim"
-                />
-              </Column>
-              <Row gap={1} wrap justify="start">
+      <Container
+        grow={false}
+        width={PAGE_WIDTH}
+        pad={{ top: 4, end: 4, bottom: 0, start: 4 }}
+        gap={1}
+      >
+        <Row gap={2} wrap justify="start" align="center" width="fill">
+          <Column gap={0} grow>
+            <Heading label="Workspace" scale="title" />
+            <Text
+              label={`linux/${configuration.architecture} · ${configuration.name}`}
+              color="text-dim"
+            />
+          </Column>
+          <Row gap={1} wrap justify="start" align="center">
+            {dirty || saving ? (
+              <>
                 <Button
+                  size="small"
                   variant="filled"
                   tone="accent"
-                  label={
-                    saving ? 'Saving…' : dirty ? 'Save changes' : saved ? 'Saved' : 'Up to date'
-                  }
+                  label={saving ? 'Saving…' : 'Save changes'}
                   enabled={!saving && dirty && !invalid}
                   onInvoke={save}
                 />
-                {dirty && (
-                  <Button label="Discard" variant="ghost" enabled={!saving} onInvoke={load} />
-                )}
-              </Row>
-            </Row>
-            <Text
-              label={
-                invalid
-                  ? 'Fix the highlighted settings before saving.'
-                  : dirty
-                    ? 'Unsaved changes'
-                    : saved
-                      ? 'Changes saved'
-                      : 'Changes save without stopping the workspace.'
-              }
-              color={invalid ? 'danger' : dirty ? 'warning' : saved ? 'positive' : 'text-dim'}
-              wrap
-            />
-            {invalid && <InlineMessage label={invalid} tone="danger" />}
-            {error && <RecoveryState operation="Saving workspace settings" error={error} />}
-            {saved && <InlineMessage label={saved} tone="positive" />}
-          </CardContent>
-        </Card>
-      </Column>
+                <Button
+                  size="small"
+                  label="Discard"
+                  variant="ghost"
+                  enabled={!saving}
+                  onInvoke={load}
+                />
+              </>
+            ) : (
+              <Badge label={saved ? 'Saved' : 'Up to date'} tone={saved ? 'positive' : 'neutral'} />
+            )}
+          </Row>
+        </Row>
+        <Text
+          label={
+            invalid
+              ? 'Fix the highlighted settings before saving.'
+              : dirty
+                ? 'Unsaved changes'
+                : saved
+                  ? 'Changes saved'
+                  : 'Changes save without stopping the workspace.'
+          }
+          color={invalid ? 'danger' : dirty ? 'warning' : saved ? 'positive' : 'text-dim'}
+          wrap
+        />
+        {invalid && <InlineMessage label={invalid} tone="danger" />}
+        {error && <RecoveryState operation="Saving workspace settings" error={error} />}
+        {saved && <InlineMessage label={saved} tone="positive" />}
+      </Container>
       <Scroll grow width="fill" height="fill">
-        <Container pad={4} gap={3}>
+        <Container pad={4} gap={3} width={PAGE_WIDTH}>
           <Card grow={false} width="fill" variant="plain">
             <CardContent gap={2}>
               <Text
