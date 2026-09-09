@@ -947,7 +947,8 @@ export interface WorkspaceApi {
       },
     ): Promise<{ execution: ExecutionSummary; output: ContainerOutput }>;
     /**
-     * Execute and deliver bounded live output pages with callback backpressure.
+     * Execute while concurrently writing bounded stdin and delivering bounded live output pages
+     * with callback backpressure, so a full pipe cannot deadlock the opposite direction.
      * Abort or callback failure cancels the owned execution; its record is never auto-removed.
      */
     execStreaming(

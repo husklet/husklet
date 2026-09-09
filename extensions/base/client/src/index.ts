@@ -1108,22 +1108,51 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
               stdin: input !== undefined,
             });
         let phase = 'output';
+        const streaming = new AbortController();
+        const stopStreaming = () => streaming.abort(signal?.reason);
+        if (signal?.aborted) stopStreaming();
+        else signal?.addEventListener('abort', stopStreaming, { once: true });
         try {
+          requireOutputActive(streaming.signal);
           if (onStarted) await onStarted(executionId);
-          if (input !== undefined) {
-            phase = 'input';
-            await api.containers.pipeExecutionStdin(executionId, input, {
-              signal,
-              close: true,
-            });
-            phase = 'output';
-          }
-          for await (const page of api.containers.executionOutputPages(executionId, {
-            limit: pageLimit,
-            pollIntervalMs,
-            signal,
-          })) {
-            await onPage(page);
+          const consumeOutput = async () => {
+            try {
+              for await (const page of api.containers.executionOutputPages(executionId, {
+                limit: pageLimit,
+                pollIntervalMs,
+                signal: streaming.signal,
+              })) {
+                await onPage(page);
+              }
+            } catch (cause) {
+              throw { phase: 'output', cause };
+            }
+          };
+          const sendInput = async () => {
+            if (input === undefined) return;
+            try {
+              await api.containers.pipeExecutionStdin(executionId, input, {
+                signal: streaming.signal,
+                close: true,
+              });
+            } catch (cause) {
+              throw { phase: 'input', cause };
+            }
+          };
+          try {
+            await Promise.all([consumeOutput(), sendInput()]);
+          } catch (failure) {
+            streaming.abort();
+            if (
+              failure !== null &&
+              typeof failure === 'object' &&
+              'phase' in failure &&
+              'cause' in failure
+            ) {
+              phase = String(failure.phase);
+              throw failure.cause;
+            }
+            throw failure;
           }
           phase = 'inspect';
           const execution = await api.containers.execution(executionId);
@@ -1133,6 +1162,8 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
             .cancelExecution(executionId, { signal: cancelSignal, timeoutMs: cancelTimeoutMs })
             .catch(() => {});
           throw new ExecutionOperationError(executionId, phase, cause);
+        } finally {
+          signal?.removeEventListener('abort', stopStreaming);
         }
       },
       execText: async (id, generation, configuration) => {

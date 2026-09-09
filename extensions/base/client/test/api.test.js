@@ -1746,7 +1746,41 @@ test('pre-aborted streaming execution never starts a container command', async (
   stage.server.close();
 });
 
-test('streaming execution owns stdin failure and cancellation before reading output', async () => {
+test('abort while streaming execution starts cancels its returned identity before I/O', async () => {
+  const stage = await pair();
+  await frames(stage.host)();
+  const api = workspace(stage.session);
+  const controller = new AbortController();
+  const calls = [];
+  api.containers.exec = async () => {
+    controller.abort(new Error('caller stopped during start'));
+    return 'e'.repeat(32);
+  };
+  api.containers.executionOutputPages = async function* () {
+    calls.push('output');
+  };
+  api.containers.cancelExecution = async (...arguments_) => {
+    calls.push(['cancel', ...arguments_]);
+  };
+  await assert.rejects(
+    api.containers.execStreaming(
+      'c'.repeat(64),
+      7,
+      { command: ['psql'], signal: controller.signal },
+      () => {},
+    ),
+    (error) =>
+      error instanceof ExecutionOperationError &&
+      error.phase === 'output' &&
+      error.cause?.cause === controller.signal.reason,
+  );
+  assert.deepEqual(calls, [['cancel', 'e'.repeat(32), { signal: 'SIGTERM', timeoutMs: 1_000 }]]);
+  stage.session.close();
+  stage.host.destroy();
+  stage.server.close();
+});
+
+test('streaming execution owns stdin failure while concurrently draining output', async () => {
   const stage = await pair();
   await frames(stage.host)();
   const api = workspace(stage.session);
@@ -1779,6 +1813,7 @@ test('streaming execution owns stdin failure and cancellation before reading out
   );
   assert.deepEqual(calls, [
     ['exec', true],
+    ['output'],
     ['input', ['select 1;\n'], true],
     ['cancel', 'e'.repeat(32), { signal: 'SIGTERM', timeoutMs: 1_000 }],
   ]);
