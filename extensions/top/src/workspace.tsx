@@ -173,187 +173,230 @@ export function Workspace({ api }: { api: WorkspaceApi }) {
   const invalid = validationMessage(configuration, numbers);
   const dirty = hydrated && changedFrom(configuration, observed, numbers);
   return (
-    <Scroll grow width="fill" height="fill">
-      <Container pad={2} gap={2}>
-        <Card grow={false} width="fill" variant="plain">
-          <CardContent gap={2}>
-            <Heading label="Workspace" scale="title" />
-            <Text
-              label="Settings save without stopping your workspace. Runtime identity changes apply when the workspace or panes reopen."
-              color="text-dim"
-              width={CONTROL_WIDTH}
-              wrap
-            />
-            <Text
-              label={dirty ? 'Unsaved changes' : saved ? 'Saved' : 'No changes'}
-              color={dirty ? 'warning' : saved ? 'positive' : 'text-dim'}
-            />
-            <Row gap={1} wrap justify="start" width="fill">
+    <Column width="fill" height="fill">
+      <Card grow={false} width="fill" variant="plain">
+        <CardContent gap={1}>
+          <Row gap={2} wrap justify="start" align="center" width="fill">
+            <Column gap={0} grow>
+              <Heading label="Workspace" scale="title" />
+              <Text
+                label={`linux/${configuration.architecture} · ${configuration.name}`}
+                color="text-dim"
+              />
+            </Column>
+            <Row gap={1} wrap justify="start">
               <Button
                 variant="filled"
                 tone="accent"
-                label={saving ? 'Saving…' : 'Save workspace'}
+                label={saving ? 'Saving…' : dirty ? 'Save changes' : saved ? 'Saved' : 'Up to date'}
                 enabled={!saving && dirty && !invalid}
                 onInvoke={save}
               />
-              <Button
-                label="Discard changes"
-                variant="ghost"
-                enabled={!saving && dirty}
-                onInvoke={load}
-              />
+              {dirty && (
+                <Button label="Discard" variant="ghost" enabled={!saving} onInvoke={load} />
+              )}
             </Row>
-            {invalid && <InlineMessage label={invalid} tone="danger" />}
-            {error && <RecoveryState operation="Saving workspace settings" error={error} />}
-            {saved && <InlineMessage label={saved} tone="positive" />}
-            <SettingsGroup
-              name="runtime"
-              label="Runtime"
-              detail={`linux/${configuration.architecture} · ${configuration.name}`}
-              expanded={expanded}
-              onExpand={setExpanded}
-            >
-              {field('Workspace image', configuration.image, 'registry/image:tag', (event) =>
-                change('image', String(event.value ?? '').trim()),
-              )}
-              {field(
-                'Storage directory',
-                configuration.storage ?? '',
-                'Husklet-managed when empty',
-                (event) => change('storage', nullable(event.value)),
-              )}
+          </Row>
+          <Text
+            label={
+              invalid
+                ? 'Fix the highlighted settings before saving.'
+                : dirty
+                  ? 'Unsaved changes'
+                  : saved
+                    ? 'Changes saved'
+                    : 'Changes save without stopping the workspace.'
+            }
+            color={invalid ? 'danger' : dirty ? 'warning' : saved ? 'positive' : 'text-dim'}
+            wrap
+          />
+          {invalid && <InlineMessage label={invalid} tone="danger" />}
+          {error && <RecoveryState operation="Saving workspace settings" error={error} />}
+          {saved && <InlineMessage label={saved} tone="positive" />}
+        </CardContent>
+      </Card>
+      <Scroll grow width="fill" height="fill">
+        <Container pad={2} gap={2}>
+          <Card grow={false} width="fill" variant="plain">
+            <CardContent gap={2}>
               <Text
-                label="Changing storage is refused while this workspace is running; other runtime settings are saved for the next restart."
+                label="Choose a section. Only one stays open, so the setting you need remains easy to find."
                 color="text-dim"
                 width={CONTROL_WIDTH}
                 wrap
               />
-              {field('Default shell', configuration.shell ?? '', 'Automatic when empty', (event) =>
-                change('shell', nullable(event.value)),
-              )}
-              {field('CPU limit', numbers.cpus, 'CPU count or empty', (event) =>
-                numeric('cpus', event.value),
-              )}
-              {field('Memory (MB)', numbers.memory, 'Memory limit or empty', (event) =>
-                numeric('memory', event.value),
-              )}
-              {field('Scrollback lines', numbers.scrollback, 'Scrollback limit or empty', (event) =>
-                numeric('scrollback', event.value),
-              )}
-              <Column gap={1}>
-                <Text label="Execution lifetime" />
-                <Select
+              <SettingsGroup
+                name="runtime"
+                label="Runtime"
+                detail={`${configuration.image} · ${configuration.shell ?? 'automatic shell'}`}
+                expanded={expanded}
+                onExpand={setExpanded}
+              >
+                {field('Workspace image', configuration.image, 'registry/image:tag', (event) =>
+                  change('image', String(event.value ?? '').trim()),
+                )}
+                <Text
+                  label="Image and shell changes apply when the workspace or panes reopen."
+                  color="text-dim"
                   width={CONTROL_WIDTH}
-                  value={configuration.execution_lifetime}
-                  choices={[
-                    { value: 'persisted', label: 'Persisted across restarts' },
-                    { value: 'live', label: 'Live until shutdown' },
-                    { value: 'ephemeral', label: 'Ephemeral per execution' },
-                  ]}
-                  onChange={(event: Change) =>
-                    change(
-                      'execution_lifetime',
-                      String(
-                        event.value ?? 'persisted',
-                      ) as WorkspaceConfiguration['execution_lifetime'],
-                    )
-                  }
+                  wrap
                 />
-              </Column>
-              {field(
-                'VPN proxy',
-                configuration.vpn ?? '',
-                'socks5://host:port (optional)',
-                (event) => change('vpn', nullable(event.value)),
-              )}
-              <Row gap={2} align="center">
-                <Switch
-                  checked={configuration.docker_socket}
-                  onToggle={(event: Change) => change('docker_socket', Boolean(event.value))}
+                {field(
+                  'Default shell',
+                  configuration.shell ?? '',
+                  'Automatic when empty',
+                  (event) => change('shell', nullable(event.value)),
+                )}
+                <Column gap={1}>
+                  <Text label="Execution lifetime" />
+                  <Select
+                    width={CONTROL_WIDTH}
+                    value={configuration.execution_lifetime}
+                    choices={[
+                      { value: 'persisted', label: 'Persisted across restarts' },
+                      { value: 'live', label: 'Live until shutdown' },
+                      { value: 'ephemeral', label: 'Ephemeral per execution' },
+                    ]}
+                    onChange={(event: Change) =>
+                      change(
+                        'execution_lifetime',
+                        String(
+                          event.value ?? 'persisted',
+                        ) as WorkspaceConfiguration['execution_lifetime'],
+                      )
+                    }
+                  />
+                </Column>
+                <Row gap={2} align="center">
+                  <Switch
+                    checked={configuration.docker_socket}
+                    onToggle={(event: Change) => change('docker_socket', Boolean(event.value))}
+                  />
+                  <Text label="Expose Docker-compatible workspace socket" />
+                </Row>
+              </SettingsGroup>
+              <SettingsGroup
+                name="advanced"
+                label="Resources & connectivity"
+                detail={resourceSummary(configuration)}
+                expanded={expanded}
+                onExpand={setExpanded}
+              >
+                {field('CPU limit', numbers.cpus, 'CPU count or empty', (event) =>
+                  numeric('cpus', event.value),
+                )}
+                {field('Memory (MB)', numbers.memory, 'Memory limit or empty', (event) =>
+                  numeric('memory', event.value),
+                )}
+                {field(
+                  'Scrollback lines',
+                  numbers.scrollback,
+                  'Scrollback limit or empty',
+                  (event) => numeric('scrollback', event.value),
+                )}
+                {field(
+                  'VPN proxy',
+                  configuration.vpn ?? '',
+                  'socks5://host:port (optional)',
+                  (event) => change('vpn', nullable(event.value)),
+                )}
+                {field(
+                  'Storage directory',
+                  configuration.storage ?? '',
+                  'Husklet-managed when empty',
+                  (event) => change('storage', nullable(event.value)),
+                )}
+                <Text
+                  label="Storage cannot change while the workspace is running. Resource and proxy changes apply after restart."
+                  color="text-dim"
+                  width={CONTROL_WIDTH}
+                  wrap
                 />
-                <Text label="Expose Docker-compatible workspace socket" />
-              </Row>
-            </SettingsGroup>
-            <SettingsGroup
-              name="terminal"
-              label="Terminal appearance"
-              detail={terminalSummary(configuration)}
-              expanded={expanded}
-              onExpand={setExpanded}
-            >
-              {field(
-                'Font family',
-                configuration.terminal.font_family ?? '',
-                'Host default',
-                (event) => terminal('font_family', nullable(event.value)),
-              )}
-              {field('Font size', numbers.fontSize, 'Host default', (event) =>
-                numeric('fontSize', event.value),
-              )}
-              {colorField('Foreground', configuration.terminal.foreground, (value) =>
-                terminal('foreground', value),
-              )}
-              {colorField('Background', configuration.terminal.background, (value) =>
-                terminal('background', value),
-              )}
-              <Column gap={1}>
-                <Text label="Cursor shape" />
-                <Select
-                  value={configuration.terminal.cursor_shape ?? ''}
-                  choices={[
-                    { value: '', label: 'Host default' },
-                    { value: 'block', label: 'Block' },
-                    { value: 'ibeam', label: 'I-beam' },
-                    { value: 'underline', label: 'Underline' },
-                  ]}
-                  onChange={(event: Change) => terminal('cursor_shape', nullable(event.value))}
+              </SettingsGroup>
+              <SettingsGroup
+                name="terminal"
+                label="Terminal appearance"
+                detail={terminalSummary(configuration)}
+                expanded={expanded}
+                onExpand={setExpanded}
+              >
+                {field(
+                  'Font family',
+                  configuration.terminal.font_family ?? '',
+                  'Host default',
+                  (event) => terminal('font_family', nullable(event.value)),
+                )}
+                {field('Font size', numbers.fontSize, 'Host default', (event) =>
+                  numeric('fontSize', event.value),
+                )}
+                {colorField('Foreground', configuration.terminal.foreground, (value) =>
+                  terminal('foreground', value),
+                )}
+                {colorField('Background', configuration.terminal.background, (value) =>
+                  terminal('background', value),
+                )}
+                <Column gap={1}>
+                  <Text label="Cursor shape" />
+                  <Select
+                    value={configuration.terminal.cursor_shape ?? ''}
+                    choices={[
+                      { value: '', label: 'Host default' },
+                      { value: 'block', label: 'Block' },
+                      { value: 'ibeam', label: 'I-beam' },
+                      { value: 'underline', label: 'Underline' },
+                    ]}
+                    onChange={(event: Change) => terminal('cursor_shape', nullable(event.value))}
+                  />
+                </Column>
+                <Row gap={1} align="center" wrap>
+                  <Switch
+                    checked={configuration.terminal.cursor_blink ?? false}
+                    onToggle={(event: Change) => terminal('cursor_blink', Boolean(event.value))}
+                  />
+                  <Text label="Cursor blink" />
+                  <IconButton
+                    icon="edit-clear-symbolic"
+                    label="Reset cursor blink"
+                    tooltip="Use the host default for cursor blink"
+                    variant="ghost"
+                    enabled={configuration.terminal.cursor_blink !== null}
+                    onInvoke={() => terminal('cursor_blink', null)}
+                  />
+                </Row>
+                {configuration.terminal.cursor_blink === null ? (
+                  <Text label="Cursor blink uses the host default." color="text-dim" />
+                ) : null}
+              </SettingsGroup>
+              <SettingsGroup
+                name="environment"
+                label="Environment variables"
+                detail={`${configuration.environment.length} configured`}
+                expanded={expanded}
+                onExpand={setExpanded}
+              >
+                <Environment
+                  key={configuration.configuration_revision}
+                  values={configuration.environment}
+                  onChange={(value) => change('environment', value)}
                 />
-              </Column>
-              <Row gap={1} align="center" wrap>
-                <Switch
-                  checked={configuration.terminal.cursor_blink ?? false}
-                  onToggle={(event: Change) => terminal('cursor_blink', Boolean(event.value))}
+              </SettingsGroup>
+              <SettingsGroup
+                name="mounts"
+                label="Filesystem mounts"
+                detail={`${configuration.mounts.length} configured`}
+                expanded={expanded}
+                onExpand={setExpanded}
+              >
+                <Mounts
+                  values={configuration.mounts}
+                  onChange={(value) => change('mounts', value)}
                 />
-                <Text label="Cursor blink" />
-                <IconButton
-                  icon="edit-clear-symbolic"
-                  label="Reset cursor blink"
-                  tooltip="Use the host default for cursor blink"
-                  variant="ghost"
-                  enabled={configuration.terminal.cursor_blink !== null}
-                  onInvoke={() => terminal('cursor_blink', null)}
-                />
-              </Row>
-              {configuration.terminal.cursor_blink === null ? (
-                <Text label="Cursor blink uses the host default." color="text-dim" />
-              ) : null}
-            </SettingsGroup>
-            <SettingsGroup
-              name="environment"
-              label="Environment variables"
-              detail={`${configuration.environment.length} configured`}
-              expanded={expanded}
-              onExpand={setExpanded}
-            >
-              <Environment
-                key={configuration.configuration_revision}
-                values={configuration.environment}
-                onChange={(value) => change('environment', value)}
-              />
-            </SettingsGroup>
-            <SettingsGroup
-              name="mounts"
-              label="Filesystem mounts"
-              detail={`${configuration.mounts.length} configured`}
-              expanded={expanded}
-              onExpand={setExpanded}
-            >
-              <Mounts values={configuration.mounts} onChange={(value) => change('mounts', value)} />
-            </SettingsGroup>
-          </CardContent>
-        </Card>
-      </Container>
-    </Scroll>
+              </SettingsGroup>
+            </CardContent>
+          </Card>
+        </Container>
+      </Scroll>
+    </Column>
   );
 }
 
@@ -575,6 +618,11 @@ function text(value: number | null): string {
 }
 function terminalSummary(value: WorkspaceConfiguration): string {
   return `${value.terminal.font_family ?? 'Host font'} · ${value.terminal.font_size ?? 'default size'} · ${value.terminal.cursor_shape ?? 'default cursor'}`;
+}
+function resourceSummary(value: WorkspaceConfiguration): string {
+  const cpu = value.cpus === null ? 'automatic CPU' : `${value.cpus} CPU`;
+  const memory = value.memory_mb === null ? 'automatic memory' : `${value.memory_mb} MB`;
+  return `${cpu} · ${memory}`;
 }
 function optionalInteger(value: string, label: string, maximum: number): number | null {
   if (!value.trim()) return null;

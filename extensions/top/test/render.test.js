@@ -494,8 +494,17 @@ test('Top owns workspace settings and extension management in the same tab', asy
   await settled();
   assert.equal(taggedProperty(stage, 'Overview', 'NavigationMenuItem', 'Selected')?.Flag, false);
   assert.equal(taggedProperty(stage, 'Workspace', 'NavigationMenuItem', 'Selected')?.Flag, true);
-  assert.ok(labelled(stage, 'Storage directory'));
-  assert.ok(labelled(stage, 'Save workspace'));
+  assert.ok(labelled(stage, 'Runtime'));
+  assert.ok(labelled(stage, 'Resources & connectivity'));
+  assert.ok(labelled(stage, 'Terminal appearance'));
+  assert.ok(labelled(stage, 'Environment variables'));
+  assert.ok(labelled(stage, 'Filesystem mounts'));
+  assert.ok(labelled(stage, 'Up to date'));
+  assert.equal(
+    ancestorTags(stage, 'Up to date').includes('Scroll'),
+    false,
+    'workspace save state remains visible while the settings body scrolls',
+  );
   assert.equal(labelled(stage, 'Unsaved changes'), undefined);
   change(stage, 'registry/image:tag', 'alpine:3.20');
   await settled();
@@ -507,11 +516,14 @@ test('Top owns workspace settings and extension management in the same tab', asy
   change(stage, 'registry/image:tag', 'alpine:3.21');
   await settled();
   assert.ok(labelled(stage, 'Unsaved changes'));
-  assert.equal(isEnabled(stage, 'Save workspace'), true);
-  invoke(stage, 'Discard changes');
+  assert.equal(isEnabled(stage, 'Save changes'), true);
+  invoke(stage, 'Discard');
   await settled();
   await settled();
-  assert.ok(labelled(stage, 'No changes'), 'discard restores an explicit clean state');
+  assert.ok(labelled(stage, 'Up to date'), 'discard restores an explicit clean state');
+  expand(stage, 'Resources & connectivity');
+  await settled();
+  assert.ok(labelled(stage, 'Storage directory'));
   assert.ok(
     ancestorProperty(stage, 'Storage directory', 'Card', 'Width'),
     'the settings editor shares the available page width',
@@ -663,7 +675,7 @@ test('workspace save rotates environment through the explicit revision-bound pat
   await settled();
   assert.equal(placeholderProperty(stage, 'value', 'Secret')?.Flag, false);
   change(stage, 'value', 'new');
-  invoke(stage, 'Save workspace');
+  invoke(stage, 'Save changes');
   await settled();
   await settled();
   assert.equal(calls[0][0], 'update');
@@ -740,7 +752,7 @@ test('workspace patch conflict reloads authority and keeps the partial-save warn
     );
   assert.notEqual(environment, undefined);
   change(stage, 'value', 'new');
-  invoke(stage, 'Save workspace');
+  invoke(stage, 'Save changes');
   await settled();
   await settled();
   await settled();
@@ -758,7 +770,7 @@ test('workspace patch conflict reloads authority and keeps the partial-save warn
   );
   assert.equal(fieldValue(stage, 'value'), 'new');
   assert.equal(placeholderProperty(stage, 'value', 'Secret')?.Flag, true);
-  assert.equal(isEnabled(stage, 'Save workspace'), true);
+  assert.equal(isEnabled(stage, 'Save changes'), true);
 });
 
 test('extension discovery reviews the first-party Storybook without requiring a registry path', async () => {
