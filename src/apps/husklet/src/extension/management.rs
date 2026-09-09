@@ -9,9 +9,9 @@ use hl_ws::storage::Directory;
 
 use crate::config::WorkspaceConfig;
 
-use super::Roster;
 use super::acquisition::{AcquisitionJob, AcquisitionSnapshot, AcquisitionState, ExtensionAcquisitions};
 use super::management_events::ExtensionEvents;
+use super::Roster;
 
 pub struct ExtensionManagement {
     workspace: WorkspaceConfig,
@@ -116,8 +116,13 @@ impl ExtensionStore for ExtensionManagement {
 
     fn remove(&self, name: &str, image_digest: &str) -> Result<(), HostError> {
         let name = Self::optional_name(name)?;
+        // Capture exact runtime ownership before forgetting its record. Cleanup
+        // runs only after the digest-bound record mutation succeeds, so a
+        // storage failure cannot leave an installed extension with erased data.
+        let removal = super::Workspace::extension_removal(&self.workspace, &name, image_digest)?;
         let result = self.roster()?.remove_if_digest(&name, image_digest).map_err(failure);
         self.changed(result)?;
+        removal.finish()?;
         super::StateBlob::new(&self.workspace.storage_dir(&crate::paths::hl_root()), &name)
             .map_err(|error| HostError::Failed(error.to_string()))?
             .purge()
@@ -457,11 +462,9 @@ mod tests {
         let events = management.events();
         assert!(events.drain().unwrap().inventory.unwrap().is_empty());
 
-        assert!(
-            management
-                .remove("absent", &format!("sha256:{}", "a".repeat(64)))
-                .is_err()
-        );
+        assert!(management
+            .remove("absent", &format!("sha256:{}", "a".repeat(64)))
+            .is_err());
         assert!(events.drain().is_none());
     }
 
@@ -473,13 +476,15 @@ mod tests {
         let name = ExtensionName::new("postgres").unwrap();
         let state = super::super::StateBlob::new(root.path(), &name).unwrap();
         state.write("absent", b"migration-checkpoint").unwrap();
+        let data = root.path().join("extensions/postgres/data");
+        std::fs::create_dir_all(&data).unwrap();
+        std::fs::write(data.join("index.db"), b"keep").unwrap();
 
-        assert!(
-            management
-                .remove(name.as_str(), &format!("sha256:{}", "a".repeat(64)))
-                .is_err()
-        );
+        assert!(management
+            .remove(name.as_str(), &format!("sha256:{}", "a".repeat(64)))
+            .is_err());
         assert_eq!(state.read().unwrap().contents, b"migration-checkpoint");
+        assert_eq!(std::fs::read(data.join("index.db")).unwrap(), b"keep");
     }
 
     #[test]
@@ -514,9 +519,92 @@ mod tests {
             .unwrap();
         let state = super::super::StateBlob::new(root.path(), &name).unwrap();
         state.write("absent", b"remove-me").unwrap();
+        let data = root.path().join("extensions/postgres/data");
+        std::fs::create_dir_all(&data).unwrap();
+        std::fs::write(data.join("index.db"), b"remove-me-too").unwrap();
 
         management.remove(name.as_str(), &digest).unwrap();
         assert!(state.read().unwrap().contents.is_empty());
+        assert!(!data.exists(), "uninstall must remove the extension's private data");
+    }
+
+    #[test]
+    fn stale_uninstall_cannot_purge_the_newer_extensions_private_data() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = workspace(root.path());
+        let management = ExtensionManagement::new(&workspace);
+        let name = ExtensionName::new("postgres").unwrap();
+        let digest = format!("sha256:{}", "b".repeat(64));
+        let manifest = hl_extension::Manifest {
+            containers: hl_extension::ContainerGrant::default(),
+            images: hl_extension::ImageGrant::default(),
+            networks: hl_extension::NetworkGrant::default(),
+            volumes: hl_extension::VolumeGrant::default(),
+            name: name.clone(),
+            display_name: "Postgres".into(),
+            version: "2".into(),
+            protocol: hl_extension::PROTOCOL,
+            capabilities: Grant::default(),
+            entrypoint: None,
+            activation: hl_extension::Activation::default(),
+            interface: None,
+            pane_providers: Vec::new(),
+            resources: hl_extension::Resources::default(),
+            filesystem: hl_extension::FilesystemGrant::default(),
+            workspace_environment: hl_extension::WorkspaceEnvironmentGrant::default(),
+        };
+        management
+            .roster()
+            .unwrap()
+            .register(&manifest, &digest, &manifest.capabilities, 2)
+            .unwrap();
+        let data = root.path().join("extensions/postgres/data");
+        std::fs::create_dir_all(&data).unwrap();
+        std::fs::write(data.join("index.db"), b"new generation").unwrap();
+
+        assert!(matches!(
+            management.remove(name.as_str(), &format!("sha256:{}", "a".repeat(64))),
+            Err(HostError::Conflict(_))
+        ));
+        assert_eq!(std::fs::read(data.join("index.db")).unwrap(), b"new generation");
+        assert_eq!(management.inspect(name.as_str()).unwrap().image_digest, digest);
+    }
+
+    #[test]
+    fn disabling_an_extension_preserves_its_private_data() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = workspace(root.path());
+        let management = ExtensionManagement::new(&workspace);
+        let name = ExtensionName::new("postgres").unwrap();
+        let digest = format!("sha256:{}", "a".repeat(64));
+        let manifest = hl_extension::Manifest {
+            containers: hl_extension::ContainerGrant::default(),
+            images: hl_extension::ImageGrant::default(),
+            networks: hl_extension::NetworkGrant::default(),
+            volumes: hl_extension::VolumeGrant::default(),
+            name: name.clone(),
+            display_name: "Postgres".into(),
+            version: "1".into(),
+            protocol: hl_extension::PROTOCOL,
+            capabilities: Grant::default(),
+            entrypoint: None,
+            activation: hl_extension::Activation::default(),
+            interface: None,
+            pane_providers: Vec::new(),
+            resources: hl_extension::Resources::default(),
+            filesystem: hl_extension::FilesystemGrant::default(),
+            workspace_environment: hl_extension::WorkspaceEnvironmentGrant::default(),
+        };
+        let mut roster = management.roster().unwrap();
+        roster.register(&manifest, &digest, &manifest.capabilities, 1).unwrap();
+        roster.enable_if_digest(&name, &digest).unwrap();
+        let data = root.path().join("extensions/postgres/data");
+        std::fs::create_dir_all(&data).unwrap();
+        std::fs::write(data.join("index.db"), b"retained").unwrap();
+
+        management.disable(name.as_str(), &digest).unwrap();
+
+        assert_eq!(std::fs::read(data.join("index.db")).unwrap(), b"retained");
     }
 
     #[test]

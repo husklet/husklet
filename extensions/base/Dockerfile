@@ -68,7 +68,8 @@ RUN npm install --global --ignore-scripts --no-audit --no-fund \
     && ln -s "$(npm root --global)/prettier" node_modules/prettier \
     && ln -s "$(npm root --global)/@types/node" node_modules/@types/node \
     && ln -s "$(npm root --global)/@types/react" node_modules/@types/react \
-    && mkdir -p /run/husklet \
+    && mkdir -p /run/husklet /var/lib/husklet-extension \
+    && chown node:node /var/lib/husklet-extension \
     && touch /run/husklet/extension.sock \
     && npm cache verify
 RUN node -e "if (require('@husklet/client/package.json').version !== '${HUSKLET_REACT_VERSION}') process.exit(1); if (require('@husklet/react/package.json').version !== '${HUSKLET_REACT_VERSION}') process.exit(1)"
@@ -76,6 +77,7 @@ RUN node -e "if (require('@husklet/client/package.json').version !== '${HUSKLET_
 WORKDIR /app
 ENV NODE_ENV=production
 ENV HUSKLET_EXTENSION_SOCKET=/run/husklet/extension.sock
+ENV HUSKLET_EXTENSION_DATA=/var/lib/husklet-extension
 USER node
 
 # What an extension overrides. The host starts the image as it is, so a base

@@ -1,9 +1,9 @@
 //! The container one extension runs in, and the supervision that keeps it there.
 //!
 //! An extension is a program someone else wrote, so the container it gets is
-//! described entirely here rather than taken from its image: one environment
-//! variable, one mount, no network, and the resource ceiling the protocol
-//! already clamps to. Anything the image asks for beyond that is ignored.
+//! described entirely here rather than taken from its image: the private socket
+//! and private durable data mounts, no network, and the resource ceiling the
+//! protocol already clamps to. Anything the image asks for beyond that is ignored.
 //!
 //! Building the specification and computing its signature are pure functions
 //! over a [`Manifest`], a [`Grant`], an [`Image`], and a socket path. Nothing in
@@ -19,7 +19,7 @@ use hl_client::model::{CreateContainer, CreateExecution, DockerMount, HostConfig
 use hl_extension::port::HostError;
 use hl_extension::{Grant, Manifest, Resources};
 
-use super::{Bridge, failure};
+use super::{failure, Bridge};
 
 /// The only environment variable an extension's container is given.
 ///
@@ -29,6 +29,12 @@ pub const SOCKET_VARIABLE: &str = "HUSKLET_EXTENSION_SOCKET";
 
 /// Where the host socket appears inside the container.
 pub const SOCKET_TARGET: &str = "/run/husklet/extension.sock";
+
+/// Stable private storage owned by this extension inside its workspace.
+pub const DATA_TARGET: &str = "/var/lib/husklet-extension";
+
+/// The path is also advertised so extensions do not have to duplicate it.
+pub const DATA_VARIABLE: &str = "HUSKLET_EXTENSION_DATA";
 
 /// Prefix of every extension container name, so a workspace's extension
 /// containers are recognizable without consulting a label.
@@ -57,6 +63,11 @@ const STOP_SECONDS: u64 = 5;
 /// Permissions on the socket directory: the owner and nobody else.
 #[cfg(unix)]
 const DIRECTORY_MODE: u32 = 0o700;
+
+/// The private parent supplies isolation. The mounted child must be writable by
+/// the image's unprivileged uid, which need not equal the desktop user's uid.
+#[cfg(unix)]
+const DATA_MODE: u32 = 0o777;
 
 /// Permissions on the socket itself. An extension's socket is its credential:
 /// anyone who can connect to it holds that extension's whole grant.
@@ -112,6 +123,7 @@ pub struct SidecarSpec {
     granted: Vec<String>,
     resources: Resources,
     socket: PathBuf,
+    data: PathBuf,
     generation: i64,
 }
 
@@ -125,8 +137,14 @@ impl SidecarSpec {
     #[must_use]
     pub fn new(manifest: &Manifest, granted: &Grant, image: &Image, socket: impl Into<PathBuf>) -> Self {
         let entrypoint = manifest.entrypoint.clone().unwrap_or_else(|| image.entrypoint.clone());
+        let name = format!("{NAME_PREFIX}{}", manifest.name);
+        let socket = socket.into();
+        let data = socket
+            .parent()
+            .map_or_else(|| PathBuf::from("data"), |directory| directory.join("data"));
         Self {
-            name: format!("{NAME_PREFIX}{}", manifest.name),
+            data,
+            name,
             image: image.clone(),
             entrypoint,
             command: image.command.clone(),
@@ -135,7 +153,7 @@ impl SidecarSpec {
                 .map(|capability| capability.as_str().to_owned())
                 .collect(),
             resources: manifest.resources.clamp(),
-            socket: socket.into(),
+            socket,
             generation: 0,
         }
     }
@@ -162,6 +180,12 @@ impl SidecarSpec {
     #[must_use]
     pub fn socket(&self) -> &Path {
         &self.socket
+    }
+
+    /// The host-owned directory retained across sidecar replacement.
+    #[must_use]
+    pub fn data(&self) -> &Path {
+        &self.data
     }
 
     /// A digest over everything that makes an existing container unusable when
@@ -206,6 +230,7 @@ impl SidecarSpec {
             Self::field(&mut value, &limit.to_string());
         }
         Self::field(&mut value, &self.socket.to_string_lossy());
+        Self::field(&mut value, &self.data.to_string_lossy());
         Self::field(&mut value, &self.generation.to_string());
         Self::field(&mut value, "interpreted");
         Self::field(&mut value, NODE_OPTIONS);
@@ -232,6 +257,7 @@ impl SidecarSpec {
             cmd: Some(self.command.clone()).filter(|values| !values.is_empty()),
             env: Some(vec![
                 format!("{SOCKET_VARIABLE}={SOCKET_TARGET}"),
+                format!("{DATA_VARIABLE}={DATA_TARGET}"),
                 // V8 executable pages are not compatible with the translated backend yet. Keep
                 // extension resource accounting and sandboxing while running JavaScript without JIT.
                 format!("NODE_OPTIONS={NODE_OPTIONS}"),
@@ -255,16 +281,24 @@ impl SidecarSpec {
         ])
     }
 
-    /// The host-side settings: the private socket and nothing else, no network,
-    /// and the clamped limits expressed in daemon units.
+    /// The host-side settings: the private socket, private durable data, no
+    /// network, and the clamped limits expressed in daemon units.
     fn host(&self) -> HostConfig {
         HostConfig {
-            mounts: vec![DockerMount {
-                kind: "bind".to_owned(),
-                source: self.socket.to_string_lossy().into_owned(),
-                target: SOCKET_TARGET.to_owned(),
-                ..DockerMount::default()
-            }],
+            mounts: vec![
+                DockerMount {
+                    kind: "bind".to_owned(),
+                    source: self.socket.to_string_lossy().into_owned(),
+                    target: SOCKET_TARGET.to_owned(),
+                    ..DockerMount::default()
+                },
+                DockerMount {
+                    kind: "bind".to_owned(),
+                    source: self.data.to_string_lossy().into_owned(),
+                    target: DATA_TARGET.to_owned(),
+                    ..DockerMount::default()
+                },
+            ],
             memory: i64::from(self.resources.memory_mb) * 1024 * 1024,
             nano_cpus: i64::from(self.resources.cpus) * 1_000_000_000,
             pids_limit: Some(i64::from(self.resources.process_count)),
@@ -297,8 +331,27 @@ impl SidecarSpec {
         };
         std::fs::create_dir_all(directory)?;
         confine(directory, DIRECTORY_MODE)?;
+        match std::fs::symlink_metadata(&self.data) {
+            Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {}
+            Ok(_) => return Err(std::io::Error::other("extension data path is not a real directory")),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => std::fs::create_dir(&self.data)?,
+            Err(error) => return Err(error),
+        }
+        confine(&self.data, DATA_MODE)?;
         match std::fs::symlink_metadata(&self.socket) {
             Ok(_) => confine(&self.socket, SOCKET_MODE),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Deletes private data only after uninstall has stopped the exact sidecar.
+    pub fn purge_data(&self) -> std::io::Result<()> {
+        match std::fs::symlink_metadata(&self.data) {
+            Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {
+                std::fs::remove_dir_all(&self.data)
+            }
+            Ok(_) => Err(std::io::Error::other("extension data path is not a real directory")),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
             Err(error) => Err(error),
         }
@@ -522,13 +575,14 @@ fn absence(error: &hl_client::Error) -> Result<Option<Outcome>, HostError> {
 mod tests {
     use std::io::{Read as _, Write as _};
     use std::os::unix::net::UnixListener;
+    use std::path::Path;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Barrier};
     use std::time::Duration;
 
     use super::{
-        GENERATION_LABEL, Image, NAME_LABEL, NODE_OPTIONS, SIGNATURE_LABEL, SOCKET_TARGET, SOCKET_VARIABLE, Sidecar,
-        SidecarSpec, ensure_transaction, removal_target, replacement_target, stop_target,
+        ensure_transaction, removal_target, replacement_target, stop_target, Image, Sidecar, SidecarSpec, DATA_TARGET,
+        DATA_VARIABLE, GENERATION_LABEL, NAME_LABEL, NODE_OPTIONS, SIGNATURE_LABEL, SOCKET_TARGET, SOCKET_VARIABLE,
     };
     use hl_extension::{Capability, ExtensionName, Grant, Manifest, Resources};
 
@@ -998,7 +1052,7 @@ mod tests {
     }
 
     #[test]
-    fn the_container_is_given_the_socket_and_nothing_else() {
+    fn the_container_gets_only_its_socket_and_stable_private_data() {
         let request = spec().request();
         let host = request.host_config.expect("host settings");
 
@@ -1006,12 +1060,18 @@ mod tests {
             request.env,
             Some(vec![
                 format!("{SOCKET_VARIABLE}={SOCKET_TARGET}"),
+                format!("{DATA_VARIABLE}={DATA_TARGET}"),
                 format!("NODE_OPTIONS={NODE_OPTIONS}"),
             ])
         );
-        assert_eq!(host.mounts.len(), 1);
+        assert_eq!(host.mounts.len(), 2);
         assert_eq!(host.mounts[0].source, "/run/sample/extension.sock");
         assert_eq!(host.mounts[0].target, SOCKET_TARGET);
+        assert_eq!(host.mounts[1].kind, "bind");
+        assert_eq!(host.mounts[1].source, "/run/sample/data");
+        assert_eq!(host.mounts[1].target, DATA_TARGET);
+        assert!(!host.mounts[1].read_only);
+        assert_eq!(spec().data(), Path::new("/run/sample/data"));
         assert!(host.binds.is_empty());
         assert_eq!(host.network_mode, "none");
         assert!(
@@ -1019,6 +1079,42 @@ mod tests {
             "the native socket projection needs a writable image root"
         );
         assert!(host.tmpfs.is_empty(), "no unbounded writable filesystem is granted");
+    }
+
+    #[test]
+    fn replacement_changes_the_sandbox_but_keeps_the_same_private_data_path() {
+        let original = spec();
+        let manifest = manifest(
+            &[Capability::ContainerRead, Capability::ContainerLifecycle],
+            Resources::default(),
+        );
+        let updated = SidecarSpec::new(
+            &manifest,
+            &manifest.capabilities,
+            &Image {
+                digest: "sha256:bbbb".into(),
+                ..image()
+            },
+            "/run/sample/extension.sock",
+        );
+
+        assert_ne!(original.signature(), updated.signature());
+        assert_eq!(original.data(), updated.data());
+    }
+
+    #[test]
+    fn different_extensions_cannot_share_a_private_data_path() {
+        let first = spec();
+        let mut other_manifest = manifest(&[Capability::ContainerRead], Resources::default());
+        other_manifest.name = ExtensionName::new("other").expect("name");
+        let other = SidecarSpec::new(
+            &other_manifest,
+            &other_manifest.capabilities,
+            &image(),
+            "/run/other/extension.sock",
+        );
+
+        assert_ne!(first.data(), other.data());
     }
 
     #[test]
@@ -1079,11 +1175,82 @@ mod tests {
         spec.prepare().expect("prepared");
         let directory = std::fs::metadata(socket.parent().expect("directory")).expect("directory metadata");
         assert_eq!(directory.permissions().mode() & 0o777, 0o700);
+        let data = socket.parent().expect("directory").join("data");
+        assert!(data.is_dir());
+        assert_eq!(
+            std::fs::metadata(&data).expect("data metadata").permissions().mode() & 0o777,
+            0o777
+        );
 
         std::fs::write(&socket, b"").expect("socket placeholder");
         std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o666)).expect("widened");
         spec.prepare().expect("prepared again");
         let confined = std::fs::metadata(&socket).expect("socket metadata");
         assert_eq!(confined.permissions().mode() & 0o777, 0o666);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_data_survives_replacement_and_uninstall_purges_only_its_directory() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let socket = temporary.path().join("extensions/sample/extension.sock");
+        let original = SidecarSpec::new(
+            &manifest(&[Capability::ContainerRead], Resources::default()),
+            &Grant::new([Capability::ContainerRead]),
+            &image(),
+            &socket,
+        );
+        original.prepare().expect("first generation prepared");
+        std::fs::write(original.data().join("index.db"), b"embeddings").expect("private data");
+
+        let replacement = SidecarSpec::new(
+            &manifest(
+                &[Capability::ContainerRead, Capability::ContainerLifecycle],
+                Resources::default(),
+            ),
+            &Grant::new([Capability::ContainerRead, Capability::ContainerLifecycle]),
+            &Image {
+                digest: "sha256:bbbb".into(),
+                ..image()
+            },
+            &socket,
+        );
+        replacement.prepare().expect("replacement prepared");
+        assert_eq!(
+            std::fs::read(replacement.data().join("index.db")).expect("retained index"),
+            b"embeddings"
+        );
+
+        let neighbour = temporary.path().join("extensions/other/data");
+        std::fs::create_dir_all(&neighbour).expect("other extension data");
+        std::fs::write(neighbour.join("database"), b"other").expect("other value");
+        replacement.purge_data().expect("uninstall purge");
+        assert!(!replacement.data().exists());
+        assert_eq!(
+            std::fs::read(neighbour.join("database")).expect("other retained"),
+            b"other"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_cannot_redirect_private_data_preparation_or_uninstall() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let socket = temporary.path().join("extensions/sample/extension.sock");
+        std::fs::create_dir_all(socket.parent().expect("parent")).expect("extension directory");
+        let outside = temporary.path().join("outside");
+        std::fs::create_dir(&outside).expect("outside");
+        std::fs::write(outside.join("keep"), b"safe").expect("sentinel");
+        std::os::unix::fs::symlink(&outside, socket.parent().expect("parent").join("data")).expect("link");
+        let spec = SidecarSpec::new(
+            &manifest(&[Capability::ContainerRead], Resources::default()),
+            &Grant::new([Capability::ContainerRead]),
+            &image(),
+            &socket,
+        );
+
+        assert!(spec.prepare().is_err());
+        assert!(spec.purge_data().is_err());
+        assert_eq!(std::fs::read(outside.join("keep")).expect("sentinel retained"), b"safe");
     }
 }

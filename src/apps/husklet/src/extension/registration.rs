@@ -16,8 +16,8 @@ use std::collections::BTreeMap;
 use std::io::Read as _;
 use std::sync::mpsc::Sender;
 use std::sync::{
-    Arc,
     atomic::{AtomicBool, Ordering},
+    Arc,
 };
 
 use hl_client::model::{CreateContainer, HostConfig, InspectImage};
@@ -381,7 +381,7 @@ pub fn document(archive: &[u8]) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Acquisition, Candidate, document, immutable_content, manifest_container_request, manifest_path, split,
+        document, immutable_content, manifest_container_request, manifest_path, split, Acquisition, Candidate,
     };
     use hl_extension::Manifest;
     use std::collections::BTreeMap;
@@ -644,7 +644,9 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn both_architecture_candidates_are_bound_to_their_workspace_without_starting() {
-        use super::super::sidecar::{Image, SIGNATURE_LABEL, SOCKET_TARGET, SOCKET_VARIABLE, SidecarSpec};
+        use super::super::sidecar::{
+            Image, SidecarSpec, DATA_TARGET, DATA_VARIABLE, SIGNATURE_LABEL, SOCKET_TARGET, SOCKET_VARIABLE,
+        };
         use hl_client::model::EventQuery;
         use hl_container::{Config, Containers, Persistence};
         use hl_daemon::Daemon;
@@ -732,13 +734,19 @@ mod tests {
             request.env,
             Some(vec![
                 format!("{SOCKET_VARIABLE}={SOCKET_TARGET}"),
+                format!("{DATA_VARIABLE}={DATA_TARGET}"),
                 "NODE_OPTIONS=--jitless".to_owned(),
             ])
         );
         assert_eq!(host.network_mode, "none");
-        assert_eq!(host.mounts.len(), 1);
+        assert_eq!(host.mounts.len(), 2);
         assert_eq!(host.mounts[0].source, credential.to_string_lossy());
         assert_eq!(host.mounts[0].target, SOCKET_TARGET);
+        assert_eq!(
+            host.mounts[1].source,
+            credential.parent().unwrap().join("data").to_string_lossy()
+        );
+        assert_eq!(host.mounts[1].target, DATA_TARGET);
         assert_eq!(request.labels.get(SIGNATURE_LABEL), Some(&spec.signature()));
         let ungranted = SidecarSpec::new(
             &candidate.manifest,

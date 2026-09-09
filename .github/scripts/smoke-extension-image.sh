@@ -31,6 +31,10 @@ case "$(inspect '{{json .Config.Env}}')" in
   *'"HUSKLET_EXTENSION_SOCKET=/run/husklet/extension.sock"'*) ;;
   *) fail "$image omits the extension socket environment" ;;
 esac
+case "$(inspect '{{json .Config.Env}}')" in
+  *'"HUSKLET_EXTENSION_DATA=/var/lib/husklet-extension"'*) ;;
+  *) fail "$image omits the private data environment" ;;
+esac
 
 if [[ "$kind" == base ]]; then
   [[ "$(inspect '{{index .Config.Labels "husklet.extension.manifest"}}')" == '<no value>' ]] \
@@ -45,6 +49,9 @@ if [[ "$kind" == base ]]; then
       if (process.getuid?.() === 0) throw new Error("base runs as root");
       if (process.versions.node !== "22.23.2") throw new Error(`Node ${process.versions.node}`);
       if (process.env.HUSKLET_EXTENSION_SOCKET !== "/run/husklet/extension.sock") throw new Error("socket env missing");
+      if (process.env.HUSKLET_EXTENSION_DATA !== "/var/lib/husklet-extension") throw new Error("data env missing");
+      fs.writeFileSync(`${process.env.HUSKLET_EXTENSION_DATA}/smoke`, "durable");
+      if (fs.readFileSync(`${process.env.HUSKLET_EXTENSION_DATA}/smoke`, "utf8") !== "durable") throw new Error("private data is not writable");
       if (manifest.version !== process.env.EXPECTED_VERSION) throw new Error(`SDK ${manifest.version}`);
       if (clientManifest.version !== process.env.EXPECTED_VERSION) throw new Error(`client ${clientManifest.version}`);
       if (connect !== clientConnect) throw new Error("React does not expose the installed client runtime");
@@ -75,6 +82,7 @@ else
       if (process.getuid?.() === 0) throw new Error("extension runs as root");
       if (process.versions.node !== "22.23.2") throw new Error(`Node ${process.versions.node}`);
       if (process.env.HUSKLET_EXTENSION_SOCKET !== "/run/husklet/extension.sock") throw new Error("socket env missing");
+      if (process.env.HUSKLET_EXTENSION_DATA !== "/var/lib/husklet-extension") throw new Error("data env missing");
       if (sdk.version !== process.env.EXPECTED_VERSION) throw new Error(`SDK ${sdk.version}`);
       if (client.version !== process.env.EXPECTED_VERSION || typeof connect !== "function") throw new Error("client runtime unavailable");
       if (!manifest.includes(`name = "${process.env.EXPECTED_EXTENSION}"`)) throw new Error("wrong manifest name");

@@ -694,10 +694,10 @@ try {
       '--input-type=module',
       '--eval',
       `
-    import { PROTOCOL_VERSION, Session, protocolSurface, semanticXml, workspace } from '@husklet/client';
+    import { DATA, PROTOCOL_VERSION, Session, protocolSurface, semanticXml, workspace } from '@husklet/client';
     import { PROTOCOL_VERSION as subpathVersion, validateRequest, validateUiEvent } from '@husklet/client/protocol';
     const event = validateUiEvent({ interaction: 'drop', trigger: 'Drop', node: 1, id: 'drop-1', source: 2, x: 3, y: 4 });
-    if (PROTOCOL_VERSION !== subpathVersion || typeof Session !== 'function'
+    if (DATA !== 'HUSKLET_EXTENSION_DATA' || PROTOCOL_VERSION !== subpathVersion || typeof Session !== 'function'
       || typeof workspace !== 'function' || typeof semanticXml !== 'function'
       || protocolSurface.requests.workspace_info.api !== 'info'
       || typeof validateRequest !== 'function' || event.interaction !== 'drop') process.exit(1);

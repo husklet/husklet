@@ -632,6 +632,7 @@ try {
   assert.match(dockerfile, /process\.version !== 'v\$\{NODE_VERSION\}'/);
   assert.match(dockerfile, /package\.json'\)\.version !== '\$\{NPM_VERSION\}'/);
   assert.match(dockerfile, /HUSKLET_EXTENSION_SOCKET=\/run\/husklet\/extension\.sock/);
+  assert.match(dockerfile, /HUSKLET_EXTENSION_DATA=\/var\/lib\/husklet-extension/);
   assert(!dockerfile.includes('--platform='), 'base image must not pin one architecture');
   assert.match(readme, /npm install @husklet\/react react@18\.3\.1/);
   assert.match(readme, /one published Husklet SDK base image/);

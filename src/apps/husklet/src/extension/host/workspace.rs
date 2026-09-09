@@ -68,6 +68,24 @@ impl super::Host {
     }
 }
 
+/// Exact runtime ownership captured before an uninstall forgets its record.
+pub struct ExtensionRemoval {
+    bridge: Option<Arc<Bridge>>,
+    spec: SidecarSpec,
+}
+
+impl ExtensionRemoval {
+    /// Stops the captured sidecar, then deletes only its private data directory.
+    pub fn finish(self) -> Result<(), HostError> {
+        if let Some(bridge) = self.bridge {
+            Sidecar::new(bridge).remove_owned(&self.spec)?;
+        }
+        self.spec
+            .purge_data()
+            .map_err(|error| HostError::Failed(error.to_string()))
+    }
+}
+
 #[cfg(debug_assertions)]
 struct LocalWorkspace {
     workspace: Workspace,
@@ -252,30 +270,41 @@ impl Workspace {
     /// Deletes the sidecar owned by one still-installed record. The record is
     /// deliberately read before its caller forgets it: its digest, grant,
     /// limits, and socket are the authority for exact ownership.
-    pub fn remove_extension(workspace: &WorkspaceConfig, name: &ExtensionName) -> Result<(), String> {
+    pub fn extension_removal(
+        workspace: &WorkspaceConfig,
+        name: &ExtensionName,
+        image_digest: &str,
+    ) -> Result<ExtensionRemoval, HostError> {
         let supply = Self::extension(workspace, name);
-        let storage = hl_ws::storage::Directory::open(supply.root()).map_err(|error| error.to_string())?;
-        let records = Records::open(storage).map_err(|fault| fault.to_string())?;
+        let storage =
+            hl_ws::storage::Directory::open(supply.root()).map_err(|error| HostError::Failed(error.to_string()))?;
+        let records = Records::open(storage).map_err(|fault| HostError::Failed(fault.to_string()))?;
         let record = records
             .all()
-            .map_err(|fault| fault.to_string())?
+            .map_err(|fault| HostError::Failed(fault.to_string()))?
             .into_iter()
             .find(|record| record.name == *name)
-            .ok_or_else(|| format!("extension {name} is not installed"))?;
+            .ok_or_else(|| HostError::Absent(format!("extension {name} is not installed")))?;
+        if record.image_digest != image_digest {
+            return Err(HostError::Conflict(format!(
+                "extension {name} changed since it was inspected"
+            )));
+        }
         let manifest = described(&record);
-        // Entrypoint and user do not participate in the ownership signature;
-        // no image lookup is needed merely to delete an already-created sidecar.
-        let image = Image {
-            reference: record.image_digest.clone(),
-            digest: record.image_digest.clone(),
-            entrypoint: Vec::new(),
-            command: Vec::new(),
-            user: String::new(),
+        let bridge = supply.live_bridge().map_err(HostError::Failed)?;
+        let image = match &bridge {
+            Some(bridge) => Self::image(bridge, &record).map_err(HostError::Failed)?,
+            None => Image {
+                reference: record.image_digest.clone(),
+                digest: record.image_digest.clone(),
+                entrypoint: Vec::new(),
+                command: Vec::new(),
+                user: String::new(),
+            },
         };
-        let spec = SidecarSpec::new(&manifest, &record.granted, &image, supply.socket(name));
-        Sidecar::new(supply.bridge()?)
-            .remove_owned(&spec)
-            .map_err(|error| error.to_string())
+        let spec =
+            SidecarSpec::new(&manifest, &record.granted, &image, supply.socket(name)).generation(record.installed_at);
+        Ok(ExtensionRemoval { bridge, spec })
     }
 
     /// The workspace's own container daemon, started if it is not up.

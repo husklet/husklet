@@ -1,6 +1,7 @@
 export {
   ExtensionError,
   Session,
+  DATA,
   SOCKET,
   PROTOCOL,
   validateRowRequest,

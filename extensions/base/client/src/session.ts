@@ -20,6 +20,9 @@ export const PROTOCOL = PROTOCOL_VERSION;
 /** Where the host mounts the socket inside an extension's container. */
 export const SOCKET = 'HUSKLET_EXTENSION_SOCKET';
 
+/** Environment variable naming this extension's private durable data directory. */
+export const DATA = 'HUSKLET_EXTENSION_DATA';
+
 /** The protocol's shared call channel. Replies are ordered on this channel. */
 const CALLS = 2;
 const ERROR = 2;

@@ -3,6 +3,8 @@ import type { CallOptions, ConnectOptions, HostEvent, RowRequest } from './api.j
 export declare const PROTOCOL: 1;
 /** Where the host mounts the socket inside an extension's container. */
 export declare const SOCKET = "HUSKLET_EXTENSION_SOCKET";
+/** Environment variable naming this extension's private durable data directory. */
+export declare const DATA = "HUSKLET_EXTENSION_DATA";
 /** Validate the host-pushed request before extension code uses it for database paging. */
 export declare function validateRowRequest(value: any): RowRequest;
 /** GUI interaction frames are not protocol Snapshots and retain their own wire vocabulary. */
