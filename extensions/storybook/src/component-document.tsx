@@ -2,6 +2,7 @@ import React from 'react';
 import {
   Code,
   Column,
+  Expander,
   FormControl,
   FormHelperText,
   FormLabel,
@@ -15,6 +16,20 @@ import {
   Text,
 } from '@husklet/react';
 import type { ControlRow } from './editors.js';
+
+const INHERITED = new Set([
+  'destructive',
+  'visible',
+  'tooltip',
+  'width',
+  'height',
+  'pad',
+  'align',
+  'justify',
+  'grow',
+  'span',
+  'rowSpan',
+]);
 
 export function ComponentDocument({
   name,
@@ -70,29 +85,63 @@ export function DocumentationSection({
 }
 
 export function ApiReference({ example, rows }: { example: string; rows: ControlRow[] }) {
+  const own = rows.filter((row) => !INHERITED.has(row.name));
+  const inherited = rows.filter((row) => INHERITED.has(row.name));
   return (
     <Column gap={3} width="fill">
       <Code value={example} wrap />
-      <Table width="fill">
-        <TableHead>
-          <TableRow>
-            <TableCell label="Property" />
-            <TableCell label="Control" />
-            <TableCell label="Description" />
-          </TableRow>
-        </TableHead>
-        <TableBody>
-          {rows.map((row) => (
-            <TableRow key={row.name}>
-              <TableCell label={row.name} />
-              <TableCell label={row.editor} />
-              <TableCell label={row.note} />
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
+      <ApiTable rows={own} />
+      {inherited.length > 0 ? (
+        <Expander
+          label={`Inherited layout and automation props · ${inherited.length}`}
+          width="fill"
+        >
+          <ApiTable rows={inherited} />
+        </Expander>
+      ) : null}
     </Column>
   );
+}
+
+function ApiTable({ rows }: { rows: ControlRow[] }) {
+  return (
+    <Table width="fill">
+      <TableHead>
+        <TableRow>
+          <TableCell label="Property" wrap />
+          <TableCell label="Type" wrap />
+          <TableCell label="Default" wrap />
+          <TableCell label="Description" wrap />
+        </TableRow>
+      </TableHead>
+      <TableBody>
+        {rows.map((row) => (
+          <TableRow key={row.name}>
+            <TableCell label={row.name} wrap />
+            <TableCell label={publicType(row)} wrap />
+            <TableCell label={defaultValue(row)} wrap />
+            <TableCell label={row.note} wrap />
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
+  );
+}
+
+function publicType(row: ControlRow): string {
+  if (row.members?.length) return row.members.map(({ value }) => `'${value}'`).join(' | ');
+  const names = row.values.map((value) => {
+    if (value === 'Text') return 'string';
+    if (value === 'Flag') return 'boolean';
+    if (value === 'Number' || value === 'Integer') return 'number';
+    return value;
+  });
+  return [...new Set(names)].join(' | ') || 'unknown';
+}
+
+function defaultValue(row: ControlRow): string {
+  const match = /defaults? to ([^;]+?)(?: when absent|$)/i.exec(row.note);
+  return match?.[1] ?? '—';
 }
 
 export function caption(value: string) {

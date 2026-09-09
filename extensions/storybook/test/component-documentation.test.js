@@ -11,6 +11,36 @@ function created(patches, tag) {
   return patches.filter((patch) => patch.Create?.tag === tag).map((patch) => patch.Create.id);
 }
 
+test('API references expose public types and defaults and collapse inherited props', () => {
+  const frame = host().render(h(SelectWorkbench));
+  for (const heading of ['Property', 'Type', 'Default', 'Description']) {
+    assert.ok(labelled(frame.patches, 'TableCell', heading), `API table is missing ${heading}`);
+  }
+  assert.equal(labelled(frame.patches, 'TableCell', 'Control'), null);
+  assert.ok(
+    created(frame.patches, 'TableCell').some((id) =>
+      frame.patches.some(
+        (patch) =>
+          patch.SetProp?.id === id &&
+          patch.SetProp.prop === 'Label' &&
+          String(patch.SetProp.value?.Text).includes('string'),
+      ),
+    ),
+    'API table has no public string type',
+  );
+  assert.ok(
+    created(frame.patches, 'Expander').some((id) =>
+      frame.patches.some(
+        (patch) =>
+          patch.SetProp?.id === id &&
+          patch.SetProp.prop === 'Label' &&
+          String(patch.SetProp.value?.Text).startsWith('Inherited layout and automation props'),
+      ),
+    ),
+    'inherited props are not collapsed separately',
+  );
+});
+
 function labelled(patches, tag, label) {
   const candidates = new Set(created(patches, tag));
   return (

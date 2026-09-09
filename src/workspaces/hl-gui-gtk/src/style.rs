@@ -42,6 +42,7 @@ fn controls(css: &mut String, theme: &Theme) {
          .hl-select {{ background: {ground}; border: 1px solid {line}; border-radius: {radius}px; min-height: 30px; }}\n\
          .hl-select:hover {{ border-color: {dim}; }}\n\
          .hl-select:focus-within {{ border-color: {accent}; box-shadow: 0 0 0 1px {accent}; }}\n\
+         .hl-select:disabled, .hl-select button:disabled {{ border-color: {faint}; }}\n\
          entry:hover, spinbutton:hover, dropdown:hover > button {{ border-color: {dim}; }}\n\
          entry:focus-within, spinbutton:focus-within, textview:focus-within {{ border-color: {accent}; box-shadow: 0 0 0 1px {accent}; }}\n\
          entry.tone-danger, .hl-entry.tone-danger {{ border-color: {danger}; box-shadow: 0 0 0 1px {danger}; }}\n\
@@ -51,12 +52,17 @@ fn controls(css: &mut String, theme: &Theme) {
          notebook tab:checked {{ color: {text}; }}\n\
          switch {{ background: {line}; }}\n\
          switch:checked {{ background: {accent}; }}\n\
+         switch:disabled {{ opacity: .55; }}\n\
          scale trough {{ background: {line}; }}\n\
          scale highlight {{ background: {accent}; }}\n\
          progressbar trough {{ background: {line}; }}\n\
          progressbar progress {{ background: {accent}; }}\n\
          checkbutton check {{ background: {ground}; border: 1px solid {line}; }}\n\
          checkbutton check:checked {{ background: {accent}; }}\n\
+         .hl-table {{ background: {ground}; border: 1px solid {line}; border-radius: {radius}px; }}\n\
+         .hl-tablehead .hl-tablecell {{ background: {raised}; color: {text}; font-weight: 600; }}\n\
+         .hl-tablecell {{ min-height: 32px; padding: 6px 8px; border-bottom: 1px solid {line}; }}\n\
+         .hl-tablebody .hl-tablerow:hover .hl-tablecell {{ background: {surface}; }}\n\
          label {{ color: inherit; }}",
         ground = theme.color(Token::Ground).hex(),
         surface = theme.color(Token::Surface).hex(),
@@ -337,7 +343,9 @@ mod tests {
         ));
         assert!(css.contains(".variant-ghost { background: transparent;"));
         assert!(css.contains(".hl-iconbutton { min-width: 30px; min-height: 30px;"));
-        assert!(css.contains(".hl-listitembutton { background: transparent;"));
+        assert!(css.contains(
+            ".hl-listitembutton, .hl-listitembutton.variant-ghost { background: transparent;"
+        ));
         assert!(css.contains(".hl-card > box { padding: 10px"));
     }
 
@@ -363,8 +371,13 @@ mod tests {
         let css = super::sheet(&Theme::dark());
         assert!(css.contains(".hl-select { background: #0f1115; border: 1px solid #323843;"));
         assert!(css.contains(".hl-select:focus-within { border-color: #559df7; box-shadow: 0 0 0 1px #559df7;"));
+        assert!(css.contains(".hl-select:disabled, .hl-select button:disabled { border-color: #87909f;"));
+        assert!(css.contains("switch:disabled { opacity: .55;"));
         assert!(css.contains(
             "entry.tone-danger, .hl-entry.tone-danger { border-color: #e55353; box-shadow: 0 0 0 1px #e55353;"
         ));
+        assert!(css.contains(".hl-table { background: #0f1115; border: 1px solid #323843;"));
+        assert!(css.contains(".hl-tablehead .hl-tablecell { background: #21252d;"));
+        assert!(css.contains(".hl-tablecell { min-height: 32px; padding: 6px 8px; border-bottom: 1px solid #323843;"));
     }
 }
