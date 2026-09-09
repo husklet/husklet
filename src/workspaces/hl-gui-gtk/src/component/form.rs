@@ -51,6 +51,14 @@ fn switch() -> gtk::Switch {
 /// GTK4 has no radio widget: a check button becomes a radio by joining another
 /// one's group, so the grouping has to happen where the option is placed.
 pub(crate) fn slotted(parent: &gtk::Widget, child: &gtk::Widget, tag: Tag) -> bool {
+    if super::belongs(parent, Tag::FormControl) {
+        let Some(container) = parent.downcast_ref::<gtk::Box>() else {
+            return false;
+        };
+        container.append(child);
+        associate(container);
+        return true;
+    }
     if super::belongs(parent, Tag::FormControlLabel) {
         let Some(container) = parent.downcast_ref::<gtk::Box>() else {
             return false;
@@ -77,6 +85,34 @@ pub(crate) fn slotted(parent: &gtk::Widget, child: &gtk::Widget, tag: Tag) -> bo
     option.set_group(first(container).as_ref());
     container.append(child);
     true
+}
+
+/// Connects the authored label and helper to the focusable field they explain.
+fn associate(container: &gtk::Box) {
+    let children = slot::offspring(container.upcast_ref());
+    // A freshly constructed Entry is attached before GTK has rooted it and can
+    // still report `is_focusable() == false`. Its component identity is stable
+    // at construction, so prefer that over transient toolkit state.
+    let field = children
+        .iter()
+        .find(|child| super::belongs(child, Tag::Entry))
+        .or_else(|| children.iter().find(|child| child.is_focusable()));
+    let label = children
+        .iter()
+        .find(|child| super::belongs(child, Tag::FormLabel))
+        .and_then(|child| child.downcast_ref::<gtk::Label>());
+    let helper = children
+        .iter()
+        .find(|child| super::belongs(child, Tag::FormHelperText))
+        .and_then(|child| child.downcast_ref::<gtk::Label>());
+    let Some(field) = field else { return };
+    if let Some(label) = label {
+        label.set_mnemonic_widget(Some(field));
+        field.update_relation(&[gtk::accessible::Relation::LabelledBy(&[label.upcast_ref()])]);
+    }
+    if let Some(helper) = helper {
+        field.update_relation(&[gtk::accessible::Relation::DescribedBy(&[helper.upcast_ref()])]);
+    }
 }
 
 /// The option already in a group, which every later one joins.

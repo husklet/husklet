@@ -10,9 +10,9 @@ mod unix {
 
     use gtk::prelude::*;
     use hl_extension::{
-        Capability, ChannelId, ExtensionName, Frame, Grant, Hello, Kind, PROTOCOL, Reply, Request, Welcome, Wire, codec,
+        codec, Capability, ChannelId, ExtensionName, Frame, Grant, Hello, Kind, Reply, Request, Welcome, Wire, PROTOCOL,
     };
-    use hl_gui::{LOG_VIEW_CHARACTER_LIMIT, Renderer as _, SourceMutation, Theme, Tree};
+    use hl_gui::{Renderer as _, SourceMutation, Theme, Tree, LOG_VIEW_CHARACTER_LIMIT};
     use hl_gui_gtk::Surface;
 
     const STORIES: &[&str] = &[
@@ -25,6 +25,7 @@ mod unix {
         "Checkbox",
         "Radio",
         "RadioGroup",
+        "FormControl",
         "Extension acquisition",
         "Validated settings form",
         "Keyboard and semantic actions",
@@ -210,7 +211,7 @@ mod unix {
         let realized_window = gtk::Window::new();
         let narrow_story = matches!(
             story,
-            "Button" | "Entry" | "Select" | "Checkbox" | "Radio" | "RadioGroup" | "DataTable"
+            "Button" | "Entry" | "Select" | "Checkbox" | "Radio" | "RadioGroup" | "FormControl" | "DataTable"
         );
         realized_window.set_default_size(if narrow_story { 600 } else { 1_200 }, 800);
         realized_window.set_child(Some(&root));
@@ -281,6 +282,20 @@ mod unix {
                 entry.tooltip_text().as_deref() == Some("Focused extension name")
             });
             assert!(focus.grab_focus(), "Entry accepts deterministic keyboard focus");
+            settle_toolkit();
+            let _ = surface.reports().drain();
+        }
+        if story == "FormControl" {
+            let entry = find::<gtk::Entry>(&root, |entry| entry.tooltip_text().as_deref() == Some("Extension name"));
+            let label = find::<gtk::Label>(&root, |label| label.text() == "Extension name");
+            let helper = find::<gtk::Label>(&root, |label| label.text() == "Used in manifests and package names.");
+            assert_eq!(
+                label.mnemonic_widget(),
+                Some(entry.clone().upcast()),
+                "FormLabel identifies its sibling Entry"
+            );
+            assert!(helper.is_visible(), "FormHelperText remains visible beside its Entry");
+            assert!(entry.grab_focus(), "FormControl Entry accepts deterministic focus");
             settle_toolkit();
             let _ = surface.reports().drain();
         }
@@ -560,6 +575,12 @@ mod unix {
             );
             assert!(nightly.has_focus(), "controlled RadioGroup exposes focus-visible state");
             capture_story(&realized_window, "RadioGroup focused nightly");
+        }
+        if story == "FormControl" {
+            settle_toolkit();
+            let entry = find::<gtk::Entry>(&root, |entry| entry.tooltip_text().as_deref() == Some("Extension name"));
+            assert!(entry.grab_focus(), "controlled FormControl restores child focus");
+            capture_story(&realized_window, "FormControl focused");
         }
         if story == "Extension acquisition" {
             assert!(
@@ -872,6 +893,10 @@ mod unix {
             "Entry" => {
                 let entry = find::<gtk::Entry>(root, |entry| entry.tooltip_text().as_deref() == Some("Extension name"));
                 entry.set_text("rendered-entry");
+            }
+            "FormControl" => {
+                let entry = find::<gtk::Entry>(root, |entry| entry.tooltip_text().as_deref() == Some("Extension name"));
+                entry.set_text("rendered-form-control");
             }
             "Select" => {
                 let choice =
