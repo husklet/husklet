@@ -1430,6 +1430,138 @@ test('filesystem change watcher exposes a cursor advance with no visible paths',
   assert.deepEqual(calls, [['filesystem_changes', { after: 7, limit: 256 }]]);
 });
 
+test('real Unix change-page iteration applies backpressure and surfaces overflow, malformed cursors, and abort', async () => {
+  const stage = await pair();
+  const next = frames(stage.host);
+  await next();
+  const files = workspace(stage.session).files;
+  const stream = files.changePages({ after: 10, pageSize: 1, pollMs: 10 });
+
+  const first = stream.next();
+  assert.deepEqual((await next()).payload, {
+    call: 'filesystem_changes',
+    with: { after: 10, limit: 1 },
+  });
+  stage.host.write(
+    encode({
+      channel: 2,
+      kind: KIND.response,
+      payload: {
+        reply: 'file_changes',
+        with: {
+          changes: [
+            {
+              revision: 11,
+              kind: 'modify',
+              path: 'src/test.ts',
+              entry: { path: 'src/test.ts', directory: false, size: 4, identity: 'file-v2' },
+            },
+          ],
+          next: 11,
+          current: 12,
+          more: true,
+          truncated: false,
+        },
+      },
+    }),
+  );
+  assert.equal((await first).value.next, 11);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  const overflow = stream.next();
+  assert.deepEqual((await next()).payload.with, { after: 11, limit: 1 });
+  stage.host.write(
+    encode({
+      channel: 2,
+      kind: KIND.response,
+      payload: {
+        reply: 'file_changes',
+        with: { changes: [], next: 20, current: 20, more: false, truncated: true },
+      },
+    }),
+  );
+  assert.equal((await overflow).value.truncated, true);
+
+  const malformed = stream.next();
+  assert.deepEqual((await next()).payload.with, { after: 20, limit: 1 });
+  stage.host.write(
+    encode({
+      channel: 2,
+      kind: KIND.response,
+      payload: {
+        reply: 'file_changes',
+        with: {
+          changes: [{ revision: 20, kind: 'remove', path: 'src/stale.ts', entry: null }],
+          next: 20,
+          current: 20,
+          more: false,
+          truncated: false,
+        },
+      },
+    }),
+  );
+  await assert.rejects(malformed, /inconsistent filesystem change page/);
+
+  const controller = new AbortController();
+  const idle = files.changePages({ after: 20, pollMs: 10_000, signal: controller.signal });
+  const waiting = idle.next();
+  assert.deepEqual((await next()).payload.with, { after: 20, limit: 256 });
+  stage.host.write(
+    encode({
+      channel: 2,
+      kind: KIND.response,
+      payload: {
+        reply: 'file_changes',
+        with: { changes: [], next: 20, current: 20, more: false, truncated: false },
+      },
+    }),
+  );
+  controller.abort('diagnostics stopped');
+  await assert.rejects(waiting, (error) => error.name === 'AbortError');
+
+  const disconnected = files.changePages({ after: 20, pollMs: 1 }).next();
+  assert.deepEqual((await next()).payload.with, { after: 20, limit: 256 });
+  stage.host.destroy();
+  await assert.rejects(disconnected);
+  stage.session.close();
+  stage.server.close();
+});
+
+test('callback filesystem watcher reports listener failure through its stop handle', async () => {
+  const api = workspace({
+    granted: ['filesystem:read'],
+    async call() {
+      return {
+        reply: 'file_changes',
+        with: {
+          changes: [{ revision: 1, kind: 'remove', path: 'stale.ts', entry: null }],
+          next: 1,
+          current: 1,
+          more: false,
+          truncated: false,
+        },
+      };
+    },
+    onEvent() {
+      return () => {};
+    },
+  });
+  const failure = new Error('test scheduler failed');
+  let reached;
+  const delivered = new Promise((resolve) => {
+    reached = resolve;
+  });
+  const stop = await api.files.watchChanges(
+    () => {
+      reached();
+      throw failure;
+    },
+    { pollMs: 10_000 },
+  );
+  await delivered;
+  await assert.rejects(stop(), (error) => error === failure);
+});
+
 test('execution watcher uses exact topic and returns credit after delivery', async () => {
   const stage = await pair();
   const next = frames(stage.host);

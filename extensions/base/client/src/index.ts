@@ -1677,6 +1677,40 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
           throw new TypeError('host returned an inconsistent filesystem change page');
         return page;
       },
+      changePages: async function* ({
+        after = 0,
+        pageSize = 256,
+        pollMs = 250,
+        signal,
+      }: { after?: number; pageSize?: number; pollMs?: number; signal?: AbortSignal } = {}) {
+        exactFilesystemPageSize(pageSize);
+        if (!Number.isSafeInteger(after) || after < 0)
+          throw new TypeError('filesystem change cursor must be a nonnegative safe integer');
+        if (!Number.isSafeInteger(pollMs) || pollMs < 1)
+          throw new TypeError('filesystem change poll interval must be a positive integer');
+        for (;;) {
+          requireFilesystemActive(signal);
+          const requestedAfter = after;
+          const page = await api.files.changes(after, pageSize);
+          requireFilesystemActive(signal);
+          after = page.next;
+          if (page.truncated || page.changes.length > 0 || page.next !== requestedAfter) yield page;
+          if (page.more) continue;
+          await new Promise<void>((resolve, reject) => {
+            const timer = setTimeout(done, pollMs);
+            function done() {
+              signal?.removeEventListener('abort', abort);
+              resolve();
+            }
+            function abort() {
+              clearTimeout(timer);
+              reject(filesystemAbort(signal));
+            }
+            signal?.addEventListener('abort', abort, { once: true });
+            if (signal?.aborted) abort();
+          });
+        }
+      },
       watchChanges: async (
         listener,
         {
@@ -1686,42 +1720,34 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
           signal,
         }: { after?: number; pageSize?: number; pollMs?: number; signal?: AbortSignal } = {},
       ) => {
-        exactFilesystemPageSize(pageSize);
-        if (!Number.isSafeInteger(after) || after < 0)
-          throw new TypeError('filesystem change cursor must be a nonnegative safe integer');
-        if (!Number.isSafeInteger(pollMs) || pollMs < 1)
-          throw new TypeError('filesystem change poll interval must be a positive integer');
-        let stopped = false;
-        let wake;
-        const aborted = () => signal?.aborted || stopped;
+        const stopped = new AbortController();
+        const abort = () => stopped.abort(signal?.reason);
+        if (signal?.aborted) abort();
+        else signal?.addEventListener('abort', abort, { once: true });
         const running = (async () => {
-          while (!aborted()) {
-            const requestedAfter = after;
-            const page = await api.files.changes(after, pageSize);
-            if (aborted()) break;
-            if (page.truncated || page.changes.length > 0 || page.next !== requestedAfter)
+          try {
+            for await (const page of api.files.changePages({
+              after,
+              pageSize,
+              pollMs,
+              signal: stopped.signal,
+            })) {
               await listener(page);
-            after = page.next;
-            if (page.more) continue;
-            await new Promise<void>((resolve) => {
-              const finish = () => {
-                clearTimeout(timer);
-                signal?.removeEventListener('abort', finish);
-                resolve();
-              };
-              wake = finish;
-              const timer = setTimeout(finish, pollMs);
-              signal?.addEventListener('abort', finish, { once: true });
-              void Promise.resolve().then(() => {
-                if (aborted()) finish();
-              });
-            });
-            wake = undefined;
+            }
+          } catch (error) {
+            if (!(
+              stopped.signal.aborted &&
+              error instanceof Error &&
+              error.name === 'AbortError'
+            )) {
+              throw error;
+            }
+          } finally {
+            signal?.removeEventListener('abort', abort);
           }
         })();
         return async () => {
-          stopped = true;
-          if (wake) wake();
+          stopped.abort();
           await running;
         };
       },
@@ -3997,6 +4023,7 @@ export const protocolCoverage = Object.freeze({
     files: [
       'inventory',
       'changes',
+      'changePages',
       'watchChanges',
       'list',
       'listPage',

@@ -1484,6 +1484,16 @@ export interface WorkspaceApi {
         /** Returns the current bounded inventory for the exact consented read roots. */
         inventory(): Promise<FileInventory>;
         changes(after?: number, limit?: number): Promise<FileChangePage>;
+        /**
+         * Consumer-driven, cursor-safe change pages. Slow consumers apply polling backpressure;
+         * host/transport failures reject the pending `next()`, and abort interrupts polling.
+         */
+        changePages(options?: {
+            after?: number;
+            pageSize?: number;
+            pollMs?: number;
+            signal?: AbortSignal;
+        }): AsyncGenerator<FileChangePage, void, void>;
         /** Cursor-safe polling watcher. Cursor-only and truncated pages are delivered for durable resume. */
         watchChanges(listener: (page: FileChangePage) => void | Promise<void>, options?: {
             after?: number;
