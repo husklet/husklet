@@ -50,8 +50,24 @@ test('the checked-in catalogue matches the React binding catalogue', () => {
 test('every tag declares its property and interaction contract', () => {
   for (const tag of tags) {
     assert.ok(Array.isArray(tag.props), `<${tag.name}> has no property contract`);
+    assert.ok(
+      tag.propNotes && typeof tag.propNotes === 'object',
+      `<${tag.name}> has no prop notes`,
+    );
+    for (const name of Object.keys(tag.propNotes)) {
+      assert.ok(tag.props.includes(name), `<${tag.name}> documents undeclared ${name}`);
+    }
     assert.ok(Array.isArray(tag.triggers), `<${tag.name}> has no interaction contract`);
   }
+});
+
+test('core controls override transport vocabulary with component-specific contracts', () => {
+  const note = (tag, prop) => tags.find((candidate) => candidate.name === tag).propNotes[prop];
+  assert.match(note('Button', 'Variant'), /primary action/);
+  assert.match(note('IconButton', 'Label'), /accessible action name/);
+  assert.match(note('Entry', 'Value'), /complete new string/);
+  assert.match(note('Select', 'Choices'), /stable identities/);
+  assert.match(note('Switch', 'Selected'), /Checked is absent/);
 });
 
 test('the sidebar covers every component exactly once', () => {

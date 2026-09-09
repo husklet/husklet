@@ -16,7 +16,7 @@ use hl_gui::{Align, ControlSize, Density, Prop, Scale, Tag, Token, Tone, Variant
 
 /// Version of the document shape itself, so a consumer can refuse a catalogue
 /// it does not understand instead of reading absent fields as empty ones.
-const SHAPE_VERSION: u32 = 2;
+const SHAPE_VERSION: u32 = 3;
 
 /// Largest spacing step with a generated style class, as a length editor should
 /// offer it.
@@ -51,16 +51,110 @@ fn tags() -> Vec<String> {
         .iter()
         .map(|tag| {
             format!(
-                "{{\"name\": {}, \"family\": {}, \"acceptsChildren\": {}, \"detached\": {}, \"props\": {}, \"triggers\": {}}}",
+                "{{\"name\": {}, \"family\": {}, \"acceptsChildren\": {}, \"detached\": {}, \"props\": {}, \"propNotes\": {}, \"triggers\": {}}}",
                 text(tag.as_str()),
                 text(family(*tag)),
                 tag.accepts_children(),
                 tag.is_detached(),
                 inline(&spelled(tag.props())),
+                prop_notes(*tag),
                 inline(&spelled(tag.triggers()))
             )
         })
         .collect()
+}
+
+/// Component-specific meaning for shared wire properties. The global property
+/// note describes transport shape; these notes teach the public component API.
+fn prop_notes(tag: Tag) -> String {
+    let notes: &[(&str, &str)] = match tag {
+        Tag::Button => &[
+            (
+                "Label",
+                "Visible action text. Use a short verb phrase that describes the result.",
+            ),
+            (
+                "Icon",
+                "Optional leading named icon; it supplements the label and never replaces the accessible name.",
+            ),
+            (
+                "Variant",
+                "Visual emphasis: filled for the primary action, outline for secondary actions, ghost or plain for low-emphasis toolbars.",
+            ),
+            (
+                "Tone",
+                "Semantic color intent. Use danger only for destructive actions and positive or warning only when that meaning is part of the action.",
+            ),
+            (
+                "Size",
+                "Control and hit-area size: small 28px, medium 36px, or large 44px.",
+            ),
+            (
+                "Enabled",
+                "When false, prevents invocation. Explain the unmet prerequisite in nearby text.",
+            ),
+        ],
+        Tag::IconButton => &[
+            (
+                "Label",
+                "Required accessible action name; it is announced even when only the icon is visible.",
+            ),
+            ("Icon", "Named icon rendered as the button's visible content."),
+            (
+                "Variant",
+                "Visual emphasis around the icon; outline exposes the hit-area boundary most clearly.",
+            ),
+            (
+                "Tone",
+                "Semantic color intent; danger identifies a destructive icon action.",
+            ),
+            (
+                "Size",
+                "Square hit area: small 28px, medium 36px, or large 44px; icon optical size remains subordinate.",
+            ),
+        ],
+        Tag::Entry => &[
+            (
+                "Value",
+                "Current editable text. Change reports return the complete new string.",
+            ),
+            (
+                "Placeholder",
+                "Short input hint shown only while Value is empty; it is not a persistent label.",
+            ),
+            ("Enabled", "When false, prevents editing and focus-driven input."),
+        ],
+        Tag::Select => &[
+            (
+                "Value",
+                "Value of the selected choice; Change reports return the newly selected choice value.",
+            ),
+            (
+                "Choices",
+                "Ordered value and label pairs. Values are stable identities; labels are user-facing text.",
+            ),
+        ],
+        Tag::Switch => &[
+            (
+                "Checked",
+                "Controlled on/off state. Toggle reports return the requested boolean state.",
+            ),
+            (
+                "Selected",
+                "Legacy state alias read only when Checked is absent; prefer Checked for new code.",
+            ),
+            (
+                "Enabled",
+                "When false, prevents toggling. Explain the unmet prerequisite nearby.",
+            ),
+        ],
+        _ => &[],
+    };
+    let fields = notes
+        .iter()
+        .map(|(name, note)| format!("{}: {}", text(name), text(note)))
+        .collect::<Vec<_>>();
+    format!("{{{}}}", fields.join(", "))
 }
 
 /// The wire spelling of each member of a closed vocabulary.

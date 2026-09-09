@@ -8,6 +8,7 @@ import type { Length } from '@husklet/react';
 import {
   CONTROLLABLE,
   camel,
+  component,
   editable,
   enums,
   maximumStep,
@@ -43,14 +44,14 @@ export function editorOf(prop: Property): string {
 }
 
 /** A property, described as the editor needs it: one row of the right pane. */
-export function control(prop: Property): ControlRow {
+export function control(prop: Property, note = prop.note): ControlRow {
   const editor = editorOf(prop);
   const row: ControlRow = {
     prop: prop.name,
     name: camel(prop.name),
     group: prop.group,
     editor,
-    note: prop.note,
+    note,
     editable: CONTROLLABLE.has(editor),
     values: prop.values,
     default: prop.default,
@@ -72,7 +73,9 @@ export function control(prop: Property): ControlRow {
 
 /** Every property as a row, in catalogue order, editable ones first. */
 export function rows(name: string): ControlRow[] {
-  const all = editable(name).map(control);
+  const tag = component(name);
+  const notes = tag.propNotes as Record<string, string>;
+  const all = editable(name).map((prop) => control(prop, notes[prop.name] ?? prop.note));
   return [...all.filter((row) => row.editable), ...all.filter((row) => !row.editable)];
 }
 

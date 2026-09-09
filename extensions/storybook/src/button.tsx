@@ -16,13 +16,14 @@ import {
   ApiReference,
   ComponentDocument,
   DocumentationSection,
+  FieldSpecimen,
   SpecimenGrid,
 } from './component-document.js';
 import { rows } from './editors.js';
 
 type Size = 'small' | 'medium' | 'large';
 type Variant = 'filled' | 'outline' | 'ghost' | 'plain';
-type Tone = 'neutral' | 'accent' | 'danger';
+type Tone = 'neutral' | 'accent' | 'positive' | 'warning' | 'danger';
 
 export function ButtonWorkbench() {
   const [label, setLabel] = React.useState('Run task');
@@ -145,32 +146,45 @@ export function ButtonWorkbench() {
       </SectionBlock>
       <Expander label="Playground" expanded={false} width="fill">
         <Column gap={2} pad={2}>
-          <Entry
-            value={label}
-            placeholder="Button label"
-            onChange={(report) => setLabel(String(report.value ?? '').slice(0, 48))}
-          />
-          <Row gap={3} wrap align="end">
-            <Text label="Variant" color="text-dim" />
-            <Select
-              value={variant}
-              choices={choices(['filled', 'outline', 'ghost', 'plain'])}
-              onChange={(report) => setVariant(report.value as Variant)}
+          <FieldSpecimen
+            label="Label"
+            helper="Use a short verb phrase that names the result. Maximum 48 characters."
+            width={{ minimum: { chars: 18 }, maximum: { chars: 36 } }}
+          >
+            <Entry
+              value={label}
+              placeholder="Button label"
+              onChange={(report) => setLabel(String(report.value ?? '').slice(0, 48))}
             />
-            <Text label="Size" color="text-dim" />
-            <Select
-              value={size}
-              choices={choices(['small', 'medium', 'large'])}
-              onChange={(report) => setSize(report.value as Size)}
-            />
-            <Text label="Tone" color="text-dim" />
-            <Select
-              value={tone}
-              choices={choices(['neutral', 'accent', 'danger'])}
-              onChange={(report) => setTone(report.value as Tone)}
-            />
-            <Text label="Enabled" color="text-dim" />
-            <Switch checked={enabled} onToggle={(report) => setEnabled(Boolean(report.value))} />
+          </FieldSpecimen>
+          <Row gap={2} wrap align="end">
+            <FieldSpecimen label="Variant" width={{ chars: 14 }}>
+              <Select
+                value={variant}
+                choices={choices(['filled', 'outline', 'ghost', 'plain'])}
+                onChange={(report) => setVariant(report.value as Variant)}
+              />
+            </FieldSpecimen>
+            <FieldSpecimen label="Size" width={{ chars: 12 }}>
+              <Select
+                value={size}
+                choices={choices(['small', 'medium', 'large'])}
+                onChange={(report) => setSize(report.value as Size)}
+              />
+            </FieldSpecimen>
+            <FieldSpecimen label="Tone" width={{ chars: 14 }}>
+              <Select
+                value={tone}
+                choices={choices(['neutral', 'accent', 'positive', 'warning', 'danger'])}
+                onChange={(report) => setTone(report.value as Tone)}
+              />
+            </FieldSpecimen>
+            <FieldSpecimen label="Availability" width={{ chars: 14 }}>
+              <Switch
+                checked={enabled}
+                onToggle={(report) => setEnabled(Boolean(report.value))}
+              />
+            </FieldSpecimen>
           </Row>
         </Column>
       </Expander>

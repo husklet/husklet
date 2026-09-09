@@ -14,7 +14,7 @@ export type Property = (typeof catalogue.props)[number];
 export type Vocabulary = keyof typeof catalogue.enums;
 
 /** The document shape this playground understands. */
-export const SHAPE_VERSION = 2;
+export const SHAPE_VERSION = 3;
 
 if (catalogue.version !== SHAPE_VERSION) {
   throw new Error(
