@@ -326,17 +326,20 @@ export function Networks({
                     </CardContent>
                   ) : null}
                   <CardContent gap={1}>
-                    <Button
-                      label={
-                        inspectionNeedsAccess
-                          ? 'Access required'
-                          : inspection.id === id && inspection.state === 'error'
-                            ? 'Retry inspect'
-                            : 'Inspect'
-                      }
-                      enabled={!inspectionNeedsAccess}
-                      onInvoke={() => inspect(network)}
-                    />
+                    <Row>
+                      <Button
+                        label={
+                          inspectionNeedsAccess
+                            ? 'Access required'
+                            : inspection.id === id && inspection.state === 'error'
+                              ? 'Retry inspect'
+                              : 'Inspect'
+                        }
+                        variant="outline"
+                        enabled={!inspectionNeedsAccess}
+                        onInvoke={() => inspect(network)}
+                      />
+                    </Row>
                   </CardContent>
                   {network.kind !== 'builtin' ? (
                     <CardContent gap={1}>
@@ -347,14 +350,16 @@ export function Networks({
                             color="text-dim"
                             wrap
                           />
-                          <ConfirmAction
-                            authorityKey={`network:${id}:remove`}
-                            label="Remove"
-                            confirmLabel="Confirm remove"
-                            pendingLabel="Confirm remove"
-                            question={`Remove immutable network ${id} (${network.name})?`}
-                            onConfirm={() => remove(network)}
-                          />
+                          <Row>
+                            <ConfirmAction
+                              authorityKey={`network:${id}:remove`}
+                              label="Remove"
+                              confirmLabel="Confirm remove"
+                              pendingLabel="Confirm remove"
+                              question={`Remove immutable network ${id} (${network.name})?`}
+                              onConfirm={() => remove(network)}
+                            />
+                          </Row>
                         </Column>
                       </Expander>
                     </CardContent>

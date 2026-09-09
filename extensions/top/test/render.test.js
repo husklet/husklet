@@ -1223,7 +1223,7 @@ test('extension inspection keeps invalid and failed references recoverable with 
         (patch) =>
           patch.SetProp?.prop === 'Label' &&
           patch.SetProp.value?.Text ===
-            'Registry refused the image: requested access to the resource is denied. Check that the reference exists and is accessible.',
+            'Registry access denied. Sign in with credentials that can read this image, or verify that the image is public.',
       ).length,
     1,
     'one bounded failure is rendered without a second recovery cascade',

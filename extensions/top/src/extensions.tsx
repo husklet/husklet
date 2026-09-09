@@ -1559,8 +1559,11 @@ export function acquisitionLabel(acquisition: ExtensionAcquisitionStatus): strin
 export function acquisitionFailure(detail: string): string {
   const normalized = detail.replaceAll('\\n', ' ').replaceAll(/\s+/g, ' ').trim();
   const registryMessage = /"message"\s*:\s*"([^"]+)"/.exec(normalized)?.[1];
+  if (/unauthorized|denied|authentication required|insufficient_scope/i.test(normalized)) {
+    return 'Registry access denied. Sign in with credentials that can read this image, or verify that the image is public.';
+  }
   if (registryMessage) {
-    return `Registry refused the image: ${registryMessage}. Check that the reference exists and is accessible.`.slice(
+    return `The registry could not provide this image: ${registryMessage}. Verify the image name, version, and visibility.`.slice(
       0,
       300,
     );
