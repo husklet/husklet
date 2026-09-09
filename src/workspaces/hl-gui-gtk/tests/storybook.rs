@@ -254,17 +254,19 @@ mod unix {
             }
         }
         let toggle_before = if story == "ToggleButton" {
-            let toggle = find::<gtk::ToggleButton>(&root, |_| true);
-            let label = find::<gtk::Label>(&toggle.clone().upcast(), |label| label.text() == "Toggle button");
+            let toggle = find::<gtk::ToggleButton>(&root, |button| {
+                button.tooltip_text().as_deref() == Some("Pin this tab")
+            });
+            let label = find::<gtk::Label>(&toggle.clone().upcast(), |label| label.text() == "Pin tab");
             assert!(
                 (28..=44).contains(&toggle.height()),
-                "generated ToggleButton allocated {}px instead of a compact control height",
+                "documented ToggleButton allocated {}px instead of a compact control height",
                 toggle.height()
             );
             let label_center = label.allocation().y() + label.height() / 2;
             assert!(
                 (label_center - toggle.height() / 2).abs() <= 1,
-                "generated ToggleButton label center {label_center}px is not centered in {}px",
+                "documented ToggleButton label center {label_center}px is not centered in {}px",
                 toggle.height()
             );
             Some(toggle.is_active())
@@ -416,11 +418,13 @@ mod unix {
             .unwrap_or_else(|error| panic!("{story} rerender failed in GTK: {error:?}"));
         if let Some(before) = toggle_before {
             settle_toolkit();
-            let toggle = find::<gtk::ToggleButton>(&root, |_| true);
+            let toggle = find::<gtk::ToggleButton>(&root, |button| {
+                button.tooltip_text().as_deref() == Some("Pin this tab")
+            });
             assert_ne!(
                 toggle.is_active(),
                 before,
-                "generated ToggleButton did not visibly acknowledge its checked-state change"
+                "documented ToggleButton did not visibly acknowledge its checked-state change"
             );
             capture_story(&realized_window, "ToggleButton unchecked");
         }
@@ -734,7 +738,10 @@ mod unix {
                 .set_active(false);
             }
             "ToggleButton" => {
-                find::<gtk::ToggleButton>(root, |_| true).emit_clicked();
+                find::<gtk::ToggleButton>(root, |button| {
+                    button.tooltip_text().as_deref() == Some("Pin this tab")
+                })
+                .emit_clicked();
             }
             "DataTable" => {
                 let entry = find::<gtk::Entry>(root, |entry| entry.text().starts_with("record-"));
