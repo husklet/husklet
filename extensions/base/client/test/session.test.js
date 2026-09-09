@@ -5421,6 +5421,112 @@ test('real Unix writeAndWait subscribes and reads before bytes, then returns adv
   }
 });
 
+test('real Unix writeAndWait refuses to attribute a replacement pane screen to sent input', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-write-replacement-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const calls = [];
+  const connections = new Set();
+  let reads = 0;
+  const screen = (generation, revision, line) => ({
+    slot: 'pane-input',
+    generation,
+    revision,
+    columns: 80,
+    rows: 24,
+    lines: [line],
+    cursor_column: 0,
+    cursor_row: 0,
+    truncated: false,
+  });
+  const server = net.createServer((socket) => {
+    connections.add(socket);
+    socket.on('close', () => connections.delete(socket));
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.channel !== 2) continue;
+        calls.push(frame.payload.call);
+        if (
+          frame.payload.call === 'event_subscribe' ||
+          frame.payload.call === 'event_unsubscribe'
+        ) {
+          socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+        } else if (frame.payload.call === 'terminal_read_pane') {
+          reads += 1;
+          socket.write(
+            encode({
+              channel: 2,
+              kind: KIND.response,
+              payload: {
+                reply: 'text',
+                with: reads === 1 ? screen(4, 7, '$ ') : screen(5, 1, 'replacement'),
+              },
+            }),
+          );
+        } else if (frame.payload.call === 'terminal_write_pane') {
+          assert.deepEqual(frame.payload.with, {
+            slot: 'pane-input',
+            generation: 4,
+            revision: 7,
+            contents: [3],
+          });
+          socket.write(
+            encode({
+              channel: 100,
+              kind: KIND.event,
+              payload: {
+                snapshot: 'pane_changes',
+                of: {
+                  slot: 'pane-input',
+                  kind: 'terminal',
+                  generation: 5,
+                  revision: 1,
+                  coalesced: 0,
+                },
+              },
+            }),
+          );
+          socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+        }
+      }
+    });
+    socket.write(
+      encode({
+        channel: CONTROL,
+        kind: KIND.open,
+        payload: {
+          protocol: 1,
+          peer: 'write-replacement',
+          granted: ['panes:observe', 'terminals:output', 'terminals:input'],
+        },
+      }),
+    );
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    const terminal = workspace(session).terminal;
+    await assert.rejects(
+      terminal.writeAndWait('pane-input', 4, 7, [3]),
+      /pane was replaced before input result could be verified/,
+    );
+    assert.deepEqual(calls, [
+      'event_subscribe',
+      'terminal_read_pane',
+      'terminal_write_pane',
+      'terminal_read_pane',
+      'event_unsubscribe',
+    ]);
+    assert.equal((await terminal.read('pane-input')).generation, 5);
+    assert.equal(calls.at(-1), 'terminal_read_pane', 'the ordered session remains usable');
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('real Unix signalExecutionAndWait ignores initial state and awaits exact immutable transition', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-signal-wait-'));
   const socketPath = path.join(directory, 'host.sock');

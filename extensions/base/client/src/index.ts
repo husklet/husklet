@@ -2851,6 +2851,9 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
       if (change === null) return { changed: false, before };
       const readable = projectReadable ? await scoped.terminal.toText(slot, { lines }) : undefined;
       const after = readable?.snapshot ?? (await scoped.terminal.read(slot, lines));
+      if (!projectReadable && after.generation !== generation) {
+        throw new Error('terminal pane was replaced before input result could be verified');
+      }
       if (after.generation === generation && after.revision === revision) {
         throw new Error('pane change did not advance the terminal screen cursor');
       }
