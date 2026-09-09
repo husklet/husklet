@@ -4418,6 +4418,34 @@
           }
         },
         {
+          "name": "snapshot",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "next",
+          "optional": true,
+          "schema": {
+            "kind": "optional",
+            "of": {
+              "bits": 32,
+              "kind": "integer",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "signed": false
+            }
+          }
+        },
+        {
+          "name": "more",
+          "optional": false,
+          "schema": {
+            "kind": "boolean"
+          }
+        },
+        {
           "name": "observed_at_ms",
           "optional": true,
           "schema": {
@@ -10059,6 +10087,38 @@
                 "schema": {
                   "kind": "string"
                 }
+              },
+              {
+                "name": "snapshot",
+                "optional": true,
+                "schema": {
+                  "kind": "optional",
+                  "of": {
+                    "kind": "string"
+                  }
+                }
+              },
+              {
+                "name": "after",
+                "optional": false,
+                "schema": {
+                  "bits": 32,
+                  "kind": "integer",
+                  "maximum": 4294967295,
+                  "minimum": 0,
+                  "signed": false
+                }
+              },
+              {
+                "name": "limit",
+                "optional": false,
+                "schema": {
+                  "bits": 16,
+                  "kind": "integer",
+                  "maximum": 65535,
+                  "minimum": 0,
+                  "signed": false
+                }
               }
             ],
             "kind": "struct"
@@ -13547,7 +13607,7 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:0d8d0b3c7e46e7ae",
+  "source_fingerprint": "fnv1a64:b7894178576cadba",
   "specification_version": 1,
   "topics": [
     {

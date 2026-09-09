@@ -300,6 +300,9 @@ export interface ProcessList {
   container_id: string;
   titles: string[];
   processes: string[][];
+  snapshot: string;
+  next: number | null;
+  more: boolean;
   observed_at_ms: number;
   scope: 'initial' | 'namespace';
   pid_identity: 'snapshot';
@@ -895,7 +898,15 @@ export interface WorkspaceApi {
   containers: {
     list(): Promise<ContainerSummary[]>;
     inspect(id: string): Promise<ContainerSummary>;
-    processes(id: string): Promise<ProcessList>;
+    processes(
+      id: string,
+      options?: { snapshot?: string; after?: number; limit?: number },
+    ): Promise<ProcessList>;
+    /** Traverse one immutable process snapshot without mixing pages from later samples. */
+    processPages(
+      id: string,
+      options?: { limit?: number; signal?: AbortSignal },
+    ): AsyncGenerator<ProcessList, void, void>;
     logs(id: string, streams?: { stdout?: boolean; stderr?: boolean }): Promise<ContainerOutput>;
     execution(id: string): Promise<ExecutionSummary>;
     executions(): Promise<ExecutionList>;

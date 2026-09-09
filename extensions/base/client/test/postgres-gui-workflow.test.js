@@ -44,18 +44,30 @@ test('Postgres GUI uses bounded observation, opaque credentials, pane text, and 
             ],
           };
         } else if (call === 'container_processes') {
-          payload = {
-            reply: 'processes',
-            with: {
-              container_id: containerId,
-              titles: ['PID', 'USER', 'COMMAND'],
-              processes: [['1', 'postgres', 'postgres -D /var/lib/postgresql/data']],
-              observed_at_ms: 42,
-              scope: 'namespace',
-              pid_identity: 'snapshot',
-              truncated: true,
-            },
-          };
+          const first = value.after === 0;
+          payload =
+            value.snapshot && value.snapshot !== 'a'.repeat(64)
+              ? {
+                  error: 'conflict',
+                  detail: 'container process snapshot changed; restart pagination',
+                }
+              : {
+                  reply: 'processes',
+                  with: {
+                    container_id: containerId,
+                    titles: ['PID', 'USER', 'COMMAND'],
+                    processes: first
+                      ? [['1', 'postgres', 'postgres -D /var/lib/postgresql/data']]
+                      : [['8', 'postgres', 'postgres: app app 10.0.0.2 idle']],
+                    snapshot: 'a'.repeat(64),
+                    next: first ? 1 : null,
+                    more: first,
+                    observed_at_ms: 42,
+                    scope: 'namespace',
+                    pid_identity: 'snapshot',
+                    truncated: false,
+                  },
+                };
         } else if (call === 'container_exec_credential') {
           assert.equal(value.credentials[0][1], 'postgres.password');
           assert.equal(hostOnlyPassword.length > 0, true, 'fixture host owns the credential value');
@@ -175,13 +187,29 @@ test('Postgres GUI uses bounded observation, opaque credentials, pane text, and 
     const session = await connect({ path: socketPath });
     const host = workspace(session);
     const [container] = await host.containers.list();
-    const processes = await host.containers.processes(container.id);
-    assert.equal(processes.truncated, true, 'process inventory exposes its hard boundedness');
-    assert.equal(
-      'next' in processes,
-      false,
-      'known API gap: a truncated process snapshot has no cursor with which to continue',
+    const processes = [];
+    for await (const page of host.containers.processPages(container.id, { limit: 1 })) {
+      processes.push(...page.processes);
+    }
+    assert.equal(processes.length, 2, 'the GUI retrieves the remainder of one immutable snapshot');
+    await assert.rejects(
+      host.containers.processes(container.id, {
+        snapshot: 'b'.repeat(64),
+        after: 1,
+        limit: 1,
+      }),
+      /snapshot changed; restart pagination/,
     );
+    const beforeMalformed = calls.length;
+    await assert.rejects(
+      host.containers.processes(container.id, { snapshot: 'malformed', after: 1, limit: 1 }),
+      /64 hexadecimal characters/,
+    );
+    await assert.rejects(
+      host.containers.processes(container.id, { after: 1, limit: 1 }),
+      /requires its snapshot identity/,
+    );
+    assert.equal(calls.length, beforeMalformed, 'malformed cursors never reach the Unix socket');
 
     const rows = [];
     await host.containers.execJsonLines(

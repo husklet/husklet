@@ -60,6 +60,11 @@ pub struct ProcessList {
     pub container_id: String,
     pub titles: Vec<String>,
     pub processes: Vec<Vec<String>>,
+    /// Opaque identity of the complete sampled table. Continuations must echo it.
+    pub snapshot: String,
+    /// Row offset for the next page, when more rows remain in this snapshot.
+    pub next: Option<u32>,
+    pub more: bool,
     /// Host wall-clock time at which this point-in-time view was produced.
     #[serde(default)]
     pub observed_at_ms: u64,
@@ -984,7 +989,13 @@ pub trait ContainerInventory {
     /// # Errors
     /// Returns an absence, inactive-container conflict, unsupported sampler,
     /// or host failure honestly as supplied by the daemon.
-    fn processes(&self, _id: &str) -> Result<ProcessList, HostError> {
+    fn processes(
+        &self,
+        _id: &str,
+        _snapshot: Option<&str>,
+        _after: u32,
+        _limit: u16,
+    ) -> Result<ProcessList, HostError> {
         Err(HostError::Unsupported(
             "container process listing is unsupported by this host".into(),
         ))
@@ -1643,15 +1654,11 @@ mod tests {
     }
 
     #[test]
-    fn legacy_process_rows_decode_as_an_incomplete_snapshot_scoped_view() {
-        let processes: super::ProcessList = serde_json::from_value(serde_json::json!({
+    fn process_rows_without_paging_identity_are_rejected() {
+        let processes = serde_json::from_value::<super::ProcessList>(serde_json::json!({
             "titles": ["PID"], "processes": [["1"]]
-        }))
-        .expect("legacy process rows");
-        assert_eq!(processes.scope, super::ProcessScope::Initial);
-        assert_eq!(processes.pid_identity, super::ProcessPidIdentity::Snapshot);
-        assert_eq!(processes.observed_at_ms, 0);
-        assert!(!processes.truncated);
+        }));
+        assert!(processes.is_err());
     }
 
     #[test]

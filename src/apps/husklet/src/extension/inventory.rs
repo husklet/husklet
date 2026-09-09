@@ -1,23 +1,33 @@
 //! Reading container state on behalf of an extension.
 
-use std::{sync::Arc, time::Duration};
+use std::{
+    collections::BTreeMap,
+    fmt::Write as _,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use hl_client::model::{Container, InspectContainer, List};
 use hl_extension::port::{
     ContainerInventory, ContainerOutput, ContainerPort, ContainerSummary, ExecutionList, ExecutionSummary, HostError,
     ProcessList, ProcessPidIdentity, ProcessScope,
 };
+use sha2::{Digest, Sha256};
 
 use super::{Bridge, failure};
 
 /// The container reading port over the workspace's container daemon.
 pub struct ContainerCatalog {
     bridge: Arc<Bridge>,
+    process_snapshots: Mutex<BTreeMap<String, ProcessSnapshot>>,
 }
 
 impl ContainerCatalog {
     pub(super) fn new(bridge: Arc<Bridge>) -> Self {
-        Self { bridge }
+        Self {
+            bridge,
+            process_snapshots: Mutex::new(BTreeMap::new()),
+        }
     }
 }
 
@@ -47,7 +57,28 @@ impl ContainerInventory for ContainerCatalog {
         Ok(inspection(&container))
     }
 
-    fn processes(&self, id: &str) -> Result<ProcessList, HostError> {
+    fn processes(
+        &self,
+        id: &str,
+        snapshot: Option<&str>,
+        after: u32,
+        limit: u16,
+    ) -> Result<ProcessList, HostError> {
+        if let Some(snapshot) = snapshot {
+            let snapshots = self
+                .process_snapshots
+                .lock()
+                .map_err(|_| HostError::Failed("process snapshot store is unavailable".into()))?;
+            let held = snapshots.get(snapshot).ok_or_else(|| {
+                HostError::Conflict("container process snapshot is stale; restart pagination".into())
+            })?;
+            if held.container_id != id {
+                return Err(HostError::Conflict(
+                    "container process snapshot belongs to another container".into(),
+                ));
+            }
+            return held.page(after, limit);
+        }
         let client = self.bridge.client();
         let container = self
             .bridge
@@ -60,7 +91,20 @@ impl ContainerInventory for ContainerCatalog {
             // name, not argv, so read authority does not reveal argument secrets.
             .wait(client.containers().top_with(&container_id, Some("-eo pid,ppid,user,stat,comm")))
             .map_err(|error| failure(&error))?;
-        Ok(process_snapshot(container_id, table.titles, table.processes))
+        let snapshot = process_snapshot(container_id, table.titles, table.processes)?;
+        let page = snapshot.page(after, limit)?;
+        let mut snapshots = self
+            .process_snapshots
+            .lock()
+            .map_err(|_| HostError::Failed("process snapshot store is unavailable".into()))?;
+        if snapshots.len() >= 16 {
+            let evicted = snapshots.keys().next().cloned();
+            if let Some(evicted) = evicted {
+                snapshots.remove(&evicted);
+            }
+        }
+        snapshots.insert(snapshot.snapshot.clone(), snapshot);
+        Ok(page)
     }
 
     fn logs(&self, id: &str, stdout: bool, stderr: bool) -> Result<ContainerOutput, HostError> {
@@ -194,11 +238,51 @@ fn output(stdout: Vec<u8>, stderr: Vec<u8>, running: bool) -> ContainerOutput {
     }
 }
 
-const PROCESS_ROWS: usize = 1024;
+const PROCESS_ROWS: usize = 16_384;
 const PROCESS_COLUMNS: usize = 16;
 const PROCESS_CELL_BYTES: usize = 4096;
+const PROCESS_SNAPSHOT_BYTES: usize = 4 * 1024 * 1024;
 
-fn process_snapshot(container_id: String, mut titles: Vec<String>, mut processes: Vec<Vec<String>>) -> ProcessList {
+#[derive(Clone)]
+struct ProcessSnapshot {
+    container_id: String,
+    titles: Vec<String>,
+    processes: Vec<Vec<String>>,
+    snapshot: String,
+    observed_at_ms: u64,
+    truncated: bool,
+}
+
+impl ProcessSnapshot {
+    fn page(&self, after: u32, limit: u16) -> Result<ProcessList, HostError> {
+        let start = usize::try_from(after).unwrap_or(usize::MAX);
+        if start > self.processes.len() {
+            return Err(HostError::Conflict(
+                "container process cursor is outside the snapshot".into(),
+            ));
+        }
+        let end = start.saturating_add(usize::from(limit)).min(self.processes.len());
+        let more = end < self.processes.len();
+        Ok(ProcessList {
+            container_id: self.container_id.clone(),
+            titles: self.titles.clone(),
+            processes: self.processes[start..end].to_vec(),
+            snapshot: self.snapshot.clone(),
+            next: more.then(|| u32::try_from(end).expect("bounded process rows fit u32")),
+            more,
+            observed_at_ms: self.observed_at_ms,
+            scope: ProcessScope::Initial,
+            pid_identity: ProcessPidIdentity::Snapshot,
+            truncated: self.truncated,
+        })
+    }
+}
+
+fn process_snapshot(
+    container_id: String,
+    mut titles: Vec<String>,
+    mut processes: Vec<Vec<String>>,
+) -> Result<ProcessSnapshot, HostError> {
     let mut truncated = titles.len() > PROCESS_COLUMNS || processes.len() > PROCESS_ROWS;
     titles.truncate(PROCESS_COLUMNS);
     processes.truncate(PROCESS_ROWS);
@@ -218,10 +302,38 @@ fn process_snapshot(container_id: String, mut titles: Vec<String>, mut processes
             truncated = true;
         }
     }
-    ProcessList {
+    let mut bytes = titles.iter().map(String::len).sum::<usize>();
+    let retained = processes
+        .iter()
+        .position(|row| {
+            let row_bytes = row.iter().map(String::len).sum::<usize>();
+            if bytes.saturating_add(row_bytes) > PROCESS_SNAPSHOT_BYTES {
+                true
+            } else {
+                bytes += row_bytes;
+                false
+            }
+        })
+        .unwrap_or(processes.len());
+    if retained < processes.len() {
+        processes.truncate(retained);
+        truncated = true;
+    }
+    let mut digest = Sha256::new();
+    digest.update(container_id.as_bytes());
+    digest.update(serde_json::to_vec(&(&titles, &processes)).map_err(|error| HostError::Failed(error.to_string()))?);
+    let snapshot = digest
+        .finalize()
+        .iter()
+        .fold(String::with_capacity(64), |mut encoded, byte| {
+            write!(encoded, "{byte:02x}").expect("writing to a string cannot fail");
+            encoded
+        });
+    Ok(ProcessSnapshot {
         container_id,
         titles,
         processes,
+        snapshot,
         observed_at_ms: std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |elapsed| {
@@ -229,10 +341,8 @@ fn process_snapshot(container_id: String, mut titles: Vec<String>, mut processes
                     .unwrap_or(9_007_199_254_740_991)
                     .min(9_007_199_254_740_991)
             }),
-        scope: ProcessScope::Initial,
-        pid_identity: ProcessPidIdentity::Snapshot,
         truncated,
-    }
+    })
 }
 
 /// Maps a Docker list entry onto the protocol's container view.
@@ -328,7 +438,7 @@ mod tests {
         epoch_seconds, inspection, output, process_snapshot, summary,
     };
     use hl_client::model::{Container, InspectContainer};
-    use hl_extension::port::{ContainerInventory as _, ContainerPort};
+    use hl_extension::port::{ContainerInventory as _, ContainerPort, HostError};
 
     fn listing() -> Container {
         serde_json::from_value(serde_json::json!({
@@ -443,15 +553,20 @@ mod tests {
 
     #[test]
     fn process_projection_is_finite_timestamped_and_truthful_about_pid_scope() {
-        let snapshot = process_snapshot(
+        let held = process_snapshot(
             "f".repeat(64),
             (0..PROCESS_COLUMNS + 1).map(|index| format!("C{index}")).collect(),
             (0..PROCESS_ROWS + 1)
                 .map(|_| vec!["1".into(), "x".repeat(PROCESS_CELL_BYTES + 1)])
                 .collect(),
-        );
+        )
+        .unwrap();
+        let snapshot = held.page(0, 128).unwrap();
         assert_eq!(snapshot.titles.len(), PROCESS_COLUMNS);
-        assert_eq!(snapshot.processes.len(), PROCESS_ROWS);
+        assert_eq!(snapshot.processes.len(), 128);
+        assert_eq!(snapshot.next, Some(128));
+        assert!(snapshot.more);
+        assert_eq!(snapshot.snapshot.len(), 64);
         assert!(snapshot.processes.iter().all(|row| row.len() <= snapshot.titles.len()));
         assert!(snapshot.processes[0][1].len() <= PROCESS_CELL_BYTES);
         assert!(snapshot.truncated);
@@ -459,6 +574,22 @@ mod tests {
         assert_eq!(snapshot.scope, hl_extension::port::ProcessScope::Initial);
         assert_eq!(snapshot.pid_identity, hl_extension::port::ProcessPidIdentity::Snapshot);
         assert!(snapshot.observed_at_ms > 0);
+    }
+
+    #[test]
+    fn process_pages_bind_continuation_to_the_complete_snapshot() {
+        let rows = vec![vec!["1".into()], vec!["2".into()], vec!["3".into()]];
+        let held = process_snapshot("f".repeat(64), vec!["PID".into()], rows).unwrap();
+        let first = held.page(0, 2).unwrap();
+        assert_eq!(first.processes.len(), 2);
+        assert_eq!(first.next, Some(2));
+        let second = held.page(2, 2).unwrap();
+        assert_eq!(second.processes, vec![vec!["3".to_owned()]]);
+        assert!(!second.more);
+        assert!(matches!(
+            held.page(4, 2),
+            Err(HostError::Conflict(detail)) if detail.contains("outside the snapshot")
+        ));
     }
 
     #[test]
@@ -491,7 +622,15 @@ mod tests {
             (first, second)
         });
         let catalogue = super::ContainerCatalog::new(Arc::new(super::super::Bridge::new(socket).unwrap()));
-        let snapshot = catalogue.processes("worker").unwrap();
+        let snapshot = catalogue.processes("worker", None, 0, 128).unwrap();
+        let continued = catalogue
+            .processes(&id, Some(&snapshot.snapshot), 0, 128)
+            .unwrap();
+        assert_eq!(continued.snapshot, snapshot.snapshot);
+        assert!(matches!(
+            catalogue.processes(&id, Some(&"f".repeat(64)), 0, 128),
+            Err(HostError::Conflict(detail)) if detail.contains("stale")
+        ));
         let (inspect_request, top_request) = serving.join().unwrap();
         assert!(inspect_request.starts_with("GET /v1.43/containers/worker/json?size=false HTTP/1.1"), "{inspect_request}");
         assert!(top_request.starts_with(&format!("GET /v1.43/containers/{id}/top?ps_args=")), "{top_request}");

@@ -183,12 +183,21 @@ impl ContainerInventory for Host {
         Err(HostError::Absent(id.into()))
     }
 
-    fn processes(&self, _id: &str) -> Result<ProcessList, HostError> {
+    fn processes(
+        &self,
+        _id: &str,
+        _snapshot: Option<&str>,
+        _after: u32,
+        _limit: u16,
+    ) -> Result<ProcessList, HostError> {
         self.ledger.note("containers.processes");
         Ok(ProcessList {
             container_id: "c".repeat(64),
             titles: vec!["PID".into(), "CMD".into()],
             processes: vec![vec!["7".into(), "server".into()]],
+            snapshot: "a".repeat(64),
+            next: None,
+            more: false,
             observed_at_ms: 1_700_000_000_000,
             scope: hl_extension::port::ProcessScope::Namespace,
             pid_identity: hl_extension::port::ProcessPidIdentity::Snapshot,
@@ -1299,7 +1308,12 @@ fn calls() -> Vec<(Request, Capability)> {
         (Request::ContainerList, Capability::ContainerRead),
         (Request::ContainerInspect { id: "c1".into() }, Capability::ContainerRead),
         (
-            Request::ContainerProcesses { id: "c1".into() },
+            Request::ContainerProcesses {
+                id: "c1".into(),
+                snapshot: None,
+                after: 0,
+                limit: 128,
+            },
             Capability::ContainerRead,
         ),
         (
@@ -3371,7 +3385,15 @@ fn deep_container_reads_return_typed_processes_logs_and_execution_state() {
     let mut session = session(&[Capability::ContainerRead], &[]);
 
     let processes = session
-        .dispatch(&Request::ContainerProcesses { id: "c1".into() }, &services(&host))
+        .dispatch(
+            &Request::ContainerProcesses {
+                id: "c1".into(),
+                snapshot: None,
+                after: 0,
+                limit: 128,
+            },
+            &services(&host),
+        )
         .expect("process table");
     assert!(matches!(processes, Reply::Processes(table)
         if table.titles == ["PID", "CMD"] && table.observed_at_ms == 1_700_000_000_000
@@ -3433,6 +3455,38 @@ fn deep_container_reads_return_typed_processes_logs_and_execution_state() {
         )
         .expect("execution wait");
     assert!(matches!(waited, Reply::Execution(execution) if !execution.running && execution.exit_code == 17));
+}
+
+#[test]
+fn process_paging_rejects_malformed_snapshots_and_unbounded_limits_before_the_port() {
+    let host = Host::new();
+    let mut session = session(&[Capability::ContainerRead], &[]);
+    for request in [
+        Request::ContainerProcesses {
+            id: "c1".into(),
+            snapshot: Some("not-a-snapshot".into()),
+            after: 1,
+            limit: 1,
+        },
+        Request::ContainerProcesses {
+            id: "c1".into(),
+            snapshot: None,
+            after: 0,
+            limit: 129,
+        },
+        Request::ContainerProcesses {
+            id: "c1".into(),
+            snapshot: None,
+            after: 1,
+            limit: 1,
+        },
+    ] {
+        assert!(matches!(
+            session.dispatch(&request, &services(&host)),
+            Err(Failure::Conflict { .. })
+        ));
+    }
+    assert!(host.ledger.reached().is_empty());
 }
 
 #[test]

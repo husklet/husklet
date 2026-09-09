@@ -1,5 +1,5 @@
 // Generated from Rust hl-extension protocol/v1.json. Do not edit.
-// Protocol artifact fnv1a64:2f48e68d1b570439
+// Protocol artifact fnv1a64:114c59b510d362b8
 export const PROTOCOL_SPECIFICATION_VERSION = 1;
 export const PROTOCOL_VERSION = 1;
 export const PROTOCOL_BOUNDS = Object.freeze({
@@ -4747,6 +4747,34 @@ const definitions = {
         }
       },
       {
+        "name": "snapshot",
+        "optional": false,
+        "schema": {
+          "kind": "string"
+        }
+      },
+      {
+        "name": "next",
+        "optional": true,
+        "schema": {
+          "kind": "optional",
+          "of": {
+            "bits": 32,
+            "kind": "integer",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "signed": false
+          }
+        }
+      },
+      {
+        "name": "more",
+        "optional": false,
+        "schema": {
+          "kind": "boolean"
+        }
+      },
+      {
         "name": "observed_at_ms",
         "optional": true,
         "schema": {
@@ -9323,6 +9351,38 @@ const roots = {
               "optional": false,
               "schema": {
                 "kind": "string"
+              }
+            },
+            {
+              "name": "snapshot",
+              "optional": true,
+              "schema": {
+                "kind": "optional",
+                "of": {
+                  "kind": "string"
+                }
+              }
+            },
+            {
+              "name": "after",
+              "optional": false,
+              "schema": {
+                "bits": 32,
+                "kind": "integer",
+                "maximum": 4294967295,
+                "minimum": 0,
+                "signed": false
+              }
+            },
+            {
+              "name": "limit",
+              "optional": false,
+              "schema": {
+                "bits": 16,
+                "kind": "integer",
+                "maximum": 65535,
+                "minimum": 0,
+                "signed": false
               }
             }
           ],

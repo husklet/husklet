@@ -2829,7 +2829,10 @@ test('deep container methods and subscriptions use exact protocol request shapes
   const calls = [];
   for (let index = 0; index < operations.length - 1; index += 1) calls.push((await next()).payload);
   assert.deepEqual(calls, [
-    { call: 'container_processes', with: { id: 'c1' } },
+    {
+      call: 'container_processes',
+      with: { id: 'c1', after: 0, limit: 128 },
+    },
     { call: 'container_logs', with: { id: 'c1', stdout: true, stderr: false } },
     { call: 'execution_inspect', with: { id: executionId } },
     { call: 'execution_list' },
@@ -2866,6 +2869,9 @@ test('deep container methods and subscriptions use exact protocol request shapes
         container_id: containerId,
         titles: ['PID', 'PPID', 'USER', 'STAT', 'COMMAND'],
         processes: [['1', '0', 'root', '?', '/usr/bin/server']],
+        snapshot: 'a'.repeat(64),
+        next: null,
+        more: false,
         observed_at_ms: 1_700_000_000_000,
         scope: 'initial',
         pid_identity: 'snapshot',

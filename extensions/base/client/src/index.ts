@@ -777,8 +777,45 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
     containers: {
       list: async () => expect(await session.call('container_list'), 'containers'),
       inspect: async (id) => expect(await session.call('container_inspect', { id }), 'container'),
-      processes: async (id) =>
-        expect(await session.call('container_processes', { id }), 'processes'),
+      processes: async (
+        id,
+        {
+          snapshot,
+          after = 0,
+          limit = 128,
+        }: { snapshot?: string; after?: number; limit?: number } = {},
+      ) => {
+        if (!Number.isSafeInteger(after) || after < 0)
+          throw new RangeError('container process cursor must be a nonnegative safe integer');
+        if (!Number.isSafeInteger(limit) || limit < 1 || limit > 128)
+          throw new RangeError('container process page limit must be between 1 and 128');
+        if (snapshot !== undefined && !/^[0-9a-fA-F]{64}$/.test(snapshot))
+          throw new TypeError('container process snapshot must be 64 hexadecimal characters');
+        if (after > 0 && snapshot === undefined)
+          throw new TypeError('container process continuation requires its snapshot identity');
+        return expect(
+          await session.call('container_processes', { id, snapshot, after, limit }),
+          'processes',
+        );
+      },
+      processPages: async function* (
+        id,
+        { limit = 128, signal }: { limit?: number; signal?: AbortSignal } = {},
+      ) {
+        let snapshot: string | undefined;
+        let after = 0;
+        for (;;) {
+          requireOutputActive(signal);
+          const page = await api.containers.processes(id, { snapshot, after, limit });
+          snapshot ??= page.snapshot;
+          if (page.snapshot !== snapshot) throw new Error('host mixed container process snapshots');
+          yield page;
+          if (!page.more) return;
+          if (page.next === null || page.next <= after)
+            throw new Error('host returned an invalid container process continuation');
+          after = page.next;
+        }
+      },
       logs: async (id, { stdout = true, stderr = true } = {}) =>
         expect(await session.call('container_logs', { id, stdout, stderr }), 'logs'),
       execution: async (id) =>

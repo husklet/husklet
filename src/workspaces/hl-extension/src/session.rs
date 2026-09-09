@@ -751,9 +751,36 @@ impl Session {
                 let target = self.resolve_container(id, port.port())?;
                 Ok(Reply::Container(port.inspect(&target.id)?))
             }
-            Request::ContainerProcesses { id } => {
+            Request::ContainerProcesses {
+                id,
+                snapshot,
+                after,
+                limit,
+            } => {
+                if !(1..=128).contains(limit) {
+                    return Err(Failure::Conflict {
+                        detail: "container process page limit must be between 1 and 128".into(),
+                    });
+                }
+                if snapshot.as_ref().is_some_and(|value| {
+                    value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit())
+                }) {
+                    return Err(Failure::Conflict {
+                        detail: "container process snapshot must be 64 hexadecimal characters".into(),
+                    });
+                }
+                if *after > 0 && snapshot.is_none() {
+                    return Err(Failure::Conflict {
+                        detail: "container process continuation requires its snapshot identity".into(),
+                    });
+                }
                 let target = self.resolve_container(id, port.port())?;
-                Ok(Reply::Processes(port.processes(&target.id)?))
+                Ok(Reply::Processes(port.processes(
+                    &target.id,
+                    snapshot.as_deref(),
+                    *after,
+                    *limit,
+                )?))
             }
             Request::ContainerLogs { id, stdout, stderr } => {
                 let target = self.resolve_container(id, port.port())?;

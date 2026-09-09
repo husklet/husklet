@@ -145,6 +145,9 @@ pub enum Request {
     },
     ContainerProcesses {
         id: String,
+        snapshot: Option<String>,
+        after: u32,
+        limit: u16,
     },
     ContainerLogs {
         id: String,
