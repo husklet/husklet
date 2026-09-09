@@ -325,7 +325,11 @@ export function render(
     },
     async flush() {
       await ready;
-      await delivery;
+      for (;;) {
+        const current = delivery;
+        await current;
+        if (current === delivery) break;
+      }
       if (failed) throw failed;
     },
     async source(mutation: SourceMutation) {
