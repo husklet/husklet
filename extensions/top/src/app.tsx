@@ -287,10 +287,10 @@ export function Top({
         }
       }}
     >
-      <Row width="fill" pad={1} gap={1} align="center">
+      <Row width="fill" pad={1} gap={1} align="center" justify="center">
         <Text label="Section" color="text-dim" />
         <Select
-          width="fill"
+          width={{ minimum: { chars: 14 }, maximum: { chars: 24 } }}
           value={section}
           choices={SECTIONS.map((name) => ({ value: name, label: sectionTitle(name) }))}
           onChange={(event) => {
