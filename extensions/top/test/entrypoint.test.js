@@ -597,6 +597,10 @@ test(
           imageRenders,
       );
       peer.write(
+        encode({ channel: 33, kind: KIND.event, payload: invocation(requests, 'Edit name') }),
+      );
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      peer.write(
         encode({
           channel: 34,
           kind: KIND.event,

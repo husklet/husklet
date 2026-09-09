@@ -3863,16 +3863,16 @@ test('container rename validates locally, retries failure, and preserves immutab
   const stage = host();
   stage.render(h(Containers, { api: controlled, resource }));
   await settled();
-  const identity = labelled(
-    stage,
-    `Current name · api  ·  Container ID · ${immutable.slice(0, 12)}`,
-  );
+  const identity = labelled(stage, `Container ID · ${immutable.slice(0, 12)}`);
   assert.ok(identity, 'the rename surface keeps immutable identity compact');
   assert.deepEqual(
     latestProperty(stage, identity.SetProp.id, 'Tooltip'),
     { Text: `Immutable container ID ${immutable}` },
     'the exact immutable identity remains available without dominating the card',
   );
+  assert.equal(labelled(stage, `New name for ${immutable.slice(0, 12)}`), undefined);
+  assert.equal(taggedProperty(stage, 'Edit name', 'Button', 'Variant')?.Variant, 'Ghost');
+  invoke(stage, 'Edit name');
 
   change(stage, `New name for ${immutable.slice(0, 12)}`, '.invalid');
   assert.ok(
@@ -3903,12 +3903,7 @@ test('container rename validates locally, retries failure, and preserves immutab
     ['rename', immutable, 7, 'worker_2.prod'],
     ['reload'],
   ]);
-  assert.ok(
-    labelled(
-      stage,
-      'Renamed to worker_2.prod. Inventory identity will update after the authoritative refresh.',
-    ),
-  );
+  assert.ok(labelled(stage, 'Renamed to worker_2.prod.'));
   assert.ok(labelled(stage, 'api'), 'success notice does not forge an inventory update');
 });
 
@@ -4723,7 +4718,7 @@ test('container creation validates an initial network reference and retains it u
 test('container controls follow the real daemon lifecycle states', () => {
   const id = 'c'.repeat(32);
   const api = { containers: {} };
-  const stage = host();
+  let stage = host();
   const inventory = (state) => ({
     data: [{ id, name: 'worker', image: 'alpine', state }],
     loading: false,
@@ -4731,23 +4726,38 @@ test('container controls follow the real daemon lifecycle states', () => {
     reload: async () => {},
   });
   stage.render(h(Containers, { api, resource: inventory('running') }));
-  assert.equal(isEnabled(stage, 'Remove'), false, 'a running container cannot be removed');
+  assert.equal(labelled(stage, 'Remove'), undefined, 'running cards omit an invalid remove action');
+  assert.equal(taggedProperty(stage, 'More actions', 'Expander', 'Expanded')?.Flag, false);
+  assert.equal(taggedProperty(stage, 'Details', 'Button', 'Variant')?.Variant, 'Outline');
 
+  stage = host();
   stage.render(h(Containers, { api, resource: inventory('created') }));
   assert.equal(isEnabled(stage, 'Remove'), true, 'created containers are removable');
   assert.equal(isEnabled(stage, 'Start'), true, 'created containers are startable');
+  assert.equal(taggedProperty(stage, 'Start', 'Button', 'Variant')?.Variant, 'Filled');
 
+  stage = host();
   stage.render(h(Containers, { api, resource: inventory('exited') }));
   assert.equal(isEnabled(stage, 'Remove'), true, 'exited containers are removable');
   assert.equal(isEnabled(stage, 'Start'), true, 'exited containers are restartable through start');
 
+  stage = host();
   stage.render(h(Containers, { api, resource: inventory('paused') }));
-  assert.equal(isEnabled(stage, 'Remove'), false, 'paused containers remain active');
+  assert.equal(
+    labelled(stage, 'Remove'),
+    undefined,
+    'paused containers omit an invalid remove action',
+  );
   assert.equal(isEnabled(stage, 'Restart'), true, 'paused containers can be restarted');
   assert.equal(isEnabled(stage, 'Stop'), true, 'paused containers can be stopped');
 
+  stage = host();
   stage.render(h(Containers, { api, resource: inventory('restarting') }));
-  assert.equal(isEnabled(stage, 'Start'), false, 'a restarting container cannot be started twice');
+  assert.equal(
+    labelled(stage, 'Start'),
+    undefined,
+    'a restarting container cannot be started twice',
+  );
   assert.equal(isEnabled(stage, 'Stop'), true, 'a restart loop can be stopped');
 });
 

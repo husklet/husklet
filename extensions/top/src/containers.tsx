@@ -8,6 +8,7 @@ import {
   CardHeader,
   Column,
   ConfirmAction,
+  Expander,
   Heading,
   ResourceState,
   Row,
@@ -207,10 +208,9 @@ export function Containers({ api, resource, containerDetails, onOpenExecution }:
                 align="start"
                 width="fill"
               />
-              <CardContent gap={2}>
-                <Row gap={2} align={'center'}>
+              <CardContent gap={1} align="start" width="fill">
+                <Row gap={1} align="center" justify="start" width="fill" wrap>
                   <Badge label={item.state} tone={stateTone(item.state)} />
-                  <Text label={shortId(item.id)} color={'text-dim'} />
                 </Row>
                 <ContainerRename
                   api={api}
@@ -218,14 +218,23 @@ export function Containers({ api, resource, containerDetails, onOpenExecution }:
                   reload={resource.reload}
                   blocked={busy !== ''}
                 />
+                <ContainerActions item={item} busy={busy} act={act} remove={remove} />
               </CardContent>
-              <CardActions gap={1}>
-                <Row gap={1} wrap justify="end">
+              <CardActions gap={1} align="start" justify="start" width="fill">
+                <Row gap={1} wrap justify="start">
                   <Button
                     label={selected === item.id ? 'Hide details' : 'Details'}
+                    variant="outline"
                     onInvoke={() => toggleDetails(item)}
                   />
-                  {containerActions(item, busy, act, remove)}
+                  {startable(item.state) ? (
+                    <Button
+                      label="Start"
+                      variant="filled"
+                      enabled={busy === ''}
+                      onInvoke={() => act('start', item.id, undefined, item.generation)}
+                    />
+                  ) : null}
                 </Row>
               </CardActions>
               {selected === item.id ? (
@@ -247,52 +256,71 @@ export function Containers({ api, resource, containerDetails, onOpenExecution }:
   );
 }
 
-function containerActions(
-  item: ContainerSummary,
-  busy: string,
-  act: LifecycleAction,
-  remove: (item: ContainerSummary) => void | Promise<void>,
-): React.ReactNode[] {
+function ContainerActions({
+  item,
+  busy,
+  act,
+  remove,
+}: {
+  item: ContainerSummary;
+  busy: string;
+  act: LifecycleAction;
+  remove: (item: ContainerSummary) => void | Promise<void>;
+}) {
   const blocked = busy !== '';
   const running = item.state === 'running';
   const active = running || item.state === 'paused';
-  const startable = item.state === 'created' || item.state === 'exited';
-  return [
-    <Button
-      key={'start'}
-      label={active ? 'Restart' : 'Start'}
-      enabled={!blocked && (active || startable)}
-      onInvoke={() => act(active ? 'restart' : 'start', item.id, undefined, item.generation)}
-    />,
-    <Button
-      key={'pause'}
-      label={item.state === 'paused' ? 'Resume' : 'Pause'}
-      enabled={!blocked && (running || item.state === 'paused')}
-      onInvoke={() =>
-        act(item.state === 'paused' ? 'unpause' : 'pause', item.id, undefined, item.generation)
-      }
-    />,
-    <ConfirmAction
-      key={'stop'}
-      label={'Stop'}
-      confirmLabel={'Confirm stop'}
-      pendingLabel={'Confirm stop'}
-      authorityKey={`container:${item.id}:stop`}
-      question={`Stop ${item.name || shortId(item.id)} with immutable ID ${item.id}?`}
-      enabled={!blocked && (active || item.state === 'restarting')}
-      onConfirm={() => act('stop', item.id, undefined, item.generation)}
-    />,
-    <ConfirmAction
-      key={'remove'}
-      label={'Remove'}
-      confirmLabel={'Confirm remove'}
-      pendingLabel={'Confirm remove'}
-      authorityKey={`container:${item.id}:remove`}
-      question={`Remove inactive container ${item.name || shortId(item.id)} with immutable ID ${item.id}?`}
-      enabled={!blocked && removable(item.state)}
-      onConfirm={() => remove(item)}
-    />,
-  ];
+  return (
+    <Expander label="More actions" expanded={false} width="fill" align="start">
+      <Row gap={1} wrap align="center">
+        {active ? (
+          <Button
+            label="Restart"
+            variant="ghost"
+            enabled={!blocked}
+            onInvoke={() => act('restart', item.id, undefined, item.generation)}
+          />
+        ) : null}
+        {active ? (
+          <Button
+            label={item.state === 'paused' ? 'Resume' : 'Pause'}
+            variant="ghost"
+            enabled={!blocked}
+            onInvoke={() =>
+              act(
+                item.state === 'paused' ? 'unpause' : 'pause',
+                item.id,
+                undefined,
+                item.generation,
+              )
+            }
+          />
+        ) : null}
+        {active || item.state === 'restarting' ? (
+          <ConfirmAction
+            label="Stop"
+            confirmLabel="Confirm stop"
+            pendingLabel="Confirm stop"
+            authorityKey={`container:${item.id}:stop`}
+            question={`Stop ${item.name || shortId(item.id)} with immutable ID ${item.id}?`}
+            enabled={!blocked}
+            onConfirm={() => act('stop', item.id, undefined, item.generation)}
+          />
+        ) : null}
+        {removable(item.state) ? (
+          <ConfirmAction
+            label="Remove"
+            confirmLabel="Confirm remove"
+            pendingLabel="Confirm remove"
+            authorityKey={`container:${item.id}:remove`}
+            question={`Remove inactive container ${item.name || shortId(item.id)} with immutable ID ${item.id}?`}
+            enabled={!blocked}
+            onConfirm={() => remove(item)}
+          />
+        ) : null}
+      </Row>
+    </Expander>
+  );
 }
 
 function Page({
@@ -343,6 +371,9 @@ function stateTone(state: string): 'positive' | 'warning' | 'neutral' {
   return state === 'running' ? 'positive' : state === 'paused' ? 'warning' : 'neutral';
 }
 function removable(state: string | undefined): boolean {
+  return state === 'created' || state === 'exited';
+}
+function startable(state: string | undefined): boolean {
   return state === 'created' || state === 'exited';
 }
 function lifecycleLabel(verb: LifecycleVerb): string {
