@@ -3810,6 +3810,46 @@ test('filesystem controls use exact confined protocol request shapes', async () 
   stage.server.close();
 });
 
+test('filesystem mutations stop adversarial iterables at the host byte bound before Unix framing', async () => {
+  const stage = await pair();
+  const next = frames(stage.host);
+  await next();
+  const files = workspace(stage.session).files;
+  let produced = 0;
+  function* oversized() {
+    while (true) {
+      produced += 1;
+      yield 97;
+    }
+  }
+  await assert.rejects(
+    files.writeObserved('src/review.ts', 'v1:1:2:3:4:5:6:7', oversized()),
+    /limited to 65536 bytes/,
+  );
+  assert.equal(produced, 65_537);
+  await assert.rejects(files.createObserved('src/review.ts', [0, 256]), /bytes from 0 through 255/);
+
+  const healthy = files.stat('src/review.ts');
+  assert.deepEqual((await next()).payload, {
+    call: 'filesystem_stat',
+    with: { path: 'src/review.ts' },
+  });
+  stage.host.write(
+    encode({
+      channel: 2,
+      kind: KIND.response,
+      payload: {
+        reply: 'entry',
+        with: { path: 'src/review.ts', directory: false, size: 12, identity: 'v1:1:2:3:4:5:6:7' },
+      },
+    }),
+  );
+  assert.equal((await healthy).size, 12);
+  stage.session.close();
+  stage.host.destroy();
+  stage.server.close();
+});
+
 test('directory pagination carries an authoritative bounded cursor over Unix framing', async () => {
   const stage = await pair();
   const next = frames(stage.host);

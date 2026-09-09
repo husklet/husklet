@@ -178,6 +178,24 @@ function exactFileRange(offset: number, limit: number): [number, number] {
   return [offset, limit];
 }
 
+function exactFileContents(contents: Iterable<number>) {
+  if (
+    contents === null ||
+    contents === undefined ||
+    typeof contents[Symbol.iterator] !== 'function'
+  )
+    throw new TypeError('filesystem contents must be an iterable of bytes');
+  const bounded: number[] = [];
+  for (const byte of contents) {
+    if (!Number.isInteger(byte) || byte < 0 || byte > 255)
+      throw new TypeError('filesystem contents must contain bytes from 0 through 255');
+    if (bounded.length === 65_536)
+      throw new RangeError('filesystem writes are limited to 65536 bytes');
+    bounded.push(byte);
+  }
+  return bounded;
+}
+
 function exactFilesystemPageSize(limit: number) {
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 256) {
     throw new RangeError('filesystem page size must be an integer between 1 and 256');
@@ -1989,19 +2007,23 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
         return { text: parts.join(''), identity, bytes };
       },
       stat: async (path) => expect(await session.call('filesystem_stat', { path }), 'entry'),
-      write: (path, contents) => done('filesystem_write', { path, contents: [...contents] }),
+      write: (path, contents) =>
+        done('filesystem_write', { path, contents: exactFileContents(contents) }),
       writeObserved: async (path, observed, contents) =>
         expect(
           await session.call('filesystem_write_observed', {
             path,
             observed,
-            contents: [...contents],
+            contents: exactFileContents(contents),
           }),
           'identity',
         ),
       createObserved: async (path, contents) =>
         expect(
-          await session.call('filesystem_create_observed', { path, contents: [...contents] }),
+          await session.call('filesystem_create_observed', {
+            path,
+            contents: exactFileContents(contents),
+          }),
           'identity',
         ),
       mkdir: (path) => done('filesystem_mkdir', { path }),
