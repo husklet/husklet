@@ -130,6 +130,55 @@ function immutableIdentity(id, widths, noun) {
         return id;
     throw new TypeError(`${noun} operation requires the complete immutable ID returned by inspection`);
 }
+function exactAcquisitionJob(job) {
+    if (typeof job !== 'string' ||
+        job.length === 0 ||
+        job.includes('\0') ||
+        new TextEncoder().encode(job).byteLength > 128)
+        throw new TypeError('extension acquisition requires a 1..128 byte NUL-free job identity');
+    return job;
+}
+function exactAcquisitionStatus(job, status) {
+    const states = new Set([
+        'inspecting',
+        'pulling',
+        'reading-manifest',
+        'ready',
+        'committing',
+        'installed',
+        'updated',
+        'failed',
+        'cancelled',
+    ]);
+    const progress = status.progress ?? null;
+    const candidate = status.candidate ?? null;
+    const error = status.error ?? null;
+    const validProgress = status.state === 'pulling' &&
+        progress !== null &&
+        new TextEncoder().encode(progress.status).byteLength <= 512 &&
+        !progress.status.includes('\0') &&
+        (progress.id === null ||
+            (!progress.id.includes('\0') && new TextEncoder().encode(progress.id).byteLength <= 512)) &&
+        (progress.current === null || progress.total === null || progress.current <= progress.total);
+    if (status.job !== job ||
+        !states.has(status.state) ||
+        status.reference.length === 0 ||
+        status.reference.includes('\0') ||
+        new TextEncoder().encode(status.reference).byteLength > 512 ||
+        (status.state === 'pulling' ? !validProgress : progress !== null) ||
+        (status.state === 'ready' ? candidate === null : candidate !== null) ||
+        (status.state === 'failed' ? error === null : error !== null))
+        throw new TypeError('host returned an inconsistent extension acquisition status');
+    if (candidate)
+        immutableDigest(candidate.image_digest, 'extension candidate image');
+    return {
+        ...status,
+        state: status.state,
+        progress,
+        candidate,
+        error,
+    };
+}
 function exactFileRange(offset, limit) {
     if (!Number.isSafeInteger(offset) || offset < 0) {
         throw new RangeError('filesystem range offset must be a nonnegative safe integer');
@@ -639,9 +688,16 @@ export function workspace(session, { signal } = {}) {
                 name,
                 image_digest: immutableDigest(imageDigest, 'extension image'),
             }),
-            startAcquisition: async (reference) => expect(await session.call('extension_acquisition_start', { reference }), 'extension_acquisition_job'),
-            acquisition: async (job) => expect(await session.call('extension_acquisition_status', { job }), 'extension_acquisition'),
-            cancelAcquisition: (job, revision) => done('extension_acquisition_cancel', { job, revision }),
+            startAcquisition: async (reference) => {
+                const started = expect(await session.call('extension_acquisition_start', { reference }), 'extension_acquisition_job');
+                exactAcquisitionJob(started.job);
+                return started;
+            },
+            acquisition: async (job) => {
+                const exactJob = exactAcquisitionJob(job);
+                return exactAcquisitionStatus(exactJob, expect(await session.call('extension_acquisition_status', { job: exactJob }), 'extension_acquisition'));
+            },
+            cancelAcquisition: (job, revision) => done('extension_acquisition_cancel', { job: exactAcquisitionJob(job), revision }),
             install: async (job, revision, imageDigest, granted, containers = { selectors: [], create: false }, images = { read: [], use: [], pull: [], remove: [], prune_all_unused: false }, networks = { selectors: [], create: false }, volumes = { selectors: [], create: false }, filesystem = { read: [], write: [], create: [], delete: [], rename: [] }, workspaceEnvironment = { read: [], write: [] }) => expect(await session.call('extension_install', {
                 job,
                 revision,

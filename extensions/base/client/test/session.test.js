@@ -2286,7 +2286,7 @@ test('real Unix acquisition wait reconnects from authoritative status without a 
                   job: 'job-7',
                   reference: 'registry/demo:1',
                   revision: 5,
-                  state: 'ready',
+                  state: 'inspecting',
                   progress: null,
                   candidate: null,
                   error: null,
@@ -2324,6 +2324,63 @@ test('real Unix acquisition wait reconnects from authoritative status without a 
       'extension_acquisition_status',
       'event_unsubscribe',
     ]);
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('real Unix acquisition rejects impossible progress without poisoning the session', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-acquisition-progress-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const calls = [];
+  const connections = new Set();
+  const server = net.createServer((socket) => {
+    connections.add(socket);
+    socket.on('close', () => connections.delete(socket));
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.kind !== KIND.request) continue;
+        calls.push(frame.payload);
+        const payload =
+          frame.payload.call === 'extension_acquisition_status'
+            ? {
+                reply: 'extension_acquisition',
+                with: {
+                  job: 'job-9',
+                  reference: 'registry.example/tool:1',
+                  revision: 3,
+                  state: 'pulling',
+                  progress: { status: 'downloading', id: 'layer', current: 101, total: 100 },
+                  candidate: null,
+                  error: null,
+                },
+              }
+            : { reply: 'extension_acquisition_job', with: { job: 'job-10' } };
+        socket.write(encode({ channel: frame.channel, kind: KIND.response, payload }));
+      }
+    });
+    socket.write(
+      encode({
+        channel: CONTROL,
+        kind: KIND.open,
+        payload: { protocol: 1, peer: 'catalogue', granted: ['extensions:install'] },
+      }),
+    );
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    const extensions = workspace(session).extensions;
+    await assert.rejects(extensions.acquisition('job-9'), /inconsistent extension acquisition/);
+    assert.equal((await extensions.startAcquisition('registry.example/tool:2')).job, 'job-10');
+    assert.deepEqual(
+      calls.map(({ call }) => call),
+      ['extension_acquisition_status', 'extension_acquisition_start'],
+    );
     await session.close();
   } finally {
     for (const connection of connections) connection.destroy();

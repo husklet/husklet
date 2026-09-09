@@ -30,6 +30,7 @@ import type {
   ContainerSummary,
   ConnectOptions,
   ExecutionSummary,
+  ExtensionAcquisitionStatus,
   ExtensionState,
   PreferenceValue,
   ExtensionSummary,
@@ -46,6 +47,7 @@ import {
   PROTOCOL_REQUEST_CAPABILITIES,
   PROTOCOL_TOPICS,
 } from './generated-protocol.js';
+import type { ExtensionAcquisitionStatus as WireExtensionAcquisitionStatus } from './generated-protocol.js';
 
 type ReplyPayload<K extends WireReply['reply']> =
   Extract<WireReply, { reply: K }> extends {
@@ -202,6 +204,64 @@ function immutableIdentity(id, widths, noun) {
   throw new TypeError(
     `${noun} operation requires the complete immutable ID returned by inspection`,
   );
+}
+
+function exactAcquisitionJob(job: unknown): string {
+  if (
+    typeof job !== 'string' ||
+    job.length === 0 ||
+    job.includes('\0') ||
+    new TextEncoder().encode(job).byteLength > 128
+  )
+    throw new TypeError('extension acquisition requires a 1..128 byte NUL-free job identity');
+  return job;
+}
+
+function exactAcquisitionStatus(
+  job: string,
+  status: WireExtensionAcquisitionStatus,
+): ExtensionAcquisitionStatus {
+  const states = new Set([
+    'inspecting',
+    'pulling',
+    'reading-manifest',
+    'ready',
+    'committing',
+    'installed',
+    'updated',
+    'failed',
+    'cancelled',
+  ]);
+  const progress = status.progress ?? null;
+  const candidate = status.candidate ?? null;
+  const error = status.error ?? null;
+  const validProgress =
+    status.state === 'pulling' &&
+    progress !== null &&
+    new TextEncoder().encode(progress.status).byteLength <= 512 &&
+    !progress.status.includes('\0') &&
+    (progress.id === null ||
+      (!progress.id.includes('\0') && new TextEncoder().encode(progress.id).byteLength <= 512)) &&
+    (progress.current === null || progress.total === null || progress.current <= progress.total);
+  if (
+    status.job !== job ||
+    !states.has(status.state) ||
+    status.reference.length === 0 ||
+    status.reference.includes('\0') ||
+    new TextEncoder().encode(status.reference).byteLength > 512 ||
+    (status.state === 'pulling' ? !validProgress : progress !== null) ||
+    (status.state === 'ready' ? candidate === null : candidate !== null) ||
+    (status.state === 'failed' ? error === null : error !== null)
+  )
+    throw new TypeError('host returned an inconsistent extension acquisition status');
+  if (candidate) immutableDigest(candidate.image_digest, 'extension candidate image');
+  return {
+    ...status,
+    state: status.state as ExtensionAcquisitionStatus['state'],
+    progress,
+    candidate,
+    error,
+  } as unknown as ExtensionAcquisitionStatus;
 }
 
 function exactFileRange(offset: number, limit: number): [number, number] {
@@ -817,17 +877,26 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
           name,
           image_digest: immutableDigest(imageDigest, 'extension image'),
         }),
-      startAcquisition: async (reference) =>
-        expect(
+      startAcquisition: async (reference) => {
+        const started = expect(
           await session.call('extension_acquisition_start', { reference }),
           'extension_acquisition_job',
-        ),
-      acquisition: async (job) =>
-        expect(
-          await session.call('extension_acquisition_status', { job }),
-          'extension_acquisition',
-        ),
-      cancelAcquisition: (job, revision) => done('extension_acquisition_cancel', { job, revision }),
+        );
+        exactAcquisitionJob(started.job);
+        return started;
+      },
+      acquisition: async (job) => {
+        const exactJob = exactAcquisitionJob(job);
+        return exactAcquisitionStatus(
+          exactJob,
+          expect(
+            await session.call('extension_acquisition_status', { job: exactJob }),
+            'extension_acquisition',
+          ),
+        );
+      },
+      cancelAcquisition: (job, revision) =>
+        done('extension_acquisition_cancel', { job: exactAcquisitionJob(job), revision }),
       install: async (
         job,
         revision,

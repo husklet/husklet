@@ -175,7 +175,7 @@ export interface ExtensionAcquisitionStatus {
     job: string;
     reference: string;
     revision: number;
-    state: string;
+    state: 'inspecting' | 'pulling' | 'reading-manifest' | 'ready' | 'committing' | 'installed' | 'updated' | 'failed' | 'cancelled';
     progress: ExtensionAcquisitionProgress | null;
     candidate: ExtensionCandidate | null;
     error: string | null;
