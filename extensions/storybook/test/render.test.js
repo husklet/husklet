@@ -159,6 +159,27 @@ test('the sidebar uses one native scroller without nesting a List scroller', () 
     0,
     'nested native scrollers collapse the navigation',
   );
+  const selects = created(frame.patches)
+    .filter(({ tag }) => tag === 'Select')
+    .map(({ id }) => id);
+  const family = selects.find((id) =>
+    frame.patches.some(
+      (patch) =>
+        patch.SetProp?.id === id &&
+        patch.SetProp.prop === 'Value' &&
+        patch.SetProp.value?.Text === 'buttons',
+    ),
+  );
+  assert(family, 'component navigation renders its family selector');
+  assert(
+    frame.patches.some(
+      (patch) =>
+        patch.SetProp?.id === family &&
+        patch.SetProp.prop === 'Width' &&
+        patch.SetProp.value?.Length === 'Fill',
+    ),
+    'the family selector consumes the stable navigation width',
+  );
 });
 
 test('global navigation finds an unknown-family component without materializing the catalogue', () => {

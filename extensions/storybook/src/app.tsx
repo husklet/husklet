@@ -322,6 +322,7 @@ export function Sidebar({
                     />,
                     <Select
                       key={'family'}
+                      width={'fill'}
                       value={family.name}
                       choices={families.map((candidate) => ({
                         value: candidate.name,
