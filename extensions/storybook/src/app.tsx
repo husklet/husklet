@@ -15,11 +15,11 @@ import {
   ListItemButton,
   ListSubheader,
   NumberEntry,
+  Responsive,
   Row,
   Scroll,
   Section,
   Select,
-  Separator,
   Switch,
   Text,
   components,
@@ -28,7 +28,7 @@ import {
 
 import { component, grouped, notes, type Family, type Tag } from './catalogue.js';
 import { OPENING, defaults, spaced, type StoryChild, type StoryDefaults } from './defaults.js';
-import { amountOf, lengthValue, modeOf, rows, type ControlRow } from './editors.js';
+import { amountOf, lengthValue, modeOf, type ControlRow } from './editors.js';
 import { LargeDataTableStory, LargeRecordSource } from './large-table.js';
 import { ACQUISITION_STORY, AcquisitionProgressStory } from './acquisition.js';
 import { FORM_STORY, ValidatedSettingsFormStory } from './form.js';
@@ -64,6 +64,7 @@ import { WORKSPACE_FILE_EDIT_STORY, WorkspaceFileEditStory } from './workspace-f
 import { IMAGE_PULL_STORY, ImagePullStory } from './image-pull.js';
 import { RESOURCE_STATE_STORY, ResourceStateStory } from './resource-state.js';
 import { DRAG_REORDER_STORY, DragReorderStory } from './drag-reorder.js';
+import { ButtonWorkbench } from './button.js';
 
 const { useMemo, useRef, useState } = React;
 
@@ -139,21 +140,25 @@ export function Playground({
       families.find((family) => family.tags.some((tag) => tag.name === OPENING))?.name ??
       families[0]?.name,
   );
-  const [edited, setEdited] = useState(() => new Map<string, StoryDefaults>());
-
   const flow = FLOW_STORIES.includes(selected);
-  const opened = flow ? null : (edited.get(selected) ?? defaults(selected));
+  const opened = flow ? null : defaults(selected);
   const contract = flow ? null : component(selected);
-  const properties = flow ? [] : rows(selected);
-  const change: Change = (name, value) => {
-    if (opened === null) return;
-    const next = new Map(edited);
-    next.set(selected, { ...opened, props: { ...opened.props, [name]: value } });
-    setEdited(next);
-  };
+  const allStories = [
+    ...FLOW_STORIES,
+    ...families.flatMap((family) => family.tags.map((tag) => tag.name)),
+  ];
 
   return (
-    <Row gap={0} grow={true} wrap={true}>
+    <Responsive breakpoint={1024} position={240} grow>
+      <Row width="fill" pad={2} gap={2} align="center">
+        <Text label="Component" color="text-dim" />
+        <Select
+          value={selected}
+          width="fill"
+          choices={allStories.map((name) => ({ value: name, label: spaced(name) }))}
+          onChange={(report) => setSelected(String(report.value))}
+        />
+      </Row>
       <Sidebar
         key={'sidebar'}
         families={families}
@@ -162,27 +167,23 @@ export function Playground({
         onFamily={setActiveFamily}
         onSelect={setSelected}
       />
-      <Separator key={'first'} orientation={'vertical'} />
-      <Preview
-        key={`preview-${selected}`}
-        name={selected}
-        opened={opened}
-        largeSource={largeSource}
-        timelineSource={timelineSource}
-        keyValueSource={keyValueSource}
-        fileSource={fileSource}
-        triggers={contract?.triggers ?? []}
-      />
-      <Separator key={'second'} orientation={'vertical'} />
-      <Inspector
-        key={'inspector'}
-        name={selected}
-        properties={properties}
-        triggers={contract?.triggers ?? []}
-        props={opened?.props ?? {}}
-        onChange={change}
-      />
-    </Row>
+      <Scroll grow width="fill" height="fill">
+        {selected === 'Button' ? (
+          <ButtonWorkbench />
+        ) : (
+          <Preview
+            key={`preview-${selected}`}
+            name={selected}
+            opened={opened}
+            largeSource={largeSource}
+            timelineSource={timelineSource}
+            keyValueSource={keyValueSource}
+            fileSource={fileSource}
+            triggers={contract?.triggers ?? []}
+          />
+        )}
+      </Scroll>
+    </Responsive>
   );
 }
 

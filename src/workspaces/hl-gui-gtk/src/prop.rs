@@ -30,7 +30,7 @@ pub(crate) fn apply(widget: &gtk::Widget, node: &Node, prop: Prop, value: &PropV
         Prop::Monospace => monospace(widget, value),
         Prop::Wrap => wrap(widget, node, value),
         Prop::Ellipsize => ellipsize(widget, value),
-        Prop::Variant | Prop::Tone | Prop::Scale | Prop::Color => crate::style::mark(widget, prop, value),
+        Prop::Variant | Prop::Tone | Prop::Scale | Prop::Size | Prop::Color => crate::style::mark(widget, prop, value),
         Prop::Gap => gap(widget, value),
         Prop::Pad => pad(widget, value),
         Prop::Grow => grow(widget, value),

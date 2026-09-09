@@ -37,6 +37,7 @@ pub enum Prop {
     Variant,
     Tone,
     Scale,
+    Size,
     Color,
     // Layout
     Gap,
@@ -119,6 +120,7 @@ pub enum PropValue {
     Variant(Variant),
     Tone(Tone),
     Scale(Scale),
+    ControlSize(crate::ControlSize),
     Align(Align),
     Orientation(Orientation),
     Choices(Vec<Choice>),

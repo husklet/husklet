@@ -8,7 +8,7 @@ use super::{axis, slot};
 /// Interactive controls that report an invocation.
 pub(crate) fn widget(tag: Tag) -> gtk::Widget {
     match tag {
-        Tag::Button => action().upcast(),
+        Tag::Button => sized(action()).upcast(),
         Tag::IconButton => icon().upcast(),
         Tag::ToggleButton => toggle().upcast(),
         Tag::ButtonGroup | Tag::ToggleButtonGroup => group().upcast(),
@@ -38,8 +38,13 @@ fn toggle() -> gtk::ToggleButton {
 }
 
 fn icon() -> gtk::Button {
-    let widget = gtk::Button::new();
+    let widget = sized(gtk::Button::new());
     widget.set_icon_name("view-more-symbolic");
+    widget
+}
+
+fn sized(widget: gtk::Button) -> gtk::Button {
+    widget.add_css_class("size-medium");
     widget
 }
 

@@ -1183,6 +1183,30 @@
       "kind": "struct",
       "serde": {}
     },
+    "ControlSize": {
+      "kind": "enum",
+      "serde": {},
+      "variants": [
+        {
+          "name": "Small",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Medium",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Large",
+          "payload": {
+            "kind": "unit"
+          }
+        }
+      ]
+    },
     "DirectoryPage": {
       "fields": [
         {
@@ -4591,6 +4615,12 @@
           }
         },
         {
+          "name": "Size",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
           "name": "Color",
           "payload": {
             "kind": "unit"
@@ -4836,6 +4866,16 @@
             "of": {
               "kind": "ref",
               "name": "Scale"
+            }
+          }
+        },
+        {
+          "name": "ControlSize",
+          "payload": {
+            "kind": "newtype",
+            "of": {
+              "kind": "ref",
+              "name": "ControlSize"
             }
           }
         },
@@ -13496,7 +13536,7 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:8e585bc68259392f",
+  "source_fingerprint": "fnv1a64:8396c54ccf17feca",
   "specification_version": 1,
   "topics": [
     {

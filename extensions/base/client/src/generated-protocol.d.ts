@@ -1,5 +1,5 @@
 // Generated from Rust hl-extension protocol/v1.json. Do not edit.
-// Protocol artifact fnv1a64:6676bbeba59086cb
+// Protocol artifact fnv1a64:7951c140b15c7b8c
 export const PROTOCOL_SPECIFICATION_VERSION: 1;
 export const PROTOCOL_VERSION: 1;
 export const PROTOCOL_BOUNDS: Readonly<{ "extension_job_bytes": number; "extension_reference_bytes": number; "pane_input_bytes": number; "pane_inventory_items": number; "pane_text_bytes": number; "resource_inventory_items": number; "semantic_action_value_bytes": number; "semantic_depth": number; "semantic_nodes": number; "semantic_text_bytes": number; "terminal_command_argument_bytes": number; "terminal_command_bytes": number }>;
@@ -24,6 +24,7 @@ export type ContainerPort = { "container": number; "host"?: number | null; "prot
 export type ContainerSelector = { "id": string } | { "name": string } | { "all": boolean };
 export type ContainerSummary = { "id": string; "name": string; "image": string; "state": string; "created": number; "generation"?: number; "ports"?: Array<ContainerPort> };
 export type ContainerVolumeMount = { "volume": string; "target": string; "read_only": boolean };
+export type ControlSize = "Small" | "Medium" | "Large";
 export type DirectoryPage = { "entries": Array<Entry>; "identity": string; "next"?: RelativePath | null; "more": boolean };
 export type Division = "beside" | "below";
 export type Edges = { "top": Length; "end": Length; "bottom": Length; "start": Length };
@@ -98,8 +99,8 @@ export type PreferenceValue = { kind: "boolean"; value: boolean } | { kind: "num
 export type ProcessList = { "container_id"?: string; "titles": Array<string>; "processes": Array<Array<string>>; "observed_at_ms"?: number; "scope"?: ProcessScope; "pid_identity"?: ProcessPidIdentity; "truncated"?: boolean };
 export type ProcessPidIdentity = "snapshot";
 export type ProcessScope = "initial" | "namespace";
-export type Prop = "Label" | "Detail" | "Value" | "Placeholder" | "Help" | "Icon" | "Tooltip" | "Uri" | "Enabled" | "Visible" | "Selected" | "Checked" | "Expanded" | "Busy" | "Secret" | "Destructive" | "Monospace" | "Wrap" | "Ellipsize" | "Variant" | "Tone" | "Scale" | "Color" | "Gap" | "Pad" | "Grow" | "Width" | "Height" | "Align" | "Justify" | "Columns" | "Span" | "RowSpan" | "Orientation" | "Position" | "Breakpoint" | "Minimum" | "Maximum" | "Step" | "Fraction" | "Schema" | "Source" | "RowHeight" | "Choices";
-export type PropValue = { "Text": string } | { "Number": number } | { "Integer": number } | { "Flag": boolean } | { "Token": Token } | { "Length": Length } | { "Edges": Edges } | { "Bounds": Bounds } | { "Variant": Variant } | { "Tone": Tone } | { "Scale": Scale } | { "Align": Align } | { "Orientation": Orientation } | { "Choices": Array<Choice> } | { "Schema": Array<Column> } | { "Source": SourceId } | "Nothing";
+export type Prop = "Label" | "Detail" | "Value" | "Placeholder" | "Help" | "Icon" | "Tooltip" | "Uri" | "Enabled" | "Visible" | "Selected" | "Checked" | "Expanded" | "Busy" | "Secret" | "Destructive" | "Monospace" | "Wrap" | "Ellipsize" | "Variant" | "Tone" | "Scale" | "Size" | "Color" | "Gap" | "Pad" | "Grow" | "Width" | "Height" | "Align" | "Justify" | "Columns" | "Span" | "RowSpan" | "Orientation" | "Position" | "Breakpoint" | "Minimum" | "Maximum" | "Step" | "Fraction" | "Schema" | "Source" | "RowHeight" | "Choices";
+export type PropValue = { "Text": string } | { "Number": number } | { "Integer": number } | { "Flag": boolean } | { "Token": Token } | { "Length": Length } | { "Edges": Edges } | { "Bounds": Bounds } | { "Variant": Variant } | { "Tone": Tone } | { "Scale": Scale } | { "ControlSize": ControlSize } | { "Align": Align } | { "Orientation": Orientation } | { "Choices": Array<Choice> } | { "Schema": Array<Column> } | { "Source": SourceId } | "Nothing";
 export type RelativePath = string;
 export type RequestId = number;
 export type Row = { "key": number; "cells": Array<Cell> };

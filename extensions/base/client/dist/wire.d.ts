@@ -1,4 +1,3 @@
-import { Buffer } from 'node:buffer';
 export declare const KIND: {
     request: number;
     response: number;
@@ -20,7 +19,7 @@ export declare function encode({ channel, kind, payload, flags }: {
     kind: any;
     payload: any;
     flags?: number;
-}): Buffer<ArrayBuffer>;
+}): any;
 /**
  * Accumulates bytes and yields whole frames.
  *
@@ -32,7 +31,7 @@ export declare class Reader {
     /** Bytes retained for the incomplete frame at the front of the stream. */
     get buffered(): number;
     /** Allocated framing storage, exposed so the per-session bound is testable. */
-    get capacity(): number;
+    get capacity(): any;
     /** Adds bytes and returns every frame they completed. */
     take(chunk: any): any[];
     /** Refuses an EOF that cut a header or payload short. */

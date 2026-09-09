@@ -18,6 +18,7 @@ pub fn sheet(theme: &Theme) -> String {
     tones(&mut css, theme);
     variants(&mut css, theme);
     scales(&mut css, theme);
+    control_sizes(&mut css);
     spacing(&mut css, theme);
     components(&mut css, theme);
     css
@@ -166,6 +167,20 @@ fn scales(css: &mut String, theme: &Theme) {
     }
 }
 
+fn control_sizes(css: &mut String) {
+    css.push_str(
+        "button.size-small { min-height: 28px; padding: 4px 8px; font-size: 12px; border-radius: 6px; }\n\
+         button.size-medium { min-height: 36px; padding: 8px 12px; font-size: 14px; border-radius: 6px; }\n\
+         button.size-large { min-height: 44px; padding: 12px 16px; font-size: 16px; border-radius: 8px; }\n\
+         button.size-small > box { border-spacing: 6px; } button.size-small image { -gtk-icon-size: 14px; }\n\
+         button.size-medium > box { border-spacing: 8px; } button.size-medium image { -gtk-icon-size: 18px; }\n\
+         button.size-large > box { border-spacing: 8px; } button.size-large image { -gtk-icon-size: 20px; }\n\
+         button.hl-iconbutton.size-small { min-width: 28px; min-height: 28px; padding: 0; }\n\
+         button.hl-iconbutton.size-medium { min-width: 36px; min-height: 36px; padding: 0; }\n\
+         button.hl-iconbutton.size-large { min-width: 44px; min-height: 44px; padding: 0; }\n",
+    );
+}
+
 fn spacing(css: &mut String, theme: &Theme) {
     let factor = match theme.density {
         Density::Compact => 0.75_f32,
@@ -243,6 +258,7 @@ pub(crate) fn mark(widget: &gtk::Widget, prop: Prop, value: &PropValue) {
         (Prop::Variant, PropValue::Variant(variant)) => ("variant", variant.as_str()),
         (Prop::Tone, PropValue::Tone(tone)) => ("tone", tone.as_str()),
         (Prop::Scale, PropValue::Scale(scale)) => ("scale", scale.as_str()),
+        (Prop::Size, PropValue::ControlSize(size)) => ("size", size.as_str()),
         (Prop::Color, PropValue::Token(token)) => ("tone", token.as_str()),
         _ => return,
     };
@@ -311,5 +327,19 @@ mod tests {
         assert!(css.contains(".hl-iconbutton { min-width: 30px; min-height: 30px;"));
         assert!(css.contains(".hl-listitembutton { background: transparent;"));
         assert!(css.contains(".hl-card > box { padding: 10px"));
+    }
+
+    #[test]
+    fn button_sizes_have_exact_independent_control_metrics() {
+        let css = super::sheet(&Theme::dark());
+        assert!(css
+            .contains("button.size-small { min-height: 28px; padding: 4px 8px; font-size: 12px; border-radius: 6px;"));
+        assert!(css.contains(
+            "button.size-medium { min-height: 36px; padding: 8px 12px; font-size: 14px; border-radius: 6px;"
+        ));
+        assert!(css.contains(
+            "button.size-large { min-height: 44px; padding: 12px 16px; font-size: 16px; border-radius: 8px;"
+        ));
+        assert!(css.contains("button.hl-iconbutton.size-large { min-width: 44px; min-height: 44px; padding: 0;"));
     }
 }

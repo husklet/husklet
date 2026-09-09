@@ -44,6 +44,7 @@ const KIND = {
   Variant: 'variant',
   Tone: 'tone',
   Scale: 'scale',
+  Size: 'size',
   Color: 'token',
   // Layout
   Gap: 'length',
@@ -108,6 +109,7 @@ export const RESERVED = new Set(['children', 'key', 'ref']);
 const VARIANTS = ['Plain', 'Filled', 'Outline', 'Ghost'];
 const TONES = ['Neutral', 'Accent', 'Positive', 'Warning', 'Danger'];
 const SCALES = ['Caption', 'Body', 'Title', 'Display'];
+const SIZES = ['Small', 'Medium', 'Large'];
 const ALIGNS = ['Start', 'Center', 'End', 'Stretch'];
 const ORIENTATIONS = ['Horizontal', 'Vertical'];
 const TOKENS = [
@@ -190,6 +192,8 @@ export function value(prop: PropName, given: unknown): unknown {
       return { Tone: member(given, TONES, 'a tone') };
     case 'scale':
       return { Scale: member(given, SCALES, 'a scale') };
+    case 'size':
+      return { ControlSize: member(given, SIZES, 'a control size') };
     case 'align':
       return { Align: member(given, ALIGNS, 'an alignment') };
     case 'orientation':

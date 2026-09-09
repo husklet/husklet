@@ -11,8 +11,8 @@
 
 use gtk::prelude::*;
 use hl_gui::{
-    Choice, Column, Element, Event, EventId, Length, Prop, PropValue, Reconciliation, Renderer, Scale, SourceId, Tag,
-    Theme, Tone, Tree, Trigger, Variant,
+    Choice, Column, ControlSize, Element, Event, EventId, Length, Prop, PropValue, Reconciliation, Renderer, Scale,
+    SourceId, Tag, Theme, Tone, Tree, Trigger, Variant,
 };
 use hl_gui_gtk::{Failure, Rows, Surface};
 
@@ -168,8 +168,32 @@ fn a_described_interface_reaches_the_toolkit_and_only_its_changes_do() {
     an_icon_button_keeps_its_icon_when_accessibly_labelled();
     a_rebound_handler_reports_the_new_identity();
     a_select_follows_its_stable_value();
+    button_sizes_allocate_their_semantic_metrics();
     rebinding_a_table_retires_its_previous_source();
     a_theme_installs_before_a_description_is_rendered();
+}
+
+fn button_sizes_allocate_their_semantic_metrics() {
+    for (size, class, expected) in [
+        (ControlSize::Small, "size-small", 28),
+        (ControlSize::Medium, "size-medium", 36),
+        (ControlSize::Large, "size-large", 44),
+    ] {
+        let mut session = Session::new();
+        session.surface.theme(&Theme::dark()).expect("theme installs");
+        session.render(&Element::button("Action", EventId::new(class)).prop(Prop::Size, PropValue::ControlSize(size)));
+        let root = session.surface.widget().clone();
+        let window = gtk::Window::builder().child(&root).build();
+        window.present();
+        let context = gtk::glib::MainContext::default();
+        while context.pending() {
+            context.iteration(false);
+        }
+        let widget = session.tagged(Tag::Button).unwrap();
+        assert!(widget.has_css_class(class), "{class} is attached");
+        assert_eq!(widget.height(), expected, "{class} allocation");
+        window.close();
+    }
 }
 
 fn an_icon_button_keeps_its_icon_when_accessibly_labelled() {

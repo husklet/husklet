@@ -4,7 +4,10 @@ import { createElement as h } from 'react';
 
 import { Surface, reconciler } from '../dist/reconciler.js';
 import {
-  COLUMN_KEY_BYTE_LIMIT, COLUMN_TITLE_BYTE_LIMIT, TABLE_COLUMN_LIMIT, value,
+  COLUMN_KEY_BYTE_LIMIT,
+  COLUMN_TITLE_BYTE_LIMIT,
+  TABLE_COLUMN_LIMIT,
+  value,
 } from '../dist/protocol.js';
 import { Button, Column, List, ListItemText, ListRow, Text } from '../dist/components.js';
 
@@ -49,17 +52,36 @@ test('table schemas enforce host allocation and UTF-8 identity bounds before ren
     title: index === 0 ? 'é'.repeat(COLUMN_TITLE_BYTE_LIMIT / 2) : `Column ${index}`,
   }));
   assert.equal(value('Schema', schema).Schema.length, TABLE_COLUMN_LIMIT);
-  assert.throws(() => value('Schema', [...schema, { key: 'overflow', title: 'Overflow' }]), /columns; limit/);
-  assert.throws(() => value('Schema', [{ key: 'same', title: 'One' }, { key: 'same', title: 'Two' }]), /duplicate/);
-  assert.throws(() => value('Schema', [{ key: 'é'.repeat(COLUMN_KEY_BYTE_LIMIT / 2 + 1), title: 'Name' }]), /column key/);
-  assert.throws(() => value('Schema', [{ key: 'name', title: 'é'.repeat(COLUMN_TITLE_BYTE_LIMIT / 2 + 1) }]), /column title/);
+  assert.throws(
+    () => value('Schema', [...schema, { key: 'overflow', title: 'Overflow' }]),
+    /columns; limit/,
+  );
+  assert.throws(
+    () =>
+      value('Schema', [
+        { key: 'same', title: 'One' },
+        { key: 'same', title: 'Two' },
+      ]),
+    /duplicate/,
+  );
+  assert.throws(
+    () => value('Schema', [{ key: 'é'.repeat(COLUMN_KEY_BYTE_LIMIT / 2 + 1), title: 'Name' }]),
+    /column key/,
+  );
+  assert.throws(
+    () => value('Schema', [{ key: 'name', title: 'é'.repeat(COLUMN_TITLE_BYTE_LIMIT / 2 + 1) }]),
+    /column title/,
+  );
 });
 
 test('destructive is an explicit typed semantic property', () => {
   const host = surface();
   const frame = host.render(h(Button, { label: 'Delete', destructive: true, onInvoke: () => {} }));
-  assert.ok(frame.patches.some((patch) => patch.SetProp?.prop === 'Destructive'
-    && patch.SetProp.value?.Flag === true));
+  assert.ok(
+    frame.patches.some(
+      (patch) => patch.SetProp?.prop === 'Destructive' && patch.SetProp.value?.Flag === true,
+    ),
+  );
 });
 
 test('rendering the same tree again sends nothing at all', () => {
@@ -68,7 +90,11 @@ test('rendering the same tree again sends nothing at all', () => {
   host.render(tree());
   const before = host.frames.length;
   host.render(tree());
-  assert.equal(host.frames.length, before, 'an unchanged render is an empty frame, which is no frame');
+  assert.equal(
+    host.frames.length,
+    before,
+    'an unchanged render is an empty frame, which is no frame',
+  );
 });
 
 test('changing one property is one patch', () => {
@@ -76,7 +102,9 @@ test('changing one property is one patch', () => {
   host.render(h(Column, null, h(Text, { label: 'one' })));
   const before = host.frames.length;
   host.render(h(Column, null, h(Text, { label: 'two' })));
-  assert.deepEqual(host.last(before), [{ SetProp: { id: 1, prop: 'Label', value: { Text: 'two' } } }]);
+  assert.deepEqual(host.last(before), [
+    { SetProp: { id: 1, prop: 'Label', value: { Text: 'two' } } },
+  ]);
 });
 
 test('dropping a property clears it rather than leaving it behind', () => {
@@ -97,7 +125,9 @@ test('dropping a handler clears it', () => {
 
 test('removing a child removes it', () => {
   const host = surface();
-  host.render(h(Column, null, h(Text, { key: 'a', label: 'a' }), h(Text, { key: 'b', label: 'b' })));
+  host.render(
+    h(Column, null, h(Text, { key: 'a', label: 'a' }), h(Text, { key: 'b', label: 'b' })),
+  );
   const before = host.frames.length;
   host.render(h(Column, null, h(Text, { key: 'a', label: 'a' })));
   assert.deepEqual(host.last(before), [{ Remove: { id: 2 } }]);
@@ -105,7 +135,8 @@ test('removing a child removes it', () => {
 
 test('reordering keyed children moves them instead of rebuilding them', () => {
   const host = surface();
-  const row = (order) => h(Column, null, ...order.map((name) => h(Text, { key: name, label: name })));
+  const row = (order) =>
+    h(Column, null, ...order.map((name) => h(Text, { key: name, label: name })));
   host.render(row(['a', 'b', 'c']));
   const before = host.frames.length;
   host.render(row(['c', 'a', 'b']));
@@ -141,7 +172,10 @@ test('sequence exhaustion cannot emit an imprecise or duplicate frame number', (
   assert.throws(() => surface.flush(), /sequence is exhausted/);
   assert.deepEqual(frames, []);
   assert.equal(surface.sequence, Number.MAX_SAFE_INTEGER);
-  assert.throws(() => new Surface(() => {}, { sequence: Number.MAX_SAFE_INTEGER + 1 }), /safe integer/);
+  assert.throws(
+    () => new Surface(() => {}, { sequence: Number.MAX_SAFE_INTEGER + 1 }),
+    /safe integer/,
+  );
 });
 
 test('text children become the label', () => {
@@ -165,6 +199,8 @@ test('a growth factor is sent as a number, because a flag decodes as nothing', (
   assert.deepEqual(value('Grow', true), { Number: 1 });
   assert.deepEqual(value('Grow', false), { Number: 0 });
   assert.deepEqual(value('Grow', 2), { Number: 2 });
+  assert.deepEqual(value('Size', 'small'), { ControlSize: 'Small' });
+  assert.throws(() => value('Size', 'tiny'), /control size is one of small, medium, large/);
 });
 
 test('a compact list explicitly clears the host default growth', () => {

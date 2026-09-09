@@ -221,8 +221,8 @@ catalogue! {
     ValidationSummary: children, props[Label, Detail, Icon, Gap, Tone], triggers[],
 
     // Buttons: every shape of invocation.
-    Button: children, props[Label, Icon, Enabled, Variant, Tone], triggers[Invoke, Key, Focus, Pointer, Context],
-    IconButton: children, props[Icon, Label, Enabled, Variant, Tone], triggers[Invoke, Key, Focus, Pointer, Context],
+    Button: children, props[Label, Icon, Enabled, Variant, Tone, Size], triggers[Invoke, Key, Focus, Pointer, Context],
+    IconButton: children, props[Icon, Label, Enabled, Variant, Tone, Size], triggers[Invoke, Key, Focus, Pointer, Context],
     ToggleButton: children, props[Label, Icon, Checked, Selected, Enabled, Variant, Tone], triggers[Toggle, Invoke, Key, Focus, Pointer, Context],
     ButtonGroup: children, props[Gap, Orientation, Wrap], triggers[],
     ToggleButtonGroup: children, props[Gap, Orientation, Wrap], triggers[],

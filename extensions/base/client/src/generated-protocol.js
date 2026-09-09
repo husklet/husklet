@@ -1,5 +1,5 @@
 // Generated from Rust hl-extension protocol/v1.json. Do not edit.
-// Protocol artifact fnv1a64:6676bbeba59086cb
+// Protocol artifact fnv1a64:7951c140b15c7b8c
 export const PROTOCOL_SPECIFICATION_VERSION = 1;
 export const PROTOCOL_VERSION = 1;
 export const PROTOCOL_BOUNDS = Object.freeze({
@@ -1511,6 +1511,30 @@ const definitions = {
     ],
     "kind": "struct",
     "serde": {}
+  },
+  "ControlSize": {
+    "kind": "enum",
+    "serde": {},
+    "variants": [
+      {
+        "name": "Small",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
+        "name": "Medium",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
+        "name": "Large",
+        "payload": {
+          "kind": "unit"
+        }
+      }
+    ]
   },
   "DirectoryPage": {
     "fields": [
@@ -4920,6 +4944,12 @@ const definitions = {
         }
       },
       {
+        "name": "Size",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
         "name": "Color",
         "payload": {
           "kind": "unit"
@@ -5165,6 +5195,16 @@ const definitions = {
           "of": {
             "kind": "ref",
             "name": "Scale"
+          }
+        }
+      },
+      {
+        "name": "ControlSize",
+        "payload": {
+          "kind": "newtype",
+          "of": {
+            "kind": "ref",
+            "name": "ControlSize"
           }
         }
       },

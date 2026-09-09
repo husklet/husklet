@@ -51,7 +51,7 @@ pub use node::{
 };
 pub use render::{CollectionSelection, Event, Events, PointerPhase, Renderer, SelectedRow};
 pub use size::ByteSize;
-pub use style::{Align, Bounds, Density, Edges, Length, Rgb, Scale, Theme, Token, Tone, Variant};
+pub use style::{Align, Bounds, ControlSize, Density, Edges, Length, Rgb, Scale, Theme, Token, Tone, Variant};
 
 /// Maximum Unicode characters a [`Tag::LogView`] retains.
 ///

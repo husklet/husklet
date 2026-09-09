@@ -228,6 +228,29 @@ pub enum Variant {
     Ghost,
 }
 
+/// Semantic control size, independent of typography and surrounding layout.
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+#[cfg_attr(feature = "wire", derive(serde::Deserialize, serde::Serialize))]
+pub enum ControlSize {
+    Small,
+    #[default]
+    Medium,
+    Large,
+}
+
+impl ControlSize {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Small => "small",
+            Self::Medium => "medium",
+            Self::Large => "large",
+        }
+    }
+
+    pub const ALL: &'static [Self] = &[Self::Small, Self::Medium, Self::Large];
+}
+
 impl Variant {
     #[must_use]
     pub const fn as_str(self) -> &'static str {

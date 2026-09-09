@@ -12,7 +12,7 @@
 //! to give the whole library one — the document has four object shapes and they
 //! are all flat.
 
-use hl_gui::{Align, Density, Prop, Scale, Tag, Token, Tone, Variant};
+use hl_gui::{Align, ControlSize, Density, Prop, Scale, Tag, Token, Tone, Variant};
 
 /// Version of the document shape itself, so a consumer can refuse a catalogue
 /// it does not understand instead of reading absent fields as empty ones.
@@ -115,6 +115,10 @@ fn enumerations() -> Vec<String> {
         format!("\"Tone\": {}", inline(&members(Tone::ALL, Tone::as_str))),
         format!("\"Variant\": {}", inline(&members(Variant::ALL, Variant::as_str))),
         format!("\"Scale\": {}", inline(&members(Scale::ALL, Scale::as_str))),
+        format!(
+            "\"ControlSize\": {}",
+            inline(&members(ControlSize::ALL, ControlSize::as_str))
+        ),
         format!("\"Align\": {}", inline(&members(Align::ALL, Align::as_str))),
         format!("\"Density\": {}", inline(&members(Density::ALL, Density::as_str))),
         format!("\"Token\": {}", inline(&members(Token::ALL, Token::as_str))),
@@ -604,6 +608,13 @@ const PROPS: &[Entry] = &[
         note: "text size role",
     },
     Entry {
+        prop: Prop::Size,
+        group: "appearance",
+        editor: "enum",
+        values: &["ControlSize"],
+        note: "semantic control size, independent of text scale",
+    },
+    Entry {
         prop: Prop::Color,
         group: "appearance",
         editor: "enum",
@@ -792,6 +803,7 @@ impl Entry {
             | Prop::Variant
             | Prop::Tone
             | Prop::Scale
+            | Prop::Size
             | Prop::Color
             | Prop::Gap
             | Prop::Pad
@@ -961,7 +973,16 @@ mod tests {
     #[test]
     fn the_closed_enumerations_are_all_offered() {
         let json = catalogue();
-        for name in ["Tone", "Variant", "Scale", "Align", "Density", "Token", "Orientation"] {
+        for name in [
+            "Tone",
+            "Variant",
+            "Scale",
+            "ControlSize",
+            "Align",
+            "Density",
+            "Token",
+            "Orientation",
+        ] {
             assert!(json.contains(&format!("\"{name}\": [")), "missing enumeration {name}");
         }
         for shape in ["Step", "Chars", "Fill", "Content"] {
