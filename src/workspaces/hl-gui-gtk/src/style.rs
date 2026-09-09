@@ -39,7 +39,7 @@ fn controls(css: &mut String, theme: &Theme) {
            background: {ground}; color: {text}; border: 1px solid {line}; border-radius: {radius}px; min-height: 30px; }}\n\
          entry text, spinbutton text {{ color: {text}; }}\n\
          entry, spinbutton, textview, dropdown > button {{ padding: 3px 9px; }}\n\
-         .hl-select {{ background: {ground}; border: 1px solid {line}; border-radius: {radius}px; min-height: 30px; }}\n\
+         .hl-select {{ background: {ground}; border: 1px solid {line}; border-radius: {radius}px; min-height: 30px; padding: 2px 9px; }}\n\
          .hl-select:hover {{ border-color: {dim}; }}\n\
          .hl-select:focus-within {{ border-color: {accent}; box-shadow: 0 0 0 1px {accent}; }}\n\
          .hl-select:disabled, .hl-select button:disabled {{ border-color: {faint}; }}\n\
@@ -385,6 +385,7 @@ mod tests {
             "switch:focus, switch:focus-visible { outline: 2px solid #559df7; outline-offset: 2px; box-shadow: 0 0 0 3px #0f1115;"
         ));
         assert!(css.contains(".hl-select { background: #0f1115; border: 1px solid #323843;"));
+        assert!(css.contains("min-height: 30px; padding: 2px 9px;"));
         assert!(css.contains(".hl-select:focus-within { border-color: #559df7; box-shadow: 0 0 0 1px #559df7;"));
         assert!(css.contains(".hl-select:disabled, .hl-select button:disabled { border-color: #87909f;"));
         assert!(css.contains("switch:disabled { opacity: .55;"));

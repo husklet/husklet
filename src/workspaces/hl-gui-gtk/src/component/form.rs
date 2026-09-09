@@ -121,12 +121,12 @@ fn request_switch_toggle(widget: &gtk::Switch) {
 /// Connects the authored label and helper to the focusable field they explain.
 fn associate(container: &gtk::Box) {
     let children = slot::offspring(container.upcast_ref());
-    // A freshly constructed Entry is attached before GTK has rooted it and can
+    // A freshly constructed field is attached before GTK has rooted it and can
     // still report `is_focusable() == false`. Its component identity is stable
     // at construction, so prefer that over transient toolkit state.
     let field = children
         .iter()
-        .find(|child| super::belongs(child, Tag::Entry))
+        .find(|child| super::belongs(child, Tag::Entry) || super::belongs(child, Tag::Select))
         .or_else(|| children.iter().find(|child| child.is_focusable()));
     let label = children
         .iter()

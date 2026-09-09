@@ -13,6 +13,8 @@ import {
   ConfirmAction,
   Container,
   Entry,
+  FormControl,
+  FormLabel,
   FormControlLabel,
   Heading,
   IconButton,
@@ -271,8 +273,8 @@ export function Workspace({ api }: { api: WorkspaceApi }) {
                   'Automatic when empty',
                   (event) => change('shell', nullable(event.value)),
                 )}
-                <Column gap={1}>
-                  <Text label="Execution lifetime" />
+                <FormControl gap={1}>
+                  <FormLabel label="Execution lifetime" />
                   <Select
                     width={CONTROL_WIDTH}
                     value={configuration.execution_lifetime}
@@ -290,7 +292,7 @@ export function Workspace({ api }: { api: WorkspaceApi }) {
                       )
                     }
                   />
-                </Column>
+                </FormControl>
                 <Column gap={1} width="fill">
                   <Heading label="Runtime access" scale="caption" />
                   <Text
@@ -389,8 +391,8 @@ export function Workspace({ api }: { api: WorkspaceApi }) {
                 {colorField('Background', configuration.terminal.background, (value) =>
                   terminal('background', value),
                 )}
-                <Column gap={1}>
-                  <Text label="Cursor shape" />
+                <FormControl gap={1}>
+                  <FormLabel label="Cursor shape" />
                   <Select
                     value={configuration.terminal.cursor_shape ?? ''}
                     choices={[
@@ -401,7 +403,7 @@ export function Workspace({ api }: { api: WorkspaceApi }) {
                     ]}
                     onChange={(event: Change) => terminal('cursor_shape', nullable(event.value))}
                   />
-                </Column>
+                </FormControl>
                 <Row gap={1} align="center" wrap>
                   <FormControlLabel label="Cursor blink" gap={2}>
                     <Switch

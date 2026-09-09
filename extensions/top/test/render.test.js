@@ -627,6 +627,9 @@ test('Top owns workspace settings and extension management in the same tab', asy
     'the settings route has an unambiguous accessible page heading',
   );
   assert.ok(labelled(stage, 'Runtime'));
+  assert.deepEqual(ancestorTags(stage, 'Execution lifetime').slice(0, 1), ['FormControl']);
+  const lifetime = formControlField(stage, 'Execution lifetime', 'Select');
+  assert.deepEqual(latestProperty(stage, lifetime, 'Value'), { Text: 'live' });
   assert.ok(labelled(stage, 'Resources & connectivity'));
   assert.ok(labelled(stage, 'Terminal appearance'));
   assert.ok(labelled(stage, 'Environment variables'));
@@ -662,6 +665,38 @@ test('Top owns workspace settings and extension management in the same tab', asy
   await settled();
   await settled();
   assert.ok(labelled(stage, 'Up to date'), 'discard restores an explicit clean state');
+  assert.deepEqual(latestProperty(stage, lifetime, 'Value'), { Text: 'live' });
+  assert.ok(
+    stage.surface.dispatch({
+      trigger: 'Change',
+      node: lifetime,
+      id: `${lifetime}:Change`,
+      value: 'ephemeral',
+    }),
+    'the labelled execution lifetime selector keeps its live Change handler',
+  );
+  await settled();
+  assert.deepEqual(latestProperty(stage, lifetime, 'Value'), { Text: 'ephemeral' });
+  invoke(stage, 'Discard');
+  await settled();
+  await settled();
+  assert.deepEqual(latestProperty(stage, lifetime, 'Value'), { Text: 'live' });
+  expand(stage, 'Terminal appearance');
+  await settled();
+  assert.deepEqual(ancestorTags(stage, 'Cursor shape').slice(0, 1), ['FormControl']);
+  const cursorShape = formControlField(stage, 'Cursor shape', 'Select');
+  assert.deepEqual(latestProperty(stage, cursorShape, 'Value'), { Text: '' });
+  assert.ok(
+    stage.surface.dispatch({
+      trigger: 'Change',
+      node: cursorShape,
+      id: `${cursorShape}:Change`,
+      value: 'ibeam',
+    }),
+    'the labelled cursor shape selector keeps its live Change handler',
+  );
+  await settled();
+  assert.deepEqual(latestProperty(stage, cursorShape, 'Value'), { Text: 'ibeam' });
   expand(stage, 'Resources & connectivity');
   await settled();
   assert.ok(labelled(stage, 'Storage directory'));
@@ -7412,6 +7447,28 @@ function ancestorTags(stage, label) {
     ancestors.push(tags.get(node));
   }
   return ancestors;
+}
+
+function formControlField(stage, label, tag) {
+  const patches = stage.frames.flatMap((frame) => frame.patches);
+  const tags = new Map(
+    patches.filter((patch) => patch.Create).map((patch) => [patch.Create.id, patch.Create.tag]),
+  );
+  const parents = new Map(
+    patches
+      .filter((patch) => patch.Insert)
+      .map((patch) => [patch.Insert.child, patch.Insert.parent]),
+  );
+  let control = labelled(stage, label)?.SetProp.id;
+  while (parents.has(control) && tags.get(control) !== 'FormControl')
+    control = parents.get(control);
+  assert.equal(tags.get(control), 'FormControl', `${label} belongs to a FormControl`);
+  const field = [...parents]
+    .filter(([, parent]) => parent === control)
+    .map(([child]) => child)
+    .find((child) => tags.get(child) === tag);
+  assert.notEqual(field, undefined, `${label} names its ${tag}`);
+  return field;
 }
 
 function ancestorProperty(stage, label, tag, prop) {

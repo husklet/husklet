@@ -283,6 +283,33 @@ mod unix {
             root.allocate(width, 1_600, -1, None);
             assert_eq!(root.width(), width, "{fixture}/{name} rejected {width}px");
             assert_contained(&root, &format!("{fixture}/{name}/{width_name}"));
+            if fixture == "populated" && name == "settings" {
+                let label = find_label(&root, "Execution lifetime");
+                let select = label
+                    .mnemonic_widget()
+                    .filter(|widget| widget.accessible_role() == gtk::AccessibleRole::ComboBox)
+                    .expect("Execution lifetime FormLabel names its native Select");
+                assert!(
+                    select.is_focusable(),
+                    "labelled settings Select remains keyboard reachable"
+                );
+                assert!(
+                    select.allocation().height() <= 36,
+                    "{width_name} settings Select exceeded the compact 36px control height: {}",
+                    select.allocation().height()
+                );
+                let label_bounds = label
+                    .compute_bounds(&root)
+                    .expect("settings label belongs to the rendered root");
+                let select_bounds = select
+                    .compute_bounds(&root)
+                    .expect("settings Select belongs to the rendered root");
+                let gap = (select_bounds.y() - label_bounds.y() - label_bounds.height()).round() as i32;
+                assert!(
+                    (0..=8).contains(&gap),
+                    "{width_name} settings label gap was {gap}px instead of at most 8px"
+                );
+            }
             if fixture == "populated" && name == "extensions" {
                 let cards = widgets_with_class(&root, "hl-card");
                 if width == 600 {
@@ -1224,6 +1251,22 @@ mod unix {
             }
         }
         false
+    }
+
+    fn find_label(root: &gtk::Widget, wanted: &str) -> gtk::Label {
+        if let Some(label) = root.downcast_ref::<gtk::Label>() {
+            if label.text() == wanted {
+                return label.clone();
+            }
+        }
+        let mut child = root.first_child();
+        while let Some(current) = child {
+            child = current.next_sibling();
+            if has_label(&current, wanted) {
+                return find_label(&current, wanted);
+            }
+        }
+        panic!("label {wanted:?} was not found")
     }
 
     fn find_toggle(root: &gtk::Widget, label: &str) -> gtk::ToggleButton {

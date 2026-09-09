@@ -112,8 +112,41 @@ fn the_adapter_is_total_over_the_component_vocabulary() {
     every_declared_property_changes_the_component_that_declares_it();
     every_tag_honours_the_property_it_is_for();
     every_composite_field_caption_names_its_editable_widget();
+    form_control_labels_name_selects_before_they_are_rooted();
     form_control_labels_name_their_choice_control();
     every_part_lands_in_the_slot_its_parent_keeps();
+}
+
+fn form_control_labels_name_selects_before_they_are_rooted() {
+    let mut session = Session::new();
+    let control = session.producer.create(Tag::FormControl);
+    let label = session.producer.create(Tag::FormLabel);
+    let select = session.producer.create(Tag::Select);
+    session.producer.append(NodeId::ROOT, control);
+    session.producer.append(control, label);
+    session.producer.append(control, select);
+    session
+        .producer
+        .set(label, Prop::Label, PropValue::text("Execution lifetime"));
+    session.producer.set(
+        select,
+        Prop::Choices,
+        PropValue::Choices(vec![hl_gui::Choice {
+            value: "live".into(),
+            label: "Live until shutdown".into(),
+        }]),
+    );
+    session.flush().unwrap();
+
+    let label = session
+        .tagged(Tag::FormLabel)
+        .unwrap()
+        .downcast::<gtk::Label>()
+        .unwrap();
+    let select = session.tagged(Tag::Select).unwrap();
+    assert_eq!(label.mnemonic_widget().as_ref(), Some(&select));
+    assert_eq!(select.accessible_role(), gtk::AccessibleRole::ComboBox);
+    assert!(select.is_sensitive(), "label association does not disable the Select");
 }
 
 fn form_control_labels_name_their_choice_control() {
