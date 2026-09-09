@@ -118,6 +118,7 @@ fn geometry_is_what_the_description_asked_for() {
     a_list_button_ellipsizes_from_its_reading_edge();
     a_scrolled_pane_shares_narrow_and_wide_host_width();
     a_page_container_shrinks_and_caps_its_content_width();
+    a_short_page_never_underallocates_its_content_column();
     a_responsive_container_presents_only_its_allocated_branch();
 }
 
@@ -164,6 +165,45 @@ fn a_page_container_shrinks_and_caps_its_content_width() {
     assert!(
         button.width() < widget.width(),
         "an intrinsically aligned action stretched to the clamp width"
+    );
+}
+
+fn a_short_page_never_underallocates_its_content_column() {
+    let mut stage = Stage::new();
+    let container = stage.producer.create(Tag::Container);
+    for index in 0..12 {
+        let child = stage.producer.create(Tag::Button);
+        stage
+            .producer
+            .set(child, Prop::Label, PropValue::text(format!("Action {index}")));
+        stage.producer.append(container, child);
+    }
+    stage.producer.append(NodeId::ROOT, container);
+    stage.draw();
+
+    let body = stage.tagged(Tag::Container);
+    let column = offspring(&body).into_iter().next().expect("page content column");
+    let width = 504;
+    let (minimum_height, _, _, _) = column.measure(gtk::Orientation::Vertical, width);
+    assert!(minimum_height > 160, "fixture must exceed the constrained viewport");
+
+    let (body_minimum, body_natural, _, _) = body.measure(gtk::Orientation::Vertical, width);
+    assert_eq!(body_minimum, 0, "a page body must yield to its viewport height");
+    assert!(
+        body_natural >= minimum_height,
+        "the body must preserve its content height as the scroll extent"
+    );
+    body.allocate(width, 160, -1, None);
+    assert_eq!(body.height(), 160, "the page wrapper must remain viewport-sized");
+    assert_eq!(
+        column.height(),
+        minimum_height,
+        "the content column was allocated below the minimum it reported"
+    );
+    assert_eq!(
+        offspring(&column).len(),
+        12,
+        "constrained layout must preserve the one authoritative content tree"
     );
 }
 

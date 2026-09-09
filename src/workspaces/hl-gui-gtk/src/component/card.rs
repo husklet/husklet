@@ -48,19 +48,36 @@ impl ObjectImpl for Body {
 }
 
 impl WidgetImpl for Body {
+    fn request_mode(&self) -> gtk::SizeRequestMode {
+        gtk::SizeRequestMode::HeightForWidth
+    }
+
     fn measure(&self, orientation: gtk::Orientation, for_size: i32) -> (i32, i32, i32, i32) {
         if orientation == gtk::Orientation::Horizontal {
             (0, BODY_PIXELS, -1, -1)
         } else {
-            self.column().measure(orientation, for_size)
+            let (_, natural, _, _) = self.column().measure(orientation, for_size);
+            // The wrapper is the viewport-facing half of the page clamp. Its
+            // content height remains the natural request (and therefore the
+            // scroll extent), while a zero minimum lets a short viewport own
+            // the visible height without violating GTK's allocation rules.
+            (0, natural, -1, -1)
         }
     }
 
     fn size_allocate(&self, width: i32, height: i32, baseline: i32) {
         let column = self.column();
         column.measure(gtk::Orientation::Horizontal, -1);
-        column.measure(gtk::Orientation::Vertical, width);
-        column.allocate(width, height, baseline, None);
+        let (minimum_height, _, _, _) = column.measure(gtk::Orientation::Vertical, width);
+        // A page body commonly sits below a ScrolledWindow viewport.  During
+        // an interactive window resize GTK may allocate the viewport-sized
+        // wrapper before it has expanded the scrollable child to its measured
+        // content height.  Passing that smaller height on to the real column
+        // violates the column's allocation contract (and produces a
+        // Gtk-CRITICAL for every short page).  Keep the wrapper constrained so
+        // the viewport remains authoritative, but lay its content out at its
+        // honest minimum; the scroller then clips and exposes that overflow.
+        column.allocate(width, height.max(minimum_height), baseline, None);
     }
 }
 
