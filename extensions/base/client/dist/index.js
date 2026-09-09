@@ -31,6 +31,15 @@ export class ExecutionOutputGapError extends Error {
         this.next = next;
     }
 }
+/** Catalogue discovery was bounded before it became a complete searchable set. */
+export class IncompleteCatalogueError extends Error {
+    received;
+    constructor(received) {
+        super(`extension catalogue is incomplete after ${received} entries; no continuation is available`);
+        this.name = 'IncompleteCatalogueError';
+        this.received = received;
+    }
+}
 function outputAbort(signal) {
     const error = new Error('execution output iteration aborted', { cause: signal?.reason });
     error.name = 'AbortError';
@@ -540,7 +549,18 @@ export function workspace(session, { signal } = {}) {
         },
         extensions: {
             list: async () => expect(await session.call('extension_list'), 'extensions'),
-            catalogue: async () => expect(await session.call('extension_catalogue'), 'extension_catalogue'),
+            catalogue: async () => {
+                const catalogue = expect(await session.call('extension_catalogue'), 'extension_catalogue');
+                if (catalogue.entries.length > 64)
+                    throw new TypeError('host returned more than 64 extension catalogue entries');
+                return catalogue;
+            },
+            requireCompleteCatalogue: async () => {
+                const catalogue = await api.extensions.catalogue();
+                if (!catalogue.complete)
+                    throw new IncompleteCatalogueError(catalogue.entries.length);
+                return catalogue;
+            },
             inspect: async (name) => expect(await session.call('extension_inspect', { name }), 'extension'),
             enable: (name, imageDigest) => done('extension_enable', {
                 name,
@@ -3417,6 +3437,8 @@ export const protocolCoverage = Object.freeze({
         preferences: ['read', 'set', 'remove'],
         extensions: [
             'list',
+            'catalogue',
+            'requireCompleteCatalogue',
             'inspect',
             'enable',
             'disable',

@@ -9,6 +9,7 @@ import test from 'node:test';
 import {
   ExtensionError,
   ExecutionOperationError,
+  IncompleteCatalogueError,
   PROTOCOL_CAPABILITIES,
   Session,
   protocolCoverage,
@@ -841,6 +842,8 @@ test('coverage names delivered snapshots and leaves unsupported topics unavailab
   assert.ok(!protocolCoverage.unavailable.events.includes('extensions'));
   assert.deepEqual(protocolCoverage.available.extensions, [
     'list',
+    'catalogue',
+    'requireCompleteCatalogue',
     'inspect',
     'enable',
     'disable',
@@ -2540,6 +2543,84 @@ test('extension facade preserves exact read and control request shapes', async (
     undefined,
     undefined,
   ]);
+  stage.session.close();
+  stage.host.destroy();
+  stage.server.close();
+});
+
+test('real Unix marketplace discovery refuses an incomplete catalogue with no continuation', async () => {
+  const stage = await pair();
+  const next = frames(stage.host);
+  await next();
+  const extensions = workspace(stage.session).extensions;
+  const pending = extensions.requireCompleteCatalogue();
+  assert.deepEqual((await next()).payload, { call: 'extension_catalogue' });
+  const entry = {
+    id: 'postgres',
+    title: 'Postgres',
+    description: 'Database browser',
+    version: '1.0.0',
+    reference: 'registry.example/postgres@sha256:abc',
+    publisher: 'Example publisher',
+    source: 'https://example.invalid/catalogue',
+    protocol: 1,
+    architectures: ['amd64'],
+  };
+  stage.host.write(
+    encode({
+      channel: 2,
+      kind: KIND.response,
+      payload: {
+        reply: 'extension_catalogue',
+        with: { entries: [entry], complete: false },
+      },
+    }),
+  );
+  await assert.rejects(
+    pending,
+    (error) => error instanceof IncompleteCatalogueError && error.received === 1,
+  );
+
+  const complete = extensions.requireCompleteCatalogue();
+  assert.equal((await next()).payload.call, 'extension_catalogue');
+  stage.host.write(
+    encode({
+      channel: 2,
+      kind: KIND.response,
+      payload: { reply: 'extension_catalogue', with: { entries: [entry], complete: true } },
+    }),
+  );
+  assert.deepEqual(await complete, { entries: [entry], complete: true });
+  stage.session.close();
+  stage.host.destroy();
+  stage.server.close();
+});
+
+test('real Unix marketplace rejects a catalogue beyond the host entry bound', async () => {
+  const stage = await pair();
+  const next = frames(stage.host);
+  await next();
+  const pending = workspace(stage.session).extensions.catalogue();
+  assert.equal((await next()).payload.call, 'extension_catalogue');
+  const entries = Array.from({ length: 65 }, (_, index) => ({
+    id: `entry-${index}`,
+    title: `Entry ${index}`,
+    description: 'Bounded extension',
+    version: '1',
+    reference: `registry.example/entry-${index}:1`,
+    publisher: 'publisher',
+    source: 'first-party',
+    protocol: 1,
+    architectures: ['amd64'],
+  }));
+  stage.host.write(
+    encode({
+      channel: 2,
+      kind: KIND.response,
+      payload: { reply: 'extension_catalogue', with: { entries, complete: false } },
+    }),
+  );
+  await assert.rejects(pending, /more than 64 extension catalogue entries/);
   stage.session.close();
   stage.host.destroy();
   stage.server.close();

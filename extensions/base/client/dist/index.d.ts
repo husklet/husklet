@@ -17,6 +17,11 @@ export declare class ExecutionOutputGapError extends Error {
     readonly next: any;
     constructor(executionId: any, after: any, next: any);
 }
+/** Catalogue discovery was bounded before it became a complete searchable set. */
+export declare class IncompleteCatalogueError extends Error {
+    readonly received: any;
+    constructor(received: any);
+}
 /** A terminal authority succeeded, but its bounded observation could not be completed. */
 export declare class TerminalOperationError extends Error {
     readonly operation: any;

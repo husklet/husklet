@@ -197,6 +197,9 @@ export interface ExtensionCatalogue {
   entries: ExtensionCatalogueEntry[];
   complete: boolean;
 }
+export declare class IncompleteCatalogueError extends Error {
+  readonly received: number;
+}
 export interface ExtensionAcquisitionJob {
   job: string;
 }
@@ -765,6 +768,8 @@ export interface WorkspaceApi {
     list(): Promise<ExtensionSummary[]>;
     /** Host-curated offline discovery metadata; acquisition still supplies install authority. */
     catalogue(): Promise<ExtensionCatalogue>;
+    /** Fail closed when the host's bounded catalogue has no continuation to establish completeness. */
+    requireCompleteCatalogue(): Promise<ExtensionCatalogue>;
     inspect(name: string): Promise<ExtensionSummary>;
     enable(name: string, imageDigest: string): Promise<void>;
     /** Arm inventory observation, enable this exact digest, then verify its durable enabled state. */
