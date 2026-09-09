@@ -66,7 +66,11 @@ surface.update(
     imageDetails={imageDetails}
     processTable={processTable}
     volumeDetails={volumeDetails}
-    initial={fixtureModule?.populatedFixture}
+    initial={
+      fixture === 'error'
+        ? { ...fixtureModule?.populatedFixture, networks: undefined }
+        : fixtureModule?.populatedFixture
+    }
     initialSection={
       SECTIONS.includes(process.env.HUSKLET_TOP_SECTION as (typeof SECTIONS)[number])
         ? (process.env.HUSKLET_TOP_SECTION as (typeof SECTIONS)[number])

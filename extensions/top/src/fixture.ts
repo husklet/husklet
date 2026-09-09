@@ -81,6 +81,14 @@ export function fixtureApi(api: WorkspaceApi, mode = 'populated'): WorkspaceApi 
     subscribe: async () => {},
     unsubscribe: async () => {},
     watchExecutions: async () => async () => {},
+    networks: unavailable
+      ? {
+          ...api.networks,
+          list: async () => {
+            throw new Error('Network inventory is temporarily unavailable.');
+          },
+        }
+      : api.networks,
     containers: {
       ...api.containers,
       processes: async () => ({

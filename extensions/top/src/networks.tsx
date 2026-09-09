@@ -4,13 +4,14 @@ import {
   Button,
   Card,
   CardContent,
-  CardHeader,
   Column,
   Container,
   ConfirmAction,
   EmptyState,
   Entry,
   Expander,
+  FormHelperText,
+  FormLabel,
   Heading,
   InlineMessage,
   ResourceState,
@@ -216,41 +217,42 @@ export function Networks({
         ? 'empty'
         : 'ready';
   return (
-    <Page
-      title="Networks"
-      subtitle="Bounded network inventory; attachment changes are accepted only for stopped containers."
-    >
-      <Row gap={1} wrap width="fill">
-        <Entry
-          value={name}
-          placeholder="Network name"
-          width={{ minimum: { chars: 10 }, maximum: { chars: 32 } }}
-          enabled={creation.state !== 'loading'}
-          onChange={(event) => {
-            setName(String(event.value ?? ''));
-            setCreation({ state: 'idle', name: '', error: null });
-          }}
-        />
-        <Button
-          variant="filled"
-          tone="accent"
-          label={
-            creation.state === 'loading'
-              ? 'Creating…'
-              : creation.state === 'error'
-                ? 'Retry create'
-                : 'Create'
-          }
-          enabled={creation.state !== 'loading' && name.trim().length > 0}
-          onInvoke={() => void create()}
-        />
-        <Button
-          label="Refresh"
-          variant="ghost"
-          enabled={creation.state !== 'loading'}
-          onInvoke={resource.reload}
-        />
-      </Row>
+    <Page title="Networks" subtitle="Create networks and connect stopped workspace containers.">
+      <Column gap={1} width={{ minimum: { chars: 20 }, maximum: { chars: 44 } }}>
+        <FormLabel label="Create a network" />
+        <Row gap={1} wrap width="fill" align="center" justify="start">
+          <Entry
+            value={name}
+            placeholder="Network name"
+            width={{ minimum: { chars: 14 }, maximum: { chars: 28 } }}
+            enabled={creation.state !== 'loading'}
+            onChange={(event) => {
+              setName(String(event.value ?? ''));
+              setCreation({ state: 'idle', name: '', error: null });
+            }}
+          />
+          <Button
+            variant="filled"
+            tone="accent"
+            label={
+              creation.state === 'loading'
+                ? 'Creating…'
+                : creation.state === 'error'
+                  ? 'Retry create'
+                  : 'Create'
+            }
+            enabled={creation.state !== 'loading' && name.trim().length > 0}
+            onInvoke={() => void create()}
+          />
+          <Button
+            label="Refresh"
+            variant="outline"
+            enabled={creation.state !== 'loading'}
+            onInvoke={resource.reload}
+          />
+        </Row>
+        <FormHelperText label="Use a short name that describes what the connected services share." />
+      </Column>
       {creation.state === 'loading' ? (
         <Row gap={1} align="center">
           <Spinner />
@@ -308,28 +310,12 @@ export function Networks({
                 isAuthorityDenial(inspection.error);
               return (
                 <Card key={id} width="fill" variant={inspection.id === id ? 'filled' : 'outline'}>
-                  <CardHeader
-                    label={network.name}
-                    detail={`${network.driver} · ${network.scope}`}
-                    align="start"
-                    width="fill"
-                  />
-                  {network.kind === 'builtin' ? (
-                    <CardContent gap={1}>
-                      <Badge label="Built-in · protected" tone="accent" />
-                    </CardContent>
-                  ) : null}
-                  {membershipUnknown ? (
-                    <CardContent gap={1}>
-                      <Text
-                        label="Attachment status unknown for this container · Inspect to resolve"
-                        color="warning"
-                        wrap
-                      />
-                    </CardContent>
-                  ) : null}
                   <CardContent gap={1}>
-                    <Row>
+                    <Row gap={2} align="center" justify="start" wrap width="fill">
+                      <Column gap={0}>
+                        <Heading label={network.name} scale="body" />
+                        <Text label={`${network.driver} · ${network.scope}`} color="text-dim" />
+                      </Column>
                       {!inspectionNeedsAccess ? (
                         <Button
                           label={
@@ -342,9 +328,19 @@ export function Networks({
                         />
                       ) : null}
                     </Row>
-                  </CardContent>
-                  {network.kind !== 'builtin' ? (
-                    <CardContent gap={1}>
+                    {network.kind === 'builtin' ? (
+                      <Row>
+                        <Badge label="Built-in · protected" tone="accent" />
+                      </Row>
+                    ) : null}
+                    {membershipUnknown ? (
+                      <Text
+                        label="Attachment status unknown for this container · Inspect to resolve"
+                        color="warning"
+                        wrap
+                      />
+                    ) : null}
+                    {network.kind !== 'builtin' ? (
                       <Expander label="Danger zone">
                         <Column gap={1}>
                           <Text
@@ -364,8 +360,8 @@ export function Networks({
                           </Row>
                         </Column>
                       </Expander>
-                    </CardContent>
-                  ) : null}
+                    ) : null}
+                  </CardContent>
                   {disconnectRequest?.network === id ? (
                     <DisconnectConsent
                       request={disconnectRequest}

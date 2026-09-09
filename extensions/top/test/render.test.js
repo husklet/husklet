@@ -3741,11 +3741,12 @@ test('volume and network panels render bounded real inventories and controls', (
   for (const label of ['Networks', 'private', 'Remove'])
     assert.ok(labels(networkFrame).includes(label), label);
   const networkInventoryStage = stageFromFrame(networkFrame);
+  assert.ok(taggedProperty(networkInventoryStage, 'private', 'Heading', 'Scale'));
   assert.equal(
-    taggedProperty(networkInventoryStage, 'private', 'CardHeader', 'Align')?.Align,
-    'Start',
+    networkFrame.patches.filter((patch) => patch.Create?.tag === 'CardContent').length,
+    2,
+    'each network keeps its summary and actions in one compact content band',
   );
-  assert.ok(taggedProperty(networkInventoryStage, 'private', 'CardHeader', 'Width'));
   assert.ok(
     !labels(networkFrame).includes('Disconnect'),
     'destructive endpoint action waits for a target',
