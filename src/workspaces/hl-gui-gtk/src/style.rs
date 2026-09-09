@@ -29,7 +29,7 @@ fn controls(css: &mut String, theme: &Theme) {
     let radius = theme.radius.pixels().unwrap_or(4);
     let _ = writeln!(
         css,
-        "button {{ background: transparent; color: {text}; border: 1px solid transparent; border-radius: {radius}px; min-height: 28px; min-width: 28px; padding: 3px 10px; font-size: 13px; font-weight: 550; box-shadow: none; transition: 120ms ease; }}\n\
+        "button {{ background: transparent; color: {text}; border: 1px solid transparent; border-radius: {radius}px; min-height: 28px; min-width: 28px; padding: 3px 10px; font-size: 13px; font-weight: 500; box-shadow: none; transition: 120ms ease; }}\n\
          button:hover {{ background: {raised}; border-color: {line}; }}\n\
          button:active {{ background: {surface}; box-shadow: inset 0 1px 2px rgba(0,0,0,.24); }}\n\
          button:focus-visible {{ outline: 2px solid {accent}; outline-offset: 2px; }}\n\
@@ -37,7 +37,7 @@ fn controls(css: &mut String, theme: &Theme) {
          entry, spinbutton, textview, textview text, dropdown, dropdown > button, calendar {{ \
            background: {ground}; color: {text}; border: 1px solid {line}; border-radius: {radius}px; min-height: 30px; }}\n\
          entry text, spinbutton text {{ color: {text}; }}\n\
-         entry {{ padding: 2px 9px; }}\n\
+         entry, spinbutton, textview, dropdown > button {{ padding: 3px 9px; }}\n\
          entry:hover, spinbutton:hover, dropdown:hover > button {{ border-color: {dim}; }}\n\
          entry:focus-within, spinbutton:focus-within, textview:focus-within {{ border-color: {accent}; box-shadow: 0 0 0 1px {accent}; }}\n\
          scrolledwindow, viewport, listview, columnview, notebook, frame, paned, expander {{ \
@@ -137,8 +137,8 @@ fn variants(css: &mut String, theme: &Theme) {
          .variant-outline:hover, .variant-ghost:hover {{ background: {raised}; color: {text}; border-color: {line}; }}\n\
          .variant-filled:hover {{ box-shadow: inset 0 0 0 999px rgba(255,255,255,.10); }}\n\
          .variant-filled:active {{ box-shadow: inset 0 0 0 999px rgba(0,0,0,.14); }}\n\
-         .variant-filled:disabled, .variant-outline:disabled, .variant-ghost:disabled, .variant-plain:disabled {{ \
-         background: {surface}; color: {faint}; border-color: {line}; }}",
+         .variant-filled:disabled, .variant-outline:disabled {{ background: {surface}; color: {faint}; border-color: {line}; }}\n\
+         .variant-ghost:disabled, .variant-plain:disabled {{ background: transparent; color: {faint}; border-color: transparent; }}",
         raised = theme.color(Token::Raised).hex(),
         text = theme.color(Token::Text).hex(),
         ground = theme.color(Token::Ground).hex(),
@@ -153,7 +153,7 @@ fn scales(css: &mut String, theme: &Theme) {
     let steps = [
         (Scale::Caption, 12, "450", Token::TextDim),
         (Scale::Body, 14, "400", Token::Text),
-        (Scale::Title, 18, "650", Token::Text),
+        (Scale::Title, 18, "600", Token::Text),
         (Scale::Display, 24, "700", Token::Text),
     ];
     for (scale, size, weight, token) in steps {
@@ -194,7 +194,7 @@ fn components(css: &mut String, theme: &Theme) {
          .hl-avatar {{ background: {accent}; color: {ground}; border-radius: 18px; font-weight: 700; }}\n\
          .hl-banner, .hl-toast {{ background: {raised}; border: 1px solid {line}; border-radius: {radius}px; padding: 8px 12px; }}\n\
          .hl-card {{ box-shadow: none; }}\n\
-         .hl-card:hover {{ border-color: {dim}; }}\n\
+         .hl-cardactionarea:hover {{ background: {raised}; }}\n\
          .hl-card > box {{ padding: 10px; }}\n\
          .hl-cardactions {{ margin-top: 4px; }}\n\
          .hl-navigationmenu {{ padding: 2px 4px; }}\n\
@@ -209,7 +209,7 @@ fn components(css: &mut String, theme: &Theme) {
          .hl-chip {{ min-height: 24px; padding: 1px 8px; border-radius: {pill}px; background: {raised}; border-color: {line}; }}\n\
          .hl-separator {{ background: {line}; min-height: 1px; min-width: 1px; }}\n\
          .hl-datatable, .hl-list {{ background: {surface}; border: 1px solid {line}; border-radius: {radius}px; }}\n\
-         .hl-heading {{ font-weight: 650; letter-spacing: -0.1px; }}\n\
+         .hl-heading {{ font-weight: 600; letter-spacing: -0.1px; }}\n\
          .hl-text {{ color: {text}; }}\n\
          columnview header button {{ background: {raised}; color: {dim}; font-weight: 600; }}\n\
          row:selected, :selected {{ background: {accent}; color: {ground}; }}\n\
@@ -292,7 +292,7 @@ mod tests {
         assert!(css.contains(".scale-body { font-size: 14px;"));
         assert!(css.contains(".scale-title { font-size: 18px;"));
         assert!(css.contains(".scale-display { font-size: 24px;"));
-        assert!(css.contains(".hl-heading { font-weight: 650;"));
+        assert!(css.contains(".hl-heading { font-weight: 600;"));
         assert!(
             !css.contains(".hl-heading { font-size:"),
             "the later component rule would override every heading scale"
