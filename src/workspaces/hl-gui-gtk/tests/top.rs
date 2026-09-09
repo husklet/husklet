@@ -14,12 +14,12 @@ mod unix {
         codec, Capability, ExtensionName, ExtensionPreferences, ExtensionSummary, Frame, Grant, Hello, PreferenceValue,
         Reply, Request, Welcome, Wire, WorkspaceConfiguration, WorkspaceInfo, WorkspaceTerminal, PROTOCOL,
     };
-    use hl_gui::Tree;
+    use hl_gui::{Renderer as _, Theme, Tree};
     use hl_gui_gtk::Surface;
 
     const CASES: &[(&str, &str)] = &[
-        ("workspace", "overview"),
-        ("settings", "workspace"),
+        ("workspace", "workspace"),
+        ("settings", "settings"),
         ("extensions", "extensions"),
         ("networks", "networks"),
     ];
@@ -123,6 +123,7 @@ mod unix {
 
         let mut tree = Tree::new();
         let mut surface = Surface::new();
+        surface.theme(&Theme::dark()).expect("Top theme installs");
         let mut renders = 0;
         let mut quiet = 0;
         let deadline = Instant::now() + DEADLINE;
@@ -170,7 +171,7 @@ mod unix {
 
         let root = surface.widget().clone().upcast::<gtk::Widget>();
         let heading = match name {
-            "workspace" => "Workspace overview",
+            "workspace" => "Workspace",
             "settings" => "Workspace",
             "extensions" => "Extensions",
             "networks" => "Networks",
@@ -328,10 +329,18 @@ mod unix {
         let mut child = parent.first_child();
         while let Some(current) = child {
             child = current.next_sibling();
+            if !current.is_visible() {
+                continue;
+            }
             let allocation = current.allocation();
             assert!(
                 allocation.x() >= 0 && allocation.x() + allocation.width() <= parent.width(),
-                "{case} overflowed: child x={} width={}, parent width={}",
+                "{case} overflowed {:?}: child x={} width={}, parent width={}",
+                (
+                    parent.css_classes(),
+                    current.css_classes(),
+                    current.downcast_ref::<gtk::Label>().map(gtk::Label::text)
+                ),
                 allocation.x(),
                 allocation.width(),
                 parent.width()
