@@ -101,8 +101,19 @@ export function immutableContainerId(value: string): boolean {
 }
 
 export function boundedMessage(value: unknown, limit = 512): string {
-  const message = value instanceof Error ? value.message : String(value ?? '');
+  const raw = value instanceof Error ? value.message : String(value ?? '');
+  const message = friendlyTransportMessage(raw);
   return message.length <= limit ? message : `${message.slice(0, limit)}…`;
+}
+
+function friendlyTransportMessage(message: string): string {
+  if (/expected frame \d+, received \d+/i.test(message)) {
+    return 'Connection to Husklet was interrupted. Retry the operation.';
+  }
+  if (/extension catalogue transport closed/i.test(message)) {
+    return 'The extension catalogue connection closed before it completed. Retry the catalogue.';
+  }
+  return message;
 }
 
 export function shortId(value: unknown): string {

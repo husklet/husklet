@@ -64,6 +64,23 @@ test('endpoint aliases and immutable container identity mirror native boundaries
   assert.equal(boundedMessage(new Error('x'.repeat(600))).length, 513);
 });
 
+test('transport sequencing failures become actionable product language', () => {
+  assert.equal(
+    boundedMessage(
+      new Error('expected frame 9, received 12: extension catalogue transport closed'),
+    ),
+    'Connection to Husklet was interrupted. Retry the operation.',
+  );
+  assert.equal(
+    boundedMessage(new Error('extension catalogue transport closed')),
+    'The extension catalogue connection closed before it completed. Retry the catalogue.',
+  );
+  assert.equal(
+    boundedMessage(new Error('registry refused credentials')),
+    'registry refused credentials',
+  );
+});
+
 test('records are bounded and omissions stay visible', () => {
   const view = bounded(Array.from({ length: 205 }, (_, index) => index));
   assert.equal(view.records.length, 200);
