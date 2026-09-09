@@ -2,6 +2,7 @@
 
 #[cfg(unix)]
 mod unix {
+    use std::cell::Cell;
     use std::io::{self, Read as _};
     use std::os::unix::net::{UnixListener, UnixStream};
     use std::path::{Path, PathBuf};
@@ -10,12 +11,13 @@ mod unix {
 
     use gtk::prelude::*;
     use hl_extension::port::{
+        ExtensionAcquisitionJob, ExtensionAcquisitionProgress, ExtensionAcquisitionStatus, ExtensionCandidate,
         ExtensionCatalogue, ExtensionCatalogueEntry, NetworkEndpointInventory, NetworkInventory, NetworkKind,
         NetworkSummary,
     };
     use hl_extension::{
         Capability, ChannelId, ExtensionName, ExtensionPreferences, ExtensionSummary, Frame, Grant, Hello, PROTOCOL,
-        PaneProvider, PreferenceValue, Reply, Request, Welcome, Wire, WorkspaceConfiguration, WorkspaceInfo,
+        PaneProvider, PreferenceValue, Reply, Request, Snapshot, Welcome, Wire, WorkspaceConfiguration, WorkspaceInfo,
         WorkspaceTerminal, codec,
     };
     use hl_gui::{Renderer as _, Theme, Tree};
@@ -115,6 +117,7 @@ mod unix {
                     Capability::PreferenceRead,
                     Capability::WorkspaceRead,
                     Capability::ExtensionRead,
+                    Capability::ExtensionInstall,
                     Capability::ContainerRead,
                     Capability::ImageRead,
                     Capability::VolumeRead,
@@ -249,6 +252,8 @@ mod unix {
                 has_label(&root, "Developer Tool 01"),
                 "default discovery hid an installed extension with an available update"
             );
+            let review = find_tooltip_button(&root, "Review the 1.0.0 update for Developer Tool 01");
+            assert!(review.is_sensitive(), "compatible Discover update is actionable");
         }
         if fixture == "populated" && name == "extensions" {
             assert!(
@@ -279,6 +284,13 @@ mod unix {
             if fixture == "populated" && name == "extensions" {
                 let refresh = find_tooltip_button(&root, "Refresh installed extensions");
                 assert_eq!(refresh.icon_name().as_deref(), Some("view-refresh-symbolic"));
+                if !catalogue_empty {
+                    let review = find_tooltip_button(&root, "Review the 1.0.0 update for Developer Tool 01");
+                    assert!(
+                        vertical_end(&root, review.upcast_ref()) <= 800,
+                        "{width_name} Discover update action fell below the first viewport"
+                    );
+                }
             }
             if fixture == "error" && name == "networks" {
                 for label in [
@@ -293,6 +305,9 @@ mod unix {
                 }
             }
             capture(&window, &format!("{capture_fixture}-{name}-{width_name}"), width, 800);
+        }
+        if fixture == "populated" && name == "extensions" && !catalogue_empty {
+            exercise_extension_update(&mut wire, &mut tree, &mut surface, &window);
         }
         if fixture == "error" && name == "networks" {
             find_expander(&root, "Technical details").set_expanded(true);
@@ -508,6 +523,274 @@ mod unix {
         let stderr = child.stop();
         assert!(stderr.is_empty(), "{fixture}/{name} wrote to stderr: {stderr}");
         std::fs::remove_file(socket).expect("Top test socket is removed");
+    }
+
+    fn exercise_extension_update(
+        wire: &mut Wire<UnixStream>,
+        tree: &mut Tree,
+        surface: &mut Surface,
+        window: &gtk::Window,
+    ) {
+        let reference = "ghcr.io/example/developer-tool-01:1.0.0";
+        let old_digest = format!("sha256:{}", "4".repeat(64));
+        let next_digest = format!("sha256:{}", "b".repeat(64));
+        let root = surface.widget().clone().upcast::<gtk::Widget>();
+        find_tooltip_button(&root, "Review the 1.0.0 update for Developer Tool 01").emit_clicked();
+        settle_toolkit();
+        send_report(surface, wire, 101, |event| {
+            matches!(event, hl_gui::Event::Invoke { .. })
+        });
+
+        let acquisition_subscribed = Cell::new(false);
+        apply_extension_update_until(
+            wire,
+            tree,
+            surface,
+            "Downloading image · manifest · 1/2 bytes (50%)",
+            |request| match request {
+                Request::ExtensionAcquisitionStart { reference: actual } => {
+                    assert_eq!(
+                        actual, reference,
+                        "Discover update retains its exact catalogue reference"
+                    );
+                    Reply::ExtensionAcquisitionJob(ExtensionAcquisitionJob {
+                        job: "gtk-update".into(),
+                    })
+                }
+                Request::ExtensionAcquisitionStatus { job } => {
+                    assert_eq!(job, "gtk-update");
+                    Reply::ExtensionAcquisition(ExtensionAcquisitionStatus {
+                        job,
+                        reference: reference.into(),
+                        revision: 1,
+                        state: "pulling".into(),
+                        progress: Some(ExtensionAcquisitionProgress {
+                            status: "Downloading image".into(),
+                            id: Some("manifest".into()),
+                            current: Some(1),
+                            total: Some(2),
+                        }),
+                        candidate: None,
+                        error: None,
+                    })
+                }
+                Request::EventSubscribe { topic } => {
+                    assert_eq!(topic, hl_extension::Topic::ExtensionAcquisitions);
+                    acquisition_subscribed.set(true);
+                    Reply::Done
+                }
+                other => panic!("unexpected extension review call: {other:?}"),
+            },
+            || None,
+        );
+        let progress_root = surface.widget().clone().upcast::<gtk::Widget>();
+        capture_update_surface(window, &progress_root, "update-progress");
+
+        assert!(acquisition_subscribed.get(), "progress wait subscribed before review");
+        let payload = codec::payload(&Snapshot::ExtensionAcquisitions(
+            hl_extension::ExtensionAcquisitionChange {
+                job: "gtk-update".into(),
+                revision: 2,
+                state: "ready".into(),
+                coalesced: 0,
+            },
+        ))
+        .expect("ready acquisition snapshot encodes");
+        wire.send(&Frame::new(ChannelId::new(105), hl_extension::Kind::Event, payload))
+            .expect("ready acquisition snapshot sends");
+        apply_extension_update_until(
+            wire,
+            tree,
+            surface,
+            "Review developer-tool-01",
+            |request| match request {
+                Request::ExtensionAcquisitionStatus { job } => {
+                    Reply::ExtensionAcquisition(ExtensionAcquisitionStatus {
+                        job,
+                        reference: reference.into(),
+                        revision: 2,
+                        state: "ready".into(),
+                        progress: None,
+                        candidate: Some(ExtensionCandidate {
+                            name: ExtensionName::new("developer-tool-01").expect("valid extension"),
+                            version: "1.0.0".into(),
+                            image_digest: next_digest.clone(),
+                            requested: Grant::new([Capability::ContainerRead]),
+                            requested_images: Default::default(),
+                            requested_containers: Default::default(),
+                            requested_networks: Default::default(),
+                            requested_volumes: Default::default(),
+                            requested_filesystem: Default::default(),
+                            requested_workspace_environment: Default::default(),
+                            installed_image_digest: Some(old_digest.clone()),
+                        }),
+                        error: None,
+                    })
+                }
+                Request::EventUnsubscribe { .. } => Reply::Done,
+                other => panic!("unexpected extension ready call: {other:?}"),
+            },
+            || None,
+        );
+
+        let review_root = surface.widget().clone().upcast::<gtk::Widget>();
+        assert!(has_label(&review_root, "No access selected · 1 requested"));
+        assert!(has_label(&review_root, "Update with selected access"));
+        capture_update_surface(window, &review_root, "update-review");
+        find_button(&review_root, "Update with selected access").emit_clicked();
+        settle_toolkit();
+        send_report(surface, wire, 103, |event| {
+            matches!(event, hl_gui::Event::Invoke { .. })
+        });
+
+        let committed = Cell::new(false);
+        let inventory_event_sent = Cell::new(false);
+        apply_extension_update_until(
+            wire,
+            tree,
+            surface,
+            "developer-tool-01 updated and verified.",
+            |request| match request {
+                Request::ExtensionAcquisitionStatus { job } => {
+                    Reply::ExtensionAcquisition(ExtensionAcquisitionStatus {
+                        job,
+                        reference: reference.into(),
+                        revision: 2,
+                        state: "ready".into(),
+                        progress: None,
+                        candidate: Some(ExtensionCandidate {
+                            name: ExtensionName::new("developer-tool-01").expect("valid extension"),
+                            version: "1.0.0".into(),
+                            image_digest: next_digest.clone(),
+                            requested: Grant::new([Capability::ContainerRead]),
+                            requested_images: Default::default(),
+                            requested_containers: Default::default(),
+                            requested_networks: Default::default(),
+                            requested_volumes: Default::default(),
+                            requested_filesystem: Default::default(),
+                            requested_workspace_environment: Default::default(),
+                            installed_image_digest: Some(old_digest.clone()),
+                        }),
+                        error: None,
+                    })
+                }
+                Request::ExtensionUpdate {
+                    job,
+                    revision,
+                    image_digest,
+                    granted,
+                    ..
+                } => {
+                    assert_eq!(job, "gtk-update");
+                    assert_eq!(revision, 2);
+                    assert_eq!(image_digest, next_digest);
+                    assert!(granted.is_empty(), "review begins with no implicit access");
+                    committed.set(true);
+                    let updated = updated_extension(&next_digest);
+                    Reply::Extension(updated)
+                }
+                Request::ExtensionList => Reply::Extensions(if committed.get() {
+                    let mut listing = extensions();
+                    if let Some(current) = listing.iter_mut().find(|entry| entry.name == "developer-tool-01") {
+                        *current = updated_extension(&next_digest);
+                    }
+                    listing
+                } else {
+                    extensions()
+                }),
+                Request::EventUnsubscribe { .. } => Reply::Done,
+                other => panic!("unexpected extension update call: {other:?}"),
+            },
+            || {
+                if committed.get() && !inventory_event_sent.replace(true) {
+                    Some(Snapshot::Extensions(vec![updated_extension(&next_digest)]))
+                } else {
+                    None
+                }
+            },
+        );
+        let success_root = surface.widget().clone().upcast::<gtk::Widget>();
+        assert!(!has_label(&success_root, "Installed · update available"));
+        capture_update_surface(window, &success_root, "update-success");
+    }
+
+    fn updated_extension(digest: &str) -> ExtensionSummary {
+        ExtensionSummary {
+            name: "developer-tool-01".into(),
+            image_digest: digest.into(),
+            status: "running".into(),
+            version: "1.0.0".into(),
+            enabled: true,
+            pane_providers: Vec::new(),
+            granted: Grant::default(),
+            images: Default::default(),
+            containers: Default::default(),
+            networks: Default::default(),
+            volumes: Default::default(),
+            filesystem: Default::default(),
+            workspace_environment: Default::default(),
+        }
+    }
+
+    fn apply_extension_update_until(
+        wire: &mut Wire<UnixStream>,
+        tree: &mut Tree,
+        surface: &mut Surface,
+        wanted: &str,
+        mut answer: impl FnMut(Request) -> Reply,
+        mut event: impl FnMut() -> Option<Snapshot>,
+    ) {
+        let deadline = Instant::now() + DEADLINE;
+        while Instant::now() < deadline && !has_label(surface.widget().upcast_ref(), wanted) {
+            match receive_until(wire, (Instant::now() + Duration::from_millis(80)).min(deadline)) {
+                Ok(frame) if frame.kind == hl_extension::Kind::Credit => {}
+                Ok(frame) => {
+                    let request = codec::read_request(&frame).expect("extension update request decodes");
+                    let reply = match request {
+                        Request::InterfaceRender { frame } | Request::InterfaceRenderAt { frame, .. } => {
+                            tree.apply(&frame, surface).expect("extension update frame applies");
+                            Reply::Done
+                        }
+                        other => answer(other),
+                    };
+                    wire.send(&codec::reply(&reply).expect("extension update reply encodes"))
+                        .expect("extension update reply sends");
+                    if let Some(snapshot) = event() {
+                        let payload = codec::payload(&snapshot).expect("extension update snapshot encodes");
+                        wire.send(&Frame::new(ChannelId::new(105), hl_extension::Kind::Event, payload))
+                            .expect("extension update snapshot sends");
+                    }
+                }
+                Err(hl_extension::Transit::Pending) => settle_toolkit(),
+                Err(error) => panic!("extension update socket failed: {error:?}"),
+            }
+            settle_toolkit();
+        }
+        assert!(
+            has_label(surface.widget().upcast_ref(), wanted),
+            "extension update never rendered {wanted:?}"
+        );
+    }
+
+    fn capture_update_surface(window: &gtk::Window, root: &gtk::Widget, state: &str) {
+        window.set_child(Some(root));
+        for (width_name, width) in [("narrow", 600), ("wide", 1_200)] {
+            window.set_default_size(width, 800);
+            window.set_size_request(width, 800);
+            window.present();
+            settle_toolkit();
+            root.measure(gtk::Orientation::Horizontal, -1);
+            root.measure(gtk::Orientation::Vertical, width);
+            root.allocate(width, 800, -1, None);
+            assert_contained(root, &format!("extensions/{state}/{width_name}"));
+            if state == "update-review" {
+                assert!(
+                    vertical_end(root, &find_labelled(root, "Update with selected access")) <= 800,
+                    "{width_name} update confirmation fell below the first viewport"
+                );
+            }
+            capture(window, &format!("extensions-{state}-{width_name}"), width, 800);
+        }
     }
 
     fn workspace_info() -> WorkspaceInfo {

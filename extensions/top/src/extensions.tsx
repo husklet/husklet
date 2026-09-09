@@ -473,6 +473,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
   const candidateKey = React.useRef('');
   const inventoryEpoch = React.useRef(0);
   const lifecycleInFlight = React.useRef(false);
+  const acquisitionInFlight = React.useRef(false);
   const openingInFlight = React.useRef('');
 
   const reload = React.useCallback(async () => {
@@ -544,7 +545,8 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
 
   const inspect = async (suggested?: string) => {
     const wanted = (suggested ?? reference).trim();
-    if (!wanted || busy) return;
+    if (!wanted || busy || acquisitionInFlight.current) return;
+    acquisitionInFlight.current = true;
     setReference(wanted);
     setBusy('inspect');
     setError('');
@@ -608,6 +610,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
     } catch (cause) {
       setError(message(cause));
     } finally {
+      acquisitionInFlight.current = false;
       setBusy('');
     }
   };
@@ -1105,7 +1108,18 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                               </Expander>
                             ) : null}
                           </CardContent>
-                          {!installedExtension ? (
+                          {updateAvailable ? (
+                            <CardActions gap={1} align="start" justify="start" width="fill">
+                              <Button
+                                label="Review update"
+                                tooltip={`Review the ${entry.version} update for ${entry.title}`}
+                                variant="filled"
+                                tone="accent"
+                                enabled={!busy && compatibility.compatible !== false}
+                                onInvoke={() => inspect(entry.reference)}
+                              />
+                            </CardActions>
+                          ) : !installedExtension ? (
                             <CardActions gap={1} align="start" justify="start" width="fill">
                               <Button
                                 label="Review access"

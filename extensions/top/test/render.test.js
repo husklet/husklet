@@ -1290,6 +1290,10 @@ test('extension discovery keeps unknown compatibility reviewable and blocks know
 
 test('an installed catalogue extension exposes its update review without retyping a reference', async () => {
   const references = [];
+  let releaseStart;
+  const startPending = new Promise((resolve) => {
+    releaseStart = resolve;
+  });
   const digest = `sha256:${'a'.repeat(64)}`;
   const stage = host();
   stage.render(
@@ -1308,6 +1312,7 @@ test('an installed catalogue extension exposes its update review without retypin
           catalogue: firstPartyCatalogue,
           startAcquisition: async (reference) => {
             references.push(reference);
+            await startPending;
             return { job: 'storybook-update' };
           },
           acquisition: async () => ({
@@ -1331,7 +1336,11 @@ test('an installed catalogue extension exposes its update review without retypin
     }),
   );
   await settled();
-  assert.ok(labelled(stage, 'Review update'));
+  assert.equal(
+    labelledInCard(stage, 'Component playground', 'Review update').length,
+    1,
+    'the Discover update card owns an immediate review action',
+  );
   assert.ok(labelled(stage, 'Update to Version 2.0.0 · Compatibility not declared'));
   assert.equal(
     labelled(stage, 'Review access'),
@@ -1347,7 +1356,10 @@ test('an installed catalogue extension exposes its update review without retypin
     undefined,
   );
 
-  invoke(stage, 'Review update');
+  invokeInCard(stage, 'Component playground', 'Review update');
+  invokeInCard(stage, 'Component playground', 'Review update');
+  assert.deepEqual(references, ['ghcr.io/husklet/husklet/extension-storybook:latest']);
+  releaseStart();
   await settled();
   await settled();
   assert.deepEqual(references, ['ghcr.io/husklet/husklet/extension-storybook:latest']);
@@ -7026,6 +7038,45 @@ function invoke(stage, label) {
       stage.surface.dispatch({ trigger: 'Invoke', node, id: `${node}:Invoke`, value: null }),
     ),
     `${label} invokes`,
+  );
+}
+
+function labelledInCard(stage, cardLabel, label) {
+  const patches = stage.frames.flatMap((frame) => frame.patches);
+  const tags = new Map(
+    patches.filter((patch) => patch.Create).map((patch) => [patch.Create.id, patch.Create.tag]),
+  );
+  const parents = new Map(
+    patches
+      .filter((patch) => patch.Insert)
+      .map((patch) => [patch.Insert.child, patch.Insert.parent]),
+  );
+  const cardOf = (node) => {
+    while (parents.has(node)) {
+      node = parents.get(node);
+      if (tags.get(node) === 'Card') return node;
+    }
+    return undefined;
+  };
+  const card = cardOf(labelled(stage, cardLabel)?.SetProp.id);
+  return patches.filter(
+    (patch) =>
+      patch.SetProp?.prop === 'Label' &&
+      patch.SetProp.value?.Text === label &&
+      cardOf(patch.SetProp.id) === card,
+  );
+}
+
+function invokeInCard(stage, cardLabel, label) {
+  const nodes = labelledInCard(stage, cardLabel, label)
+    .map((patch) => patch.SetProp.id)
+    .reverse();
+  assert.ok(nodes.length, `${label} is visible in ${cardLabel}`);
+  assert.ok(
+    nodes.some((node) =>
+      stage.surface.dispatch({ trigger: 'Invoke', node, id: `${node}:Invoke`, value: null }),
+    ),
+    `${label} invokes in ${cardLabel}`,
   );
 }
 
