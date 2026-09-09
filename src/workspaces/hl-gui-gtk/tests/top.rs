@@ -271,7 +271,10 @@ mod unix {
         }
         let window = gtk::Window::new();
         window.set_child(Some(&root));
-        for (width_name, width) in [("narrow", 600), ("wide", 1_200)] {
+        // The fixture's initial catalogue capture leaves this window wide. Keep
+        // each subsequent state wide-first so GTK never treats a prior 1200px
+        // allocation as the minimum for an attempted narrow allocation.
+        for (width_name, width) in [("wide", 1_200), ("narrow", 600)] {
             window.set_default_size(width, 800);
             window.set_size_request(width, 800);
             window.present();
@@ -773,16 +776,16 @@ mod unix {
     }
 
     fn capture_update_surface(window: &gtk::Window, root: &gtk::Widget, state: &str) {
-        window.set_child(Some(root));
+        window.set_child(None::<&gtk::Widget>);
         for (width_name, width) in [("narrow", 600), ("wide", 1_200)] {
-            window.set_size_request(-1, -1);
-            window.set_default_size(width, 800);
-            window.set_size_request(width, 800);
-            window.present();
-            settle_toolkit();
             root.measure(gtk::Orientation::Horizontal, -1);
             root.measure(gtk::Orientation::Vertical, width);
             root.allocate(width, 800, -1, None);
+            let capture_window = gtk::Window::new();
+            capture_window.set_child(Some(root));
+            capture_window.set_default_size(width, 800);
+            capture_window.present();
+            settle_toolkit();
             assert_contained(root, &format!("extensions/{state}/{width_name}"));
             if state == "update-review" {
                 assert!(
@@ -790,7 +793,9 @@ mod unix {
                     "{width_name} update confirmation fell below the first viewport"
                 );
             }
-            capture(window, &format!("extensions-{state}-{width_name}"), width, 800);
+            capture(&capture_window, &format!("extensions-{state}-{width_name}"), width, 800);
+            capture_window.set_child(None::<&gtk::Widget>);
+            capture_window.close();
         }
     }
 
