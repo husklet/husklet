@@ -3,7 +3,6 @@ import {
   Badge,
   Button,
   Card,
-  CardActions,
   CardContent,
   CardHeader,
   Column,
@@ -11,6 +10,7 @@ import {
   ConfirmAction,
   EmptyState,
   Entry,
+  Expander,
   Heading,
   InlineMessage,
   ResourceState,
@@ -217,7 +217,7 @@ export function Networks({
       title="Networks"
       subtitle="Bounded network inventory; attachment changes are accepted only for stopped containers."
     >
-      <Row gap={1} align="center" wrap width="fill">
+      <Row gap={1} wrap width="fill">
         <Entry
           value={name}
           placeholder="Network name"
@@ -299,6 +299,10 @@ export function Networks({
                     ? 'connect'
                     : null
                 : null;
+              const inspectionNeedsAccess =
+                inspection.id === id &&
+                inspection.state === 'error' &&
+                isAuthorityDenial(inspection.error);
               return (
                 <Card key={id} width="fill" variant={inspection.id === id ? 'filled' : 'outline'}>
                   <CardHeader
@@ -321,26 +325,40 @@ export function Networks({
                       />
                     </CardContent>
                   ) : null}
-                  <CardActions gap={1} justify="start">
+                  <CardContent gap={1}>
                     <Button
                       label={
-                        inspection.id === id && inspection.state === 'error'
-                          ? 'Retry inspect'
-                          : 'Inspect'
+                        inspectionNeedsAccess
+                          ? 'Access required'
+                          : inspection.id === id && inspection.state === 'error'
+                            ? 'Retry inspect'
+                            : 'Inspect'
                       }
+                      enabled={!inspectionNeedsAccess}
                       onInvoke={() => inspect(network)}
                     />
-                    {network.kind !== 'builtin' ? (
-                      <ConfirmAction
-                        authorityKey={`network:${id}:remove`}
-                        label="Remove"
-                        confirmLabel="Confirm remove"
-                        pendingLabel="Confirm remove"
-                        question={`Remove immutable network ${id} (${network.name})?`}
-                        onConfirm={() => remove(network)}
-                      />
-                    ) : null}
-                  </CardActions>
+                  </CardContent>
+                  {network.kind !== 'builtin' ? (
+                    <CardContent gap={1}>
+                      <Expander label="Danger zone">
+                        <Column gap={1}>
+                          <Text
+                            label="Removing this network disconnects it from the workspace and cannot be undone."
+                            color="text-dim"
+                            wrap
+                          />
+                          <ConfirmAction
+                            authorityKey={`network:${id}:remove`}
+                            label="Remove"
+                            confirmLabel="Confirm remove"
+                            pendingLabel="Confirm remove"
+                            question={`Remove immutable network ${id} (${network.name})?`}
+                            onConfirm={() => remove(network)}
+                          />
+                        </Column>
+                      </Expander>
+                    </CardContent>
+                  ) : null}
                   {disconnectRequest?.network === id ? (
                     <DisconnectConsent
                       request={disconnectRequest}
@@ -510,13 +528,29 @@ function NetworkDetail({ inspection }: { inspection: Inspection }) {
           <Text label="Reading network details…" />
         </Row>
       ) : inspection.state === 'error' ? (
-        <Text label={boundedMessage(inspection.error)} color="danger" wrap />
+        isAuthorityDenial(inspection.error) ? (
+          <InlineMessage
+            label="This extension was not granted access to inspect this network. Change its exact network access from Extensions, then inspect again."
+            tone="warning"
+          />
+        ) : (
+          <Text label={boundedMessage(inspection.error)} color="danger" wrap />
+        )
       ) : !inspection.detail ? (
         <EmptyState label="No network details" detail="The host returned no inspectable fields." />
       ) : (
         <NetworkSummaryDetail network={inspection.detail} />
       )}
     </CardContent>
+  );
+}
+
+function isAuthorityDenial(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const failure = error as { kind?: unknown; capability?: unknown; message?: unknown };
+  return (
+    failure.kind === 'denied' ||
+    (typeof failure.message === 'string' && failure.message.includes('consented resource scope'))
   );
 }
 

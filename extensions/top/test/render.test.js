@@ -3686,7 +3686,11 @@ test('volume and network panels render bounded real inventories and controls', (
     undefined,
     'inventory cards retain horizontal fill instead of overriding it with start alignment',
   );
-  assert.equal(ancestorProperty(networkStage, 'Inspect', 'CardActions', 'Justify')?.Align, 'Start');
+  assert.ok(
+    ancestorTags(networkStage, 'Inspect').includes('CardContent'),
+    'the primary inspection action appears before the collapsed danger zone',
+  );
+  assert.equal(ancestorTags(networkStage, 'Inspect').includes('CardActions'), false);
   const destructive = (frame, label) => {
     const id = frame.patches.find(
       (patch) =>
