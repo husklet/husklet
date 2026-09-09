@@ -95,8 +95,8 @@ test('Postgres browser streams credential-backed rows over real Unix framing', a
   await new Promise((resolve) => server.listen(socketPath, resolve));
   try {
     const session = await connect({ path: socketPath });
-    const chunks = [];
-    const result = await workspace(session).containers.execStreaming(
+    const rows = [];
+    const result = await workspace(session).containers.execJsonLines(
       containerId,
       7,
       {
@@ -104,13 +104,15 @@ test('Postgres browser streams credential-backed rows over real Unix framing', a
         environment: [['PGDATABASE', 'app']],
         credentials: [['PGPASSWORD', 'postgres.password']],
         pageLimit: 1,
+        maxLineBytes: 1024,
       },
-      async (page) => {
-        chunks.push(...page.entries.flatMap((entry) => entry.bytes));
+      async (value) => {
+        rows.push(value);
         await Promise.resolve();
       },
     );
-    assert.equal(Buffer.from(chunks).toString(), '{"id":1}\n{"id":2}\n');
+    assert.deepEqual(rows, [{ id: 1 }, { id: 2 }]);
+    assert.equal(result.lines, 2);
     assert.equal(result.executionId, executionId);
     assert.equal(result.execution.exit_code, 0);
     assert.deepEqual(requests, [

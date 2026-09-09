@@ -1276,6 +1276,39 @@ test('text execution preserves split UTF-8 and cancels aggregate overflow', asyn
   stage.session.close(); stage.host.destroy(); stage.server.close();
 });
 
+test('JSON lines execution frames split UTF-8 records with bounded backpressure', async () => {
+  const stage = await pair(); await frames(stage.host)(); const api = workspace(stage.session);
+  const values = []; const stderr = []; let callbacks = 0;
+  api.containers.execStreaming = async (_id, _generation, options, onPage) => {
+    assert.equal(options.maxLineBytes, undefined, 'client-only options do not reach execution');
+    await onPage({ entries: [
+      { sequence: 1, timestamp_ms: 1, stream: 'stdout', bytes: [...Buffer.from('{"name":"caf')] },
+      { sequence: 2, timestamp_ms: 2, stream: 'stderr', bytes: [...Buffer.from('notice')] },
+    ], next: 2, more: true, eof: false, gap: false });
+    assert.equal(callbacks, 0);
+    await onPage({ entries: [
+      { sequence: 3, timestamp_ms: 3, stream: 'stdout', bytes: [...Buffer.from('é"}\r\n{"id":2}')] },
+    ], next: 3, more: false, eof: true, gap: false });
+    return { executionId: 'e'.repeat(32), execution: { running: false, exit_code: 0 } };
+  };
+  const result = await api.containers.execJsonLines(
+    'c'.repeat(64), 1, { command: ['psql'], maxLineBytes: 32, onStderr: (text) => stderr.push(text) },
+    async (value, line) => { await Promise.resolve(); callbacks += 1; values.push([line, value]); },
+  );
+  assert.deepEqual(values, [[1, { name: 'café' }], [2, { id: 2 }]]);
+  assert.deepEqual(stderr, ['notice']); assert.equal(result.lines, 2);
+  api.containers.execStreaming = async (_id, _generation, _options, onPage) => {
+    try {
+      await onPage({ entries: [{ sequence: 1, timestamp_ms: 1, stream: 'stdout', bytes: [...Buffer.from('12345')] }], next: 1, more: false, eof: true, gap: false });
+    } catch (error) { throw new ExecutionOperationError('e'.repeat(32), 'output', error); }
+  };
+  await assert.rejects(
+    api.containers.execJsonLines('c'.repeat(64), 1, { command: ['query'], maxLineBytes: 4 }, () => {}),
+    (error) => error instanceof ExecutionOperationError && /4 byte limit/.test(error.cause.message),
+  );
+  stage.session.close(); stage.host.destroy(); stage.server.close();
+});
+
 test('image pull preserves host failure when best-effort cancellation also fails', async () => {
   const calls = [];
   const api = workspace({

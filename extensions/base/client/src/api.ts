@@ -973,6 +973,27 @@ export interface WorkspaceApi {
       stdout: string;
       stderr: string;
     }>;
+    /** Stream newline-delimited JSON from stdout with bounded record buffering and callback backpressure. */
+    execJsonLines(
+      id: string,
+      generation: number,
+      options: {
+        command: string[];
+        environment?: [string, string][];
+        /** Credential keys resolved by the host directly into process environment variables. */
+        credentials?: [environment: string, key: string][];
+        user?: string;
+        workingDirectory?: string;
+        maxLineBytes: number;
+        pageLimit?: number;
+        pollIntervalMs?: number;
+        signal?: AbortSignal;
+        cancelSignal?: string;
+        cancelTimeoutMs?: number;
+        onStderr?: (text: string) => void | Promise<void>;
+      },
+      onValue: (value: unknown, line: number) => void | Promise<void>,
+    ): Promise<{ executionId: string; execution: ExecutionSummary; lines: number }>;
     signalExecution(id: string, signal: string): Promise<void>;
     /** Atomically signal and await one execution without blocking cancellation behind a prior wait. */
     cancelExecution(id: string, options?: { signal?: string; timeoutMs?: number }): Promise<void>;

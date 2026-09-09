@@ -37,12 +37,10 @@ try {
   if (!query) throw new TypeError('query must contain a row-producing statement');
   const abort = new AbortController();
   const timer = setTimeout(() => abort.abort('query timed out'), configuration.timeoutMs ?? 30_000);
-  const decoder = new TextDecoder('utf-8', { fatal: true });
-  let pending = '';
   let rows = 0;
   const preview: unknown[] = [];
   try {
-    const result = await containers.execStreaming(
+    const result = await containers.execJsonLines(
       container.id,
       container.generation,
       {
@@ -61,27 +59,14 @@ try {
         signal: abort.signal,
         cancelSignal: 'SIGINT',
         pageLimit: 32,
+        maxLineBytes: 1024 * 1024,
       },
-      (page) => {
-        for (const entry of page.entries) {
-          if (entry.stream === 'stderr') continue;
-          pending += decoder.decode(Uint8Array.from(entry.bytes), { stream: true });
-          const lines = pending.split('\n');
-          pending = lines.pop() ?? '';
-          for (const line of lines) {
-            if (!line) continue;
-            rows += 1;
-            if (preview.length < 25) preview.push(JSON.parse(line));
-          }
-        }
+      (value) => {
+        rows += 1;
+        if (preview.length < 25) preview.push(value);
       },
     );
     executionId = result.executionId;
-    pending += decoder.decode();
-    if (pending) {
-      rows += 1;
-      if (preview.length < 25) preview.push(JSON.parse(pending));
-    }
     if (result.execution.exit_code !== 0) {
       throw new Error(`psql exited with status ${result.execution.exit_code ?? 'unknown'}`);
     }

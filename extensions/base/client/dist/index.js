@@ -758,6 +758,64 @@ export function workspace(session, { signal } = {}) {
                 stderr += stderrDecoder.decode();
                 return { ...result, stdout, stderr };
             },
+            execJsonLines: async (id, generation, configuration, onValue) => {
+                const { maxLineBytes, onStderr, ...options } = configuration;
+                if (!Number.isSafeInteger(maxLineBytes) ||
+                    maxLineBytes < 1 ||
+                    maxLineBytes > 16 * 1024 * 1024) {
+                    throw new RangeError('execution JSON line maxLineBytes must be between 1 and 16777216');
+                }
+                if (typeof onValue !== 'function')
+                    throw new TypeError('JSON lines execution requires a value callback');
+                if (onStderr !== undefined && typeof onStderr !== 'function')
+                    throw new TypeError('JSON lines execution onStderr must be a function');
+                let pending = [];
+                let lines = 0;
+                const decoder = new TextDecoder('utf-8', { fatal: true });
+                const stderrDecoder = new TextDecoder('utf-8', { fatal: true });
+                const deliver = async () => {
+                    let bytes = pending;
+                    pending = [];
+                    if (bytes.at(-1) === 13)
+                        bytes = bytes.slice(0, -1);
+                    if (bytes.length > maxLineBytes)
+                        throw new RangeError(`execution JSON line exceeded the ${maxLineBytes} byte limit`);
+                    const text = decoder.decode(Uint8Array.from(bytes));
+                    const line = lines + 1;
+                    await onValue(JSON.parse(text), line);
+                    lines = line;
+                };
+                const result = await api.containers.execStreaming(id, generation, options, async (page) => {
+                    for (const entry of page.entries) {
+                        if (entry.stream === 'stderr') {
+                            const text = stderrDecoder.decode(Uint8Array.from(entry.bytes), { stream: true });
+                            if (text && onStderr)
+                                await onStderr(text);
+                            continue;
+                        }
+                        for (const byte of entry.bytes) {
+                            if (byte === 10)
+                                await deliver();
+                            else {
+                                pending.push(byte);
+                                if (pending.length > maxLineBytes)
+                                    throw new RangeError(`execution JSON line exceeded the ${maxLineBytes} byte limit`);
+                            }
+                        }
+                    }
+                });
+                try {
+                    if (pending.length > 0)
+                        await deliver();
+                    const stderrTail = stderrDecoder.decode();
+                    if (stderrTail && onStderr)
+                        await onStderr(stderrTail);
+                }
+                catch (cause) {
+                    throw new ExecutionOperationError(result.executionId, 'output', cause, result.execution);
+                }
+                return { ...result, lines };
+            },
             attachTerminal: (id, command) => session
                 .call('container_attach_terminal', {
                 id: immutableIdentity(id, [32, 64], 'container'),
@@ -3020,6 +3078,7 @@ export const protocolCoverage = Object.freeze({
             'execAndWait',
             'execStreaming',
             'execText',
+            'execJsonLines',
             'attachTerminal',
         ],
         images: [
