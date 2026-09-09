@@ -1276,7 +1276,7 @@ test('text execution preserves split UTF-8 and cancels aggregate overflow', asyn
   stage.session.close(); stage.host.destroy(); stage.server.close();
 });
 
-test('JSON lines execution frames split UTF-8 records with bounded backpressure', async () => {
+test('line execution frames split UTF-8 records with bounded backpressure', async () => {
   const stage = await pair(); await frames(stage.host)(); const api = workspace(stage.session);
   const values = []; const stderr = []; let callbacks = 0;
   api.containers.execStreaming = async (_id, _generation, options, onPage) => {
@@ -1291,11 +1291,11 @@ test('JSON lines execution frames split UTF-8 records with bounded backpressure'
     ], next: 3, more: false, eof: true, gap: false });
     return { executionId: 'e'.repeat(32), execution: { running: false, exit_code: 0 } };
   };
-  const result = await api.containers.execJsonLines(
+  const result = await api.containers.execLines(
     'c'.repeat(64), 1, { command: ['psql'], maxLineBytes: 32, onStderr: (text) => stderr.push(text) },
     async (value, line) => { await Promise.resolve(); callbacks += 1; values.push([line, value]); },
   );
-  assert.deepEqual(values, [[1, { name: 'café' }], [2, { id: 2 }]]);
+  assert.deepEqual(values, [[1, '{"name":"café"}'], [2, '{"id":2}']]);
   assert.deepEqual(stderr, ['notice']); assert.equal(result.lines, 2);
   api.containers.execStreaming = async (_id, _generation, _options, onPage) => {
     try {
@@ -1303,9 +1303,26 @@ test('JSON lines execution frames split UTF-8 records with bounded backpressure'
     } catch (error) { throw new ExecutionOperationError('e'.repeat(32), 'output', error); }
   };
   await assert.rejects(
-    api.containers.execJsonLines('c'.repeat(64), 1, { command: ['query'], maxLineBytes: 4 }, () => {}),
+    api.containers.execLines('c'.repeat(64), 1, { command: ['query'], maxLineBytes: 4 }, () => {}),
     (error) => error instanceof ExecutionOperationError && /4 byte limit/.test(error.cause.message),
   );
+  stage.session.close(); stage.host.destroy(); stage.server.close();
+});
+
+test('JSON lines execution decodes values through the generic line stream', async () => {
+  const stage = await pair(); await frames(stage.host)(); const api = workspace(stage.session);
+  const values = [];
+  api.containers.execLines = async (_id, _generation, options, onLine) => {
+    assert.equal(options.maxLineBytes, 32);
+    await onLine('{"ready":true}', 1);
+    return { executionId: 'e'.repeat(32), execution: { running: false, exit_code: 0 }, lines: 1 };
+  };
+  const result = await api.containers.execJsonLines(
+    'c'.repeat(64), 1, { command: ['query'], maxLineBytes: 32 },
+    (value, line) => values.push([line, value]),
+  );
+  assert.deepEqual(values, [[1, { ready: true }]]);
+  assert.equal(result.lines, 1);
   stage.session.close(); stage.host.destroy(); stage.server.close();
 });
 

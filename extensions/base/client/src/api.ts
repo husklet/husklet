@@ -977,6 +977,29 @@ export interface WorkspaceApi {
       stdout: string;
       stderr: string;
     }>;
+    /** Stream UTF-8 stdout records with bounded buffering and serial callback backpressure. */
+    execLines(
+      id: string,
+      generation: number,
+      options: {
+        command: string[];
+        environment?: [string, string][];
+        /** Credential keys resolved by the host directly into process environment variables. */
+        credentials?: [environment: string, key: string][];
+        user?: string;
+        workingDirectory?: string;
+        maxLineBytes: number;
+        pageLimit?: number;
+        pollIntervalMs?: number;
+        signal?: AbortSignal;
+        cancelSignal?: string;
+        cancelTimeoutMs?: number;
+        /** Runs once the host returns the live execution identity, before output is consumed. */
+        onStarted?: (executionId: string) => void | Promise<void>;
+        onStderr?: (text: string) => void | Promise<void>;
+      },
+      onLine: (text: string, line: number) => void | Promise<void>,
+    ): Promise<{ executionId: string; execution: ExecutionSummary; lines: number }>;
     /** Stream newline-delimited JSON from stdout with bounded record buffering and callback backpressure. */
     execJsonLines(
       id: string,

@@ -19,6 +19,19 @@ test('Postgres browser streams credential-backed rows over real Unix framing', a
     connections.add(socket);
     socket.on('close', () => connections.delete(socket));
     const reader = new Reader();
+    let writes = Promise.resolve();
+    const writeFragmented = (frame) => {
+      const bytes = encode(frame);
+      writes = writes.then(
+        () =>
+          new Promise((resolve, reject) => {
+            socket.write(bytes.subarray(0, 3), (error) => {
+              if (error) reject(error);
+              else setImmediate(() => socket.write(bytes.subarray(3), resolve));
+            });
+          }),
+      );
+    };
     socket.on('data', (chunk) => {
       for (const frame of reader.take(chunk)) {
         if (frame.kind !== KIND.request) continue;
@@ -77,11 +90,11 @@ test('Postgres browser streams credential-backed rows over real Unix framing', a
         } else {
           payload = { reply: 'done' };
         }
-        socket.write(encode({ channel: frame.channel, kind: KIND.response, payload }));
+        writeFragmented({ channel: frame.channel, kind: KIND.response, payload });
       }
     });
-    socket.write(
-      encode({
+    writeFragmented(
+      {
         channel: CONTROL,
         kind: KIND.open,
         payload: {
@@ -89,7 +102,7 @@ test('Postgres browser streams credential-backed rows over real Unix framing', a
           peer: 'postgres-fixture',
           granted: ['containers:read', 'containers:execute', 'credentials:read'],
         },
-      }),
+      },
     );
   });
   await new Promise((resolve) => server.listen(socketPath, resolve));
