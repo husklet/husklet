@@ -50,7 +50,6 @@ export {
 export { ContainerDetail } from './container-detail.js';
 export { Containers } from './containers.js';
 export { Workspace } from './workspace.js';
-export { ResourceList } from './resource-list.js';
 export { Extensions, acquisitionFailure, acquisitionLabel } from './extensions.js';
 
 const { useCallback, useEffect, useRef, useState } = React;

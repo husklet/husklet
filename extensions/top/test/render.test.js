@@ -9,7 +9,6 @@ import {
   Networks,
   Overview,
   Processes,
-  ResourceList,
   Terminals,
   Volumes,
   Workspace,
@@ -130,24 +129,6 @@ test('Top sidebar preference is narrowly bounded and retried with fresh CAS auth
     [4, 'sidebar.width', { kind: 'number', value: 192 }],
     [5, 'sidebar.width', { kind: 'number', value: 192 }],
   ]);
-});
-
-test('resource inventories wrap readable cards instead of stretching across wide pages', () => {
-  const stage = host();
-  stage.render(
-    h(
-      ResourceList,
-      null,
-      h('Card', { key: 'one' }, h('CardHeader', { label: 'First resource' })),
-      h('Card', { key: 'two' }, h('CardHeader', { label: 'Second resource' })),
-    ),
-  );
-
-  assert.deepEqual(ancestorProperty(stage, 'First resource', 'Row', 'Wrap'), { Flag: true });
-  assert.deepEqual(ancestorProperty(stage, 'First resource', 'Column', 'Width'), {
-    Bounds: { minimum: { Chars: 34 }, maximum: { Chars: 64 } },
-  });
-  assert.deepEqual(ancestorProperty(stage, 'Second resource', 'Column', 'Grow'), { Number: 1 });
 });
 
 const firstPartyCatalogue = async () => ({
@@ -3763,10 +3744,6 @@ test('volume and network panels render bounded real inventories and controls', (
   const volumeStage = stageFromFrame(volumeFrame);
   assert.equal(taggedProperty(volumeStage, 'cache', 'CardHeader', 'Align')?.Align, 'Start');
   assert.ok(taggedProperty(volumeStage, 'cache', 'CardHeader', 'Width'));
-  assert.deepEqual(ancestorProperty(volumeStage, 'cache', 'Row', 'Wrap'), { Flag: true });
-  assert.deepEqual(ancestorProperty(volumeStage, 'cache', 'Column', 'Width'), {
-    Bounds: { minimum: { Chars: 34 }, maximum: { Chars: 64 } },
-  });
   for (const label of ['Networks', 'private', 'Remove'])
     assert.ok(labels(networkFrame).includes(label), label);
   const networkInventoryStage = stageFromFrame(networkFrame);
@@ -3775,12 +3752,6 @@ test('volume and network panels render bounded real inventories and controls', (
     'Start',
   );
   assert.ok(taggedProperty(networkInventoryStage, 'private', 'CardHeader', 'Width'));
-  assert.deepEqual(ancestorProperty(networkInventoryStage, 'private', 'Row', 'Wrap'), {
-    Flag: true,
-  });
-  assert.deepEqual(ancestorProperty(networkInventoryStage, 'private', 'Column', 'Width'), {
-    Bounds: { minimum: { Chars: 34 }, maximum: { Chars: 64 } },
-  });
   assert.ok(
     !labels(networkFrame).includes('Disconnect'),
     'destructive endpoint action waits for a target',

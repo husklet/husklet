@@ -25,7 +25,6 @@ import {
 } from '@husklet/react';
 import { ImageDetailsSource, bounded, boundedMessage, bytes, shortId } from './model.js';
 import type { Resource } from './overview.js';
-import { ResourceList } from './resource-list.js';
 
 const TERMINAL_PULL_STATES = new Set(['complete', 'failed', 'cancelled']);
 type Inspection = {
@@ -289,97 +288,95 @@ export function Images({
             </Row>
           </Column>
         </Expander>
-        <ResourceList>
-          {view.records.map((item) => (
-            <Card key={item.id} variant={detail?.id === item.id ? 'filled' : 'outline'}>
-              <CardHeader
-                label={item.reference || '<untagged>'}
-                detail={shortId(item.id)}
-                align="start"
-                width="fill"
-              />
-              <CardContent>
-                <Text label={bytes(item.size)} color="text-dim" />
-                {inspection.id === item.id ? (
-                  <>
-                    <ResourceState
-                      state={
-                        inspection.state === 'idle'
-                          ? 'loading'
-                          : inspection.state === 'ready' && inspection.count === 0
-                            ? 'empty'
-                            : inspection.state
-                      }
-                      loadingLabel="Reading image details…"
-                      emptyLabel="No image details"
-                      emptyDetail="The host returned no inspectable fields."
-                      error={boundedMessage(inspection.error)}
-                      retryLabel="Retry inspect"
-                      onRetry={() => inspect(item)}
-                    >
-                      <StructuredDetail value={detail} />
-                    </ResourceState>
-                    {inspection.state === 'error' ? (
+        {view.records.map((item) => (
+          <Card key={item.id} variant={detail?.id === item.id ? 'filled' : 'outline'}>
+            <CardHeader
+              label={item.reference || '<untagged>'}
+              detail={shortId(item.id)}
+              align="start"
+              width="fill"
+            />
+            <CardContent>
+              <Text label={bytes(item.size)} color="text-dim" />
+              {inspection.id === item.id ? (
+                <>
+                  <ResourceState
+                    state={
+                      inspection.state === 'idle'
+                        ? 'loading'
+                        : inspection.state === 'ready' && inspection.count === 0
+                          ? 'empty'
+                          : inspection.state
+                    }
+                    loadingLabel="Reading image details…"
+                    emptyLabel="No image details"
+                    emptyDetail="The host returned no inspectable fields."
+                    error={boundedMessage(inspection.error)}
+                    retryLabel="Retry inspect"
+                    onRetry={() => inspect(item)}
+                  >
+                    <StructuredDetail value={detail} />
+                  </ResourceState>
+                  {inspection.state === 'error' ? (
+                    <Text
+                      label="Verify that the image still exists and that this extension has access to it, then retry inspection."
+                      color="warning"
+                      wrap
+                    />
+                  ) : null}
+                </>
+              ) : null}
+            </CardContent>
+            <CardContent>
+              <Row>
+                <Button
+                  label={
+                    inspection.id === item.id && inspection.state === 'error'
+                      ? 'Retry inspect'
+                      : 'Inspect'
+                  }
+                  variant="filled"
+                  tone="accent"
+                  enabled={!busy}
+                  onInvoke={() => inspect(item)}
+                />
+              </Row>
+            </CardContent>
+            <CardContent>
+              <Expander label="Danger zone" width="fill" align="start">
+                <Column gap={1}>
+                  <Text label="Removing this image cannot be undone." color="text-dim" wrap />
+                  {confirm === item.id ? (
+                    <Row gap={1} wrap>
                       <Text
-                        label="Verify that the image still exists and that this extension has access to it, then retry inspection."
+                        label={`Remove ${item.reference || '<untagged>'} (${shortId(item.id)})?`}
                         color="warning"
                         wrap
                       />
-                    ) : null}
-                  </>
-                ) : null}
-              </CardContent>
-              <CardContent>
-                <Row>
-                  <Button
-                    label={
-                      inspection.id === item.id && inspection.state === 'error'
-                        ? 'Retry inspect'
-                        : 'Inspect'
-                    }
-                    variant="filled"
-                    tone="accent"
-                    enabled={!busy}
-                    onInvoke={() => inspect(item)}
-                  />
-                </Row>
-              </CardContent>
-              <CardContent>
-                <Expander label="Danger zone" width="fill" align="start">
-                  <Column gap={1}>
-                    <Text label="Removing this image cannot be undone." color="text-dim" wrap />
-                    {confirm === item.id ? (
-                      <Row gap={1} wrap>
-                        <Text
-                          label={`Remove ${item.reference || '<untagged>'} (${shortId(item.id)})?`}
-                          color="warning"
-                          wrap
-                        />
-                        <Button
-                          label="Confirm remove"
-                          enabled={!busy}
-                          tone="danger"
-                          destructive
-                          onInvoke={() => remove(item)}
-                        />
-                        <Button label="Cancel" enabled={!busy} onInvoke={() => setConfirm('')} />
-                      </Row>
-                    ) : (
-                      <Row>
-                        <Button
-                          label="Remove"
-                          variant="outline"
-                          enabled={!busy}
-                          onInvoke={() => setConfirm(item.id)}
-                        />
-                      </Row>
-                    )}
-                  </Column>
-                </Expander>
-              </CardContent>
-            </Card>
-          ))}
-        </ResourceList>
+                      <Button
+                        label="Confirm remove"
+                        enabled={!busy}
+                        tone="danger"
+                        destructive
+                        onInvoke={() => remove(item)}
+                      />
+                      <Button label="Cancel" enabled={!busy} onInvoke={() => setConfirm('')} />
+                    </Row>
+                  ) : (
+                    <Row>
+                      <Button
+                        label="Remove"
+                        variant="outline"
+                        enabled={!busy}
+                        onInvoke={() => setConfirm(item.id)}
+                      />
+                    </Row>
+                  )}
+                </Column>
+              </Expander>
+            </CardContent>
+          </Card>
+        ))}
         <Omitted count={view.omitted} />
       </ResourceState>
     </Page>
