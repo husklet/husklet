@@ -87,6 +87,33 @@ test('Entry playground is controlled by real change reports', () => {
       .since(before)
       .some((patch) => patch.SetProp?.id === entry && patch.SetProp.value?.Text === 'renamed'),
   );
+  assert.ok(
+    stage.since(before).some((patch) => patch.SetProp?.value?.Text === 'Valid extension name.'),
+  );
+});
+
+test('Entry teaches validation and state anatomy before its API', () => {
+  const frame = host().render(h(EntryWorkbench));
+  const labels = frame.patches
+    .filter((patch) => patch.SetProp?.prop === 'Label')
+    .map((patch) => patch.SetProp.value?.Text);
+  for (const state of [
+    'Empty with placeholder',
+    'Focused',
+    'Valid',
+    'Error',
+    'Disabled',
+    'Secret',
+  ]) {
+    assert(labels.includes(state), `Entry is missing ${state}`);
+  }
+  const headings = created(frame.patches, 'Heading').flatMap((id) =>
+    frame.patches
+      .filter((patch) => patch.SetProp?.id === id && patch.SetProp.prop === 'Label')
+      .map((patch) => patch.SetProp.value.Text),
+  );
+  assert(headings.indexOf('Widths') < headings.indexOf('API'));
+  assert(headings.indexOf('Accessibility') < headings.indexOf('API'));
 });
 
 test('Select and Switch playgrounds retain their reported values', () => {

@@ -123,19 +123,19 @@ function ApiTable({ rows }: { rows: ControlRow[] }) {
     <Table width="fill">
       <TableHead>
         <TableRow>
-          <TableCell label="Property" wrap ellipsize={false} />
-          <TableCell label="Type" wrap ellipsize={false} />
-          <TableCell label="Default" wrap ellipsize={false} />
-          <TableCell label="Description" wrap ellipsize={false} />
+          <TableCell label="Property" width={{ chars: 16 }} wrap ellipsize={false} />
+          <TableCell label="Type" width={{ chars: 20 }} wrap ellipsize={false} />
+          <TableCell label="Default" width={{ chars: 12 }} wrap ellipsize={false} />
+          <TableCell label="Description" width="fill" wrap ellipsize={false} />
         </TableRow>
       </TableHead>
       <TableBody>
         {rows.map((row) => (
           <TableRow key={row.name}>
-            <TableCell label={row.name} wrap ellipsize={false} />
-            <TableCell label={publicType(row)} wrap ellipsize={false} />
-            <TableCell label={defaultValue(row)} wrap ellipsize={false} />
-            <TableCell label={row.note} wrap ellipsize={false} />
+            <TableCell label={row.name} width={{ chars: 16 }} wrap ellipsize={false} />
+            <TableCell label={publicType(row)} width={{ chars: 20 }} wrap ellipsize={false} />
+            <TableCell label={defaultValue(row)} width={{ chars: 12 }} wrap ellipsize={false} />
+            <TableCell label={row.note} width="fill" wrap ellipsize={false} />
           </TableRow>
         ))}
       </TableBody>

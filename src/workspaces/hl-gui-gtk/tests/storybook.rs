@@ -260,6 +260,14 @@ mod unix {
             assert!(focus.has_focus(), "IconButton exposes its native focus state");
             let _ = surface.reports().drain();
         }
+        if story == "Entry" {
+            let focus = find::<gtk::Entry>(&root, |entry| {
+                entry.tooltip_text().as_deref() == Some("Focused extension name")
+            });
+            assert!(focus.grab_focus(), "Entry accepts deterministic keyboard focus");
+            settle_toolkit();
+            let _ = surface.reports().drain();
+        }
         let toggle_before = if story == "ToggleButton" {
             let toggle = find::<gtk::ToggleButton>(&root, |button| {
                 button.tooltip_text().as_deref() == Some("Pin this tab")
