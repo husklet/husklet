@@ -51,7 +51,7 @@ export interface ExtensionProviderCatalogue {
     providers: ExtensionProviderDeclaration[];
     truncated: boolean;
 }
-export type ExtensionCapability = 'workspaces:read' | 'workspaces:control' | 'workspaces:events' | 'workspace-environment:read' | 'workspace-environment:write' | 'containers:read' | 'containers:create' | 'containers:execute' | 'containers:lifecycle' | 'containers:remove' | 'containers:attach' | 'images:read' | 'images:pull' | 'images:remove' | 'images:prune' | 'volumes:read' | 'volumes:write' | 'networks:read' | 'networks:write' | 'terminals:read' | 'terminals:input' | 'terminals:layout-control' | 'terminals:process-control' | 'terminals:output' | 'panes:observe' | 'panes:semantic-read' | 'panes:semantic-control' | 'extensions:read' | 'extensions:control' | 'extensions:remove' | 'extensions:install' | 'filesystem:read' | 'filesystem:write' | 'state:read' | 'state:write' | 'credentials:read' | 'credentials:write' | 'interface:render' | 'notifications:publish';
+export type ExtensionCapability = 'workspaces:read' | 'workspaces:control' | 'workspaces:events' | 'workspace-environment:read' | 'workspace-environment:write' | 'containers:read' | 'containers:create' | 'containers:execute' | 'containers:input' | 'containers:lifecycle' | 'containers:remove' | 'containers:attach' | 'images:read' | 'images:pull' | 'images:remove' | 'images:prune' | 'volumes:read' | 'volumes:write' | 'networks:read' | 'networks:write' | 'terminals:read' | 'terminals:input' | 'terminals:layout-control' | 'terminals:process-control' | 'terminals:output' | 'panes:observe' | 'panes:semantic-read' | 'panes:semantic-control' | 'extensions:read' | 'extensions:control' | 'extensions:remove' | 'extensions:install' | 'filesystem:read' | 'filesystem:write' | 'state:read' | 'state:write' | 'credentials:read' | 'credentials:write' | 'interface:render' | 'notifications:publish';
 export type ContainerSelector = {
     id: string;
 } | {
@@ -1038,6 +1038,22 @@ export interface WorkspaceApi {
             after: Pick<ExecutionSummary, 'running' | 'exit_code' | 'pid'>;
         }>;
         removeExecution(id: string): Promise<void>;
+        /** Write one nonempty chunk with host/transport backpressure; each chunk is limited to 65536 bytes. */
+        writeExecutionStdin(id: string, input: string | Iterable<number>): Promise<void>;
+        /** Explicitly half-close stdin without discarding durable stdout/stderr. */
+        closeExecutionStdin(id: string): Promise<void>;
+        /**
+         * Write an iterable of bounded chunks serially, optionally half-closing on successful exhaustion.
+         * Abort never implies EOF: the caller retains explicit control of whether the guest sees end-of-input.
+         */
+        pipeExecutionStdin(id: string, source: Iterable<string | Iterable<number>> | AsyncIterable<string | Iterable<number>>, options?: {
+            signal?: AbortSignal;
+            close?: boolean;
+        }): Promise<{
+            chunks: number;
+            bytes: number;
+            closed: boolean;
+        }>;
         /** Inspect the exact finished cursor, remove it, then prove absence from a later complete execution catalogue. */
         removeExecutionAndWait(id: string, after: Pick<ExecutionSummary, 'running' | 'exit_code' | 'pid'>, options?: {
             timeoutMs?: number;
@@ -1101,6 +1117,8 @@ export interface WorkspaceApi {
             environment?: [string, string][];
             user?: string;
             workingDirectory?: string;
+            /** Retain a bounded writable stdin attachment; additionally requires `containers:input`. */
+            stdin?: boolean;
         }): Promise<string>;
         /** Execute while resolving named environment values inside the host credential boundary. */
         execWithCredentials(id: string, generation: number, options: {
@@ -1109,6 +1127,8 @@ export interface WorkspaceApi {
             credentials: [environment: string, key: string][];
             user?: string;
             workingDirectory?: string;
+            /** Retain a bounded writable stdin attachment; additionally requires `containers:input`. */
+            stdin?: boolean;
         }): Promise<string>;
         attachTerminal(id: string, command: string[]): Promise<string>;
     };

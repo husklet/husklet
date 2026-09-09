@@ -24,6 +24,7 @@ const capabilities = [
   'containers:read',
   'containers:create',
   'containers:execute',
+  'containers:input',
   'containers:lifecycle',
   'containers:remove',
   'networks:read',

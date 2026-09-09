@@ -63,16 +63,46 @@ try {
     });
     let digest: string;
     if (configuration.model) {
-      const result = await host.containers.execText(
+      const executionId = await host.containers.exec(
         configuration.model.container,
         configuration.model.generation,
         {
           command: [...configuration.model.command, entry.path],
-          maxBytes: 1024 * 1024,
-          signal: controller.signal,
+          stdin: true,
         },
       );
-      digest = result.stdout.trim(); // replace with the model's vector/index identifier
+      try {
+        async function* documentChunks() {
+          // 16k UTF-16 code units can never exceed the protocol's 64 KiB UTF-8 chunk limit.
+          for (let offset = 0; offset < document.text.length; offset += 16 * 1024) {
+            yield document.text.slice(offset, offset + 16 * 1024);
+          }
+        }
+        await host.containers.pipeExecutionStdin(executionId, documentChunks(), {
+          signal: controller.signal,
+        });
+        const execution = await host.containers.waitExecution(executionId, { timeoutMs: 30_000 });
+        const output = await host.containers.executionLogs(executionId, {
+          stdout: true,
+          stderr: true,
+        });
+        if (output.truncated || output.stdout.length > 1024 * 1024) {
+          throw new RangeError('embedding model output exceeded its 1 MiB result bound');
+        }
+        if (execution.exit_code !== 0) {
+          throw new Error(`embedding model exited with status ${execution.exit_code ?? 'unknown'}`);
+        }
+        digest = new TextDecoder('utf-8', { fatal: true })
+          .decode(Uint8Array.from(output.stdout))
+          .trim();
+      } catch (error) {
+        await host.containers
+          .cancelExecution(executionId, { signal: 'SIGTERM', timeoutMs: 1_000 })
+          .catch(() => {});
+        throw error;
+      } finally {
+        await host.containers.removeExecution(executionId).catch(() => {});
+      }
     } else {
       digest = Array.from(
         new Uint8Array(

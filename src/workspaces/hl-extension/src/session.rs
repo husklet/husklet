@@ -622,6 +622,8 @@ impl Session {
             | Request::ExecutionKill { .. }
             | Request::ExecutionCancel { .. }
             | Request::ExecutionRemove { .. }
+            | Request::ExecutionWrite { .. }
+            | Request::ExecutionCloseInput { .. }
             | Request::ContainerExec { .. }
             | Request::ContainerExecCredential { .. } => self.control(request, services),
             Request::ImageList
@@ -948,6 +950,35 @@ impl Session {
                 self.resolve_execution(id, services.containers)?;
                 port.execution_remove(id).map(|()| Reply::Done).map_err(Failure::from)
             }
+            Request::ExecutionWrite { id, contents } => {
+                immutable_identity(id, &[32], "execution")?;
+                if contents.is_empty() || contents.len() > 64 * 1024 {
+                    return Err(Failure::Conflict {
+                        detail: "execution stdin chunks must contain between 1 and 65536 bytes".into(),
+                    });
+                }
+                let execution = self.resolve_execution(id, services.containers)?;
+                if !execution.running {
+                    return Err(Failure::Conflict {
+                        detail: "execution stdin is only writable while the execution is running".into(),
+                    });
+                }
+                port.execution_write(id, contents)
+                    .map(|()| Reply::Done)
+                    .map_err(Failure::from)
+            }
+            Request::ExecutionCloseInput { id } => {
+                immutable_identity(id, &[32], "execution")?;
+                let execution = self.resolve_execution(id, services.containers)?;
+                if !execution.running {
+                    return Err(Failure::Conflict {
+                        detail: "execution stdin can only be closed while the execution is running".into(),
+                    });
+                }
+                port.execution_close_input(id)
+                    .map(|()| Reply::Done)
+                    .map_err(Failure::from)
+            }
             Request::ContainerExec {
                 id,
                 generation,
@@ -955,7 +986,11 @@ impl Session {
                 environment,
                 user,
                 working_directory,
+                stdin,
             } => {
+                if *stdin {
+                    self.peer.authority().permit(Capability::ContainerInput)?;
+                }
                 validate_exec_environment(environment)?;
                 let target = self.resolve_mutation_container(id, services.containers)?;
                 Ok(Reply::Identity(port.execute(
@@ -966,6 +1001,7 @@ impl Session {
                     environment,
                     user.as_deref(),
                     working_directory.as_deref(),
+                    *stdin,
                 )?))
             }
             Request::ContainerExecCredential {
@@ -976,7 +1012,11 @@ impl Session {
                 credentials,
                 user,
                 working_directory,
+                stdin,
             } => {
+                if *stdin {
+                    self.peer.authority().permit(Capability::ContainerInput)?;
+                }
                 if credentials.len() > 64 {
                     return Err(Failure::Conflict {
                         detail: "credential environment is limited to 64 entries".into(),
@@ -1009,6 +1049,7 @@ impl Session {
                     &resolved,
                     user.as_deref(),
                     working_directory.as_deref(),
+                    *stdin,
                 )?))
             }
             _ => Err(Failure::Unsupported {
@@ -1638,14 +1679,7 @@ impl Session {
                 let port = self.peer.authority().port(Capability::FilesystemRead, services.files)?;
                 let values = ranges
                     .iter()
-                    .map(|range| {
-                        port.read_range(
-                            &range.path,
-                            range.offset,
-                            range.limit,
-                            range.observed.as_deref(),
-                        )
-                    })
+                    .map(|range| port.read_range(&range.path, range.offset, range.limit, range.observed.as_deref()))
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(Reply::FileRanges(values))
             }

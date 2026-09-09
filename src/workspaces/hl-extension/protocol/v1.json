@@ -55,6 +55,11 @@
       "wire": "containers:execute"
     },
     {
+      "executes": true,
+      "mutates": true,
+      "wire": "containers:input"
+    },
+    {
       "executes": false,
       "mutates": true,
       "wire": "containers:lifecycle"
@@ -332,6 +337,12 @@
         },
         {
           "name": "containers:execute",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "containers:input",
           "payload": {
             "kind": "unit"
           }
@@ -7972,6 +7983,14 @@
       "request": "execution_remove"
     },
     {
+      "capability": "containers:input",
+      "request": "execution_write"
+    },
+    {
+      "capability": "containers:input",
+      "request": "execution_close_input"
+    },
+    {
       "capability": "containers:create",
       "request": "container_create"
     },
@@ -8464,6 +8483,14 @@
     {
       "reply": "done",
       "request": "execution_remove"
+    },
+    {
+      "reply": "done",
+      "request": "execution_write"
+    },
+    {
+      "reply": "done",
+      "request": "execution_close_input"
     },
     {
       "reply": "identity",
@@ -10199,6 +10226,50 @@
           }
         },
         {
+          "name": "execution_write",
+          "payload": {
+            "fields": [
+              {
+                "name": "id",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "contents",
+                "optional": false,
+                "schema": {
+                  "kind": "array",
+                  "of": {
+                    "bits": 8,
+                    "kind": "integer",
+                    "maximum": 255,
+                    "minimum": 0,
+                    "signed": false
+                  }
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "execution_close_input",
+          "payload": {
+            "fields": [
+              {
+                "name": "id",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
           "name": "container_create",
           "payload": {
             "fields": [
@@ -10506,6 +10577,13 @@
                     "kind": "string"
                   }
                 }
+              },
+              {
+                "name": "stdin",
+                "optional": true,
+                "schema": {
+                  "kind": "boolean"
+                }
               }
             ],
             "kind": "struct"
@@ -10598,6 +10676,13 @@
                   "of": {
                     "kind": "string"
                   }
+                }
+              },
+              {
+                "name": "stdin",
+                "optional": true,
+                "schema": {
+                  "kind": "boolean"
                 }
               }
             ],
@@ -13411,7 +13496,7 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:cf71e668c22acb9b",
+  "source_fingerprint": "fnv1a64:8e585bc68259392f",
   "specification_version": 1,
   "topics": [
     {

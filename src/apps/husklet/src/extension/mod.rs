@@ -18,8 +18,8 @@ pub(crate) mod acquisition;
 mod control;
 mod conversation;
 mod defaults;
-mod files;
 mod extension_state;
+mod files;
 mod host;
 mod image;
 mod inventory;
@@ -27,16 +27,17 @@ mod listener;
 mod management;
 mod management_events;
 mod registration;
-mod revision;
 mod resource;
+mod revision;
 mod roster;
 mod sidecar;
 mod state;
 mod terminal;
 
+use std::collections::HashMap;
 use std::io;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use hl_extension::port::{
     ContainerControl, ContainerInventory, ExtensionStore, HostError, ImageStore, NetworkStore, VolumeStore,
@@ -46,16 +47,16 @@ use hl_extension::port::{
 pub use control::ContainerLifecycle;
 pub use conversation::{Conversation, Interface, Queue};
 pub use defaults::{install_defaults, DEFAULT_EXTENSIONS};
-pub use files::WorkspaceDirectory;
 pub use extension_state::StateBlob;
+pub use files::WorkspaceDirectory;
 pub use host::{Audience, Events, Host, Order, Overrun, Plan, Report, Standing, Supply, WeakEvents, Workspace};
 pub use image::ImageLibrary;
 pub use inventory::ContainerCatalog;
 pub use listener::Listener;
 pub use management::ExtensionManagement;
 pub use registration::{Acquisition, Cancellation, Candidate};
-pub use revision::inventory_revision;
 pub use resource::Resources;
+pub use revision::inventory_revision;
 pub use roster::{described, Entry, Refusal, Roster, UpdateRefusal};
 pub use sidecar::{Image, Outcome, Sidecar, SidecarSpec};
 pub use state::{Fault, Records};
@@ -71,6 +72,7 @@ use crate::config::WorkspaceConfig;
 pub struct Bridge {
     runtime: tokio::runtime::Runtime,
     client: hl_client::Client,
+    execution_inputs: Arc<Mutex<HashMap<String, Option<Arc<tokio::sync::Mutex<hl_client::api::PipesInput>>>>>>,
 }
 
 impl Bridge {
@@ -83,7 +85,11 @@ impl Bridge {
             .enable_all()
             .build()?;
         let client = hl_client::Client::unix(socket).map_err(io::Error::other)?;
-        Ok(Self { runtime, client })
+        Ok(Self {
+            runtime,
+            client,
+            execution_inputs: Arc::new(Mutex::new(HashMap::new())),
+        })
     }
 
     pub(super) fn client(&self) -> &hl_client::Client {
@@ -96,6 +102,64 @@ impl Bridge {
     /// be reached from inside `runtime`.
     pub(super) fn wait<F: std::future::Future>(&self, work: F) -> F::Output {
         self.runtime.block_on(work)
+    }
+
+    pub(super) fn retain_execution_input(
+        &self,
+        id: String,
+        input: hl_client::api::PipesInput,
+        mut output: hl_client::api::PipesOutput,
+    ) -> Result<(), hl_client::api::PipesInput> {
+        let inputs = Arc::clone(&self.execution_inputs);
+        {
+            let mut retained = inputs.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            if retained.len() >= 128 {
+                return Err(input);
+            }
+            retained.insert(id.clone(), Some(Arc::new(tokio::sync::Mutex::new(input))));
+        }
+        self.runtime.spawn(async move {
+            while let Ok(Some(_)) = output.next().await {}
+            inputs
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .remove(&id);
+        });
+        Ok(())
+    }
+
+    pub(super) fn execution_input(&self, id: &str) -> Option<Arc<tokio::sync::Mutex<hl_client::api::PipesInput>>> {
+        self.execution_inputs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(id)
+            .and_then(Clone::clone)
+    }
+
+    pub(super) fn execution_input_closed(&self, id: &str) -> bool {
+        self.execution_inputs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(id)
+            .is_some_and(Option::is_none)
+    }
+
+    pub(super) fn mark_execution_input_closed(&self, id: &str) {
+        if let Some(input) = self
+            .execution_inputs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get_mut(id)
+        {
+            *input = None;
+        }
+    }
+
+    pub(super) fn forget_execution_input(&self, id: &str) {
+        self.execution_inputs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(id);
     }
 }
 

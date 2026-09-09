@@ -8,7 +8,9 @@ mod network;
 mod system;
 mod volume;
 
-pub use console::{Channel, Output, Pipes, Session, Size, Terminal, TerminalInput, TerminalOutput};
+pub use console::{
+    Channel, Output, Pipes, PipesInput, PipesOutput, Session, Size, Terminal, TerminalInput, TerminalOutput,
+};
 pub use container::{Archive, AttachOptions, Containers, StatsStream, WaitCondition};
 pub use event::{EventStream, Events};
 pub use execution::Executions;

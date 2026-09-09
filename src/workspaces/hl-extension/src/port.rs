@@ -1136,6 +1136,24 @@ pub trait ContainerControl {
         ))
     }
 
+    /// Writes one bounded chunk to a running execution's stdin. Implementations
+    /// must not acknowledge until the transport has accepted and flushed the
+    /// whole chunk, which makes ordered protocol calls the backpressure boundary.
+    fn execution_write(&self, _id: &str, _contents: &[u8]) -> Result<(), HostError> {
+        Err(HostError::Unsupported(
+            "execution stdin is unsupported by this host".into(),
+        ))
+    }
+
+    /// Explicitly half-closes a running execution's stdin. Output remains
+    /// readable through the durable execution output APIs. Idempotent only
+    /// after a successful close performed by this host lifetime.
+    fn execution_close_input(&self, _id: &str) -> Result<(), HostError> {
+        Err(HostError::Unsupported(
+            "execution stdin close is unsupported by this host".into(),
+        ))
+    }
+
     /// Starts an additional process in one complete immutable container identity,
     /// detached from the extension connection, and returns its durable exec identity.
     fn execute(
@@ -1147,6 +1165,7 @@ pub trait ContainerControl {
         _environment: &[(String, crate::ExecEnvironmentValue)],
         _user: Option<&str>,
         _working_directory: Option<&str>,
+        _stdin: bool,
     ) -> Result<String, HostError> {
         Err(HostError::Unsupported(
             "container exec is unsupported by this host".into(),
@@ -1575,8 +1594,8 @@ pub trait WorkspaceFiles {
 #[cfg(test)]
 mod tests {
     use super::{
-        Division, LayoutNode, NetworkStore, Occupant, PANE_LINES, PANE_TEXT_BYTES, PaneSummary, PaneText,
-        bounded_pane_text, pane_lines,
+        bounded_pane_text, pane_lines, Division, LayoutNode, NetworkStore, Occupant, PaneSummary, PaneText, PANE_LINES,
+        PANE_TEXT_BYTES,
     };
 
     #[test]
@@ -1711,54 +1730,44 @@ mod tests {
             protocol: crate::PROTOCOL,
             architectures: vec!["amd64".into()],
         };
-        assert!(
-            super::ExtensionCatalogue {
-                entries: vec![entry.clone()],
-                complete: true,
-            }
-            .validate()
-            .is_ok()
-        );
-        assert!(
-            super::ExtensionCatalogue {
-                entries: vec![entry.clone(), entry.clone()],
-                complete: true,
-            }
-            .validate()
-            .is_err()
-        );
-        assert!(
-            super::ExtensionCatalogue {
-                entries: vec![super::ExtensionCatalogueEntry {
-                    architectures: vec!["amd64".into(), "amd64".into()],
-                    ..entry.clone()
-                }],
-                complete: true,
-            }
-            .validate()
-            .is_err()
-        );
-        assert!(
-            super::ExtensionCatalogue {
-                entries: vec![super::ExtensionCatalogueEntry {
-                    version: String::new(),
-                    ..entry.clone()
-                }],
-                complete: true,
-            }
-            .validate()
-            .is_err()
-        );
-        assert!(
-            super::ExtensionCatalogue {
-                entries: vec![super::ExtensionCatalogueEntry {
-                    description: "unsafe\nmetadata".into(),
-                    ..entry
-                }],
-                complete: true,
-            }
-            .validate()
-            .is_err()
-        );
+        assert!(super::ExtensionCatalogue {
+            entries: vec![entry.clone()],
+            complete: true,
+        }
+        .validate()
+        .is_ok());
+        assert!(super::ExtensionCatalogue {
+            entries: vec![entry.clone(), entry.clone()],
+            complete: true,
+        }
+        .validate()
+        .is_err());
+        assert!(super::ExtensionCatalogue {
+            entries: vec![super::ExtensionCatalogueEntry {
+                architectures: vec!["amd64".into(), "amd64".into()],
+                ..entry.clone()
+            }],
+            complete: true,
+        }
+        .validate()
+        .is_err());
+        assert!(super::ExtensionCatalogue {
+            entries: vec![super::ExtensionCatalogueEntry {
+                version: String::new(),
+                ..entry.clone()
+            }],
+            complete: true,
+        }
+        .validate()
+        .is_err());
+        assert!(super::ExtensionCatalogue {
+            entries: vec![super::ExtensionCatalogueEntry {
+                description: "unsafe\nmetadata".into(),
+                ..entry
+            }],
+            complete: true,
+        }
+        .validate()
+        .is_err());
     }
 }

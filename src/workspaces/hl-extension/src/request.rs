@@ -181,6 +181,13 @@ pub enum Request {
     ExecutionRemove {
         id: String,
     },
+    ExecutionWrite {
+        id: String,
+        contents: Vec<u8>,
+    },
+    ExecutionCloseInput {
+        id: String,
+    },
     ContainerCreate {
         spec: crate::port::ContainerCreateSpec,
     },
@@ -225,6 +232,8 @@ pub enum Request {
         environment: Vec<(String, ExecEnvironmentValue)>,
         user: Option<String>,
         working_directory: Option<String>,
+        #[serde(default)]
+        stdin: bool,
     },
     /// Executes with named environment values resolved from this extension's
     /// host-protected credential store. Requires both container execution and
@@ -237,6 +246,8 @@ pub enum Request {
         credentials: Vec<(String, String)>,
         user: Option<String>,
         working_directory: Option<String>,
+        #[serde(default)]
+        stdin: bool,
     },
     ContainerAttachTerminal {
         id: String,
@@ -573,6 +584,7 @@ impl Request {
             | Self::ExecutionRemove { .. }
             | Self::ContainerExec { .. }
             | Self::ContainerExecCredential { .. } => Capability::ContainerExecute,
+            Self::ExecutionWrite { .. } | Self::ExecutionCloseInput { .. } => Capability::ContainerInput,
             Self::ContainerAttachTerminal { .. } => Capability::ContainerAttach,
             Self::ImageList | Self::ImageInspect { .. } => Capability::ImageRead,
             Self::ImagePullStart { .. } | Self::ImagePullStatus { .. } | Self::ImagePullCancel { .. } => {
@@ -906,6 +918,7 @@ mod tests {
                 command: vec!["true".into()],
                 user: None,
                 working_directory: None,
+                stdin: false,
             }
             .capability(),
             Capability::ContainerExecute

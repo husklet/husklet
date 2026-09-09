@@ -33,6 +33,11 @@ pub enum Capability {
     /// controls only those execution records.
     #[serde(rename = "containers:execute")]
     ContainerExecute,
+    /// Writes to or half-closes stdin of an already-created execution.
+    /// Separate from creating/signaling executions so a producer can be
+    /// granted input authority without broader process lifecycle control.
+    #[serde(rename = "containers:input")]
+    ContainerInput,
     /// Starts, stops, pauses, resumes, restarts, renames, or signals an
     /// explicitly consented container without granting deletion.
     #[serde(rename = "containers:lifecycle")]
@@ -141,6 +146,7 @@ impl Capability {
             Self::ContainerRead => "containers:read",
             Self::ContainerCreate => "containers:create",
             Self::ContainerExecute => "containers:execute",
+            Self::ContainerInput => "containers:input",
             Self::ContainerLifecycle => "containers:lifecycle",
             Self::ContainerRemove => "containers:remove",
             Self::ContainerAttach => "containers:attach",
@@ -188,6 +194,7 @@ impl Capability {
                 | Self::WorkspaceEnvironmentWrite
                 | Self::ContainerCreate
                 | Self::ContainerExecute
+                | Self::ContainerInput
                 | Self::ContainerLifecycle
                 | Self::ContainerRemove
                 | Self::ContainerAttach
@@ -221,6 +228,7 @@ impl Capability {
             Self::WorkspaceControl
                 | Self::ContainerCreate
                 | Self::ContainerExecute
+                | Self::ContainerInput
                 | Self::ContainerAttach
                 | Self::TerminalInput
                 | Self::TerminalProcessControl
@@ -237,6 +245,7 @@ impl Capability {
         Self::ContainerRead,
         Self::ContainerCreate,
         Self::ContainerExecute,
+        Self::ContainerInput,
         Self::ContainerLifecycle,
         Self::ContainerRemove,
         Self::ContainerAttach,

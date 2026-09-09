@@ -141,6 +141,19 @@ impl Session {
             )),
         }
     }
+
+    /// Split Docker-framed process pipes into independently owned input and output halves.
+    ///
+    /// # Errors
+    /// Returns a protocol error when this session is a raw terminal.
+    pub fn into_pipes(self) -> Result<(PipesInput, PipesOutput)> {
+        match self {
+            Self::Pipes(pipes) => Ok(pipes.split()),
+            Self::Terminal(_) => Err(Error::Protocol(
+                "cannot split a raw terminal session as framed pipes".into(),
+            )),
+        }
+    }
 }
 
 /// Raw bidirectional controlling-terminal transport.
@@ -252,6 +265,16 @@ pub struct Pipes {
 }
 
 impl Pipes {
+    fn split(self) -> (PipesInput, PipesOutput) {
+        let (read, write) = tokio::io::split(self.stream);
+        (
+            PipesInput { write },
+            PipesOutput {
+                read,
+                frame_limit: self.frame_limit,
+            },
+        )
+    }
     /// Write bytes to standard input.
     ///
     /// # Errors
@@ -309,6 +332,80 @@ impl Pipes {
             return Ok(None);
         }
         self.stream.read_exact(&mut header[1..]).await.map_err(|error| {
+            if error.kind() == std::io::ErrorKind::UnexpectedEof {
+                Error::Protocol("truncated stream frame header".into())
+            } else {
+                Error::Transport(error)
+            }
+        })?;
+        Ok(Some(header))
+    }
+}
+
+/// Independently owned stdin half of a Docker-framed process attachment.
+#[derive(Debug)]
+pub struct PipesInput {
+    write: WriteHalf<Upgrade>,
+}
+
+impl PipesInput {
+    /// Write bytes in full and flush them before acknowledging the caller.
+    pub async fn write(&mut self, bytes: &[u8]) -> Result<()> {
+        self.write.write_all(bytes).await?;
+        self.write.flush().await?;
+        Ok(())
+    }
+
+    /// Half-close stdin while leaving the independently owned output half readable.
+    pub async fn close(&mut self) -> Result<()> {
+        self.write.shutdown().await.map_err(Into::into)
+    }
+}
+
+/// Independently owned Docker-multiplexed stdout and stderr half.
+#[derive(Debug)]
+pub struct PipesOutput {
+    read: ReadHalf<Upgrade>,
+    frame_limit: usize,
+}
+
+impl PipesOutput {
+    /// Read one complete bounded Docker output frame.
+    pub async fn next(&mut self) -> Result<Option<Output>> {
+        let Some(header) = self.header().await? else {
+            return Ok(None);
+        };
+        let channel = match header[0] {
+            1 => Channel::Stdout,
+            2 => Channel::Stderr,
+            value => return Err(Error::Protocol(format!("invalid attach stream identifier {value}"))),
+        };
+        if header[1..4] != [0, 0, 0] {
+            return Err(Error::Protocol("stream frame reserved bytes are not zero".into()));
+        }
+        let length = u32::from_be_bytes([header[4], header[5], header[6], header[7]]) as usize;
+        if length > self.frame_limit {
+            return Err(Error::ResponseTooLarge {
+                limit: self.frame_limit,
+            });
+        }
+        let mut bytes = vec![0; length];
+        self.read.read_exact(&mut bytes).await.map_err(|error| {
+            if error.kind() == std::io::ErrorKind::UnexpectedEof {
+                Error::Protocol("truncated stream frame payload".into())
+            } else {
+                Error::Transport(error)
+            }
+        })?;
+        Ok(Some(Output::new(channel, Bytes::from(bytes))))
+    }
+
+    async fn header(&mut self) -> Result<Option<[u8; 8]>> {
+        let mut header = [0; 8];
+        if self.read.read(&mut header[..1]).await? == 0 {
+            return Ok(None);
+        }
+        self.read.read_exact(&mut header[1..]).await.map_err(|error| {
             if error.kind() == std::io::ErrorKind::UnexpectedEof {
                 Error::Protocol("truncated stream frame header".into())
             } else {

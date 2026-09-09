@@ -1,5 +1,5 @@
 // Generated from Rust hl-extension protocol/v1.json. Do not edit.
-// Protocol artifact fnv1a64:e4f619af414b2a00
+// Protocol artifact fnv1a64:6676bbeba59086cb
 export const PROTOCOL_SPECIFICATION_VERSION = 1;
 export const PROTOCOL_VERSION = 1;
 export const PROTOCOL_BOUNDS = Object.freeze({
@@ -56,6 +56,11 @@ export const PROTOCOL_CAPABILITIES = Object.freeze([
     "executes": true,
     "mutates": true,
     "wire": "containers:execute"
+  },
+  {
+    "executes": true,
+    "mutates": true,
+    "wire": "containers:input"
   },
   {
     "executes": false,
@@ -336,6 +341,8 @@ export const PROTOCOL_REPLIES = Object.freeze({
   "execution_kill": "done",
   "execution_cancel": "done",
   "execution_remove": "done",
+  "execution_write": "done",
+  "execution_close_input": "done",
   "container_create": "identity",
   "container_start": "done",
   "container_stop": "done",
@@ -461,6 +468,8 @@ export const PROTOCOL_REQUEST_CAPABILITIES = Object.freeze({
   "execution_kill": "containers:execute",
   "execution_cancel": "containers:execute",
   "execution_remove": "containers:execute",
+  "execution_write": "containers:input",
+  "execution_close_input": "containers:input",
   "container_create": "containers:create",
   "container_start": "containers:lifecycle",
   "container_stop": "containers:lifecycle",
@@ -657,6 +666,12 @@ const definitions = {
       },
       {
         "name": "containers:execute",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
+        "name": "containers:input",
         "payload": {
           "kind": "unit"
         }
@@ -9476,6 +9491,50 @@ const roots = {
         }
       },
       {
+        "name": "execution_write",
+        "payload": {
+          "fields": [
+            {
+              "name": "id",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            },
+            {
+              "name": "contents",
+              "optional": false,
+              "schema": {
+                "kind": "array",
+                "of": {
+                  "bits": 8,
+                  "kind": "integer",
+                  "maximum": 255,
+                  "minimum": 0,
+                  "signed": false
+                }
+              }
+            }
+          ],
+          "kind": "struct"
+        }
+      },
+      {
+        "name": "execution_close_input",
+        "payload": {
+          "fields": [
+            {
+              "name": "id",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            }
+          ],
+          "kind": "struct"
+        }
+      },
+      {
         "name": "container_create",
         "payload": {
           "fields": [
@@ -9783,6 +9842,13 @@ const roots = {
                   "kind": "string"
                 }
               }
+            },
+            {
+              "name": "stdin",
+              "optional": true,
+              "schema": {
+                "kind": "boolean"
+              }
             }
           ],
           "kind": "struct"
@@ -9875,6 +9941,13 @@ const roots = {
                 "of": {
                   "kind": "string"
                 }
+              }
+            },
+            {
+              "name": "stdin",
+              "optional": true,
+              "schema": {
+                "kind": "boolean"
               }
             }
           ],

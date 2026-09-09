@@ -89,6 +89,7 @@ export type ExtensionCapability =
   | 'containers:read'
   | 'containers:create'
   | 'containers:execute'
+  | 'containers:input'
   | 'containers:lifecycle'
   | 'containers:remove'
   | 'containers:attach'
@@ -1048,6 +1049,19 @@ export interface WorkspaceApi {
         }
     >;
     removeExecution(id: string): Promise<void>;
+    /** Write one nonempty chunk with host/transport backpressure; each chunk is limited to 65536 bytes. */
+    writeExecutionStdin(id: string, input: string | Iterable<number>): Promise<void>;
+    /** Explicitly half-close stdin without discarding durable stdout/stderr. */
+    closeExecutionStdin(id: string): Promise<void>;
+    /**
+     * Write an iterable of bounded chunks serially, optionally half-closing on successful exhaustion.
+     * Abort never implies EOF: the caller retains explicit control of whether the guest sees end-of-input.
+     */
+    pipeExecutionStdin(
+      id: string,
+      source: Iterable<string | Iterable<number>> | AsyncIterable<string | Iterable<number>>,
+      options?: { signal?: AbortSignal; close?: boolean },
+    ): Promise<{ chunks: number; bytes: number; closed: boolean }>;
     /** Inspect the exact finished cursor, remove it, then prove absence from a later complete execution catalogue. */
     removeExecutionAndWait(
       id: string,
@@ -1106,6 +1120,8 @@ export interface WorkspaceApi {
         environment?: [string, string][];
         user?: string;
         workingDirectory?: string;
+        /** Retain a bounded writable stdin attachment; additionally requires `containers:input`. */
+        stdin?: boolean;
       },
     ): Promise<string>;
     /** Execute while resolving named environment values inside the host credential boundary. */
@@ -1118,6 +1134,8 @@ export interface WorkspaceApi {
         credentials: [environment: string, key: string][];
         user?: string;
         workingDirectory?: string;
+        /** Retain a bounded writable stdin attachment; additionally requires `containers:input`. */
+        stdin?: boolean;
       },
     ): Promise<string>;
     attachTerminal(id: string, command: string[]): Promise<string>;

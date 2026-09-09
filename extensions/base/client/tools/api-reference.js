@@ -146,6 +146,9 @@ groups
     '- `host.containers.execLines(id, generation, options, onLine)` — streams bounded UTF-8 stdout records with serial callback backpressure, credential references, cancellation, and incremental stderr delivery; useful for CSV, database COPY, logs, and notification feeds.',
     '- `host.containers.execText(id, generation, options)` — executes with the same optional credential references and incrementally decodes stdout/stderr under a required aggregate `maxBytes` bound; overflow cancels the owned execution and preserves its ID in `ExecutionOperationError`.',
     '- `host.containers.execJsonLines(id, generation, options, onValue)` — streams bounded newline-delimited JSON values with serial callback backpressure; supports the same live `onStarted` identity hook, credential references, cancellation, and stderr handling.',
+    '- `host.containers.writeExecutionStdin(id, input)` — writes one 1–65536-byte chunk under the separate `containers:input` capability and acknowledges only after transport backpressure.',
+    '- `host.containers.closeExecutionStdin(id)` — explicitly half-closes stdin while durable output remains readable; disconnect does not substitute for EOF.',
+    '- `host.containers.pipeExecutionStdin(id, source, options)` — consumes bounded chunks serially and optionally closes on successful exhaustion; abort stops production without implicitly closing stdin.',
     '- `host.containers.signalExecutionAndWait(id, signal, after, options)` — arms execution observation, verifies the immutable execution cursor, signals, then awaits an explicit changed or exited state; requires `containers:read` and `containers:execute`.',
   );
 
@@ -201,7 +204,7 @@ wrong caller.
 | --- | --- | --- |
 | Code/embedding index | Strong | A bounded, completeness-bearing filesystem inventory is emitted only when declared-root state changes; ranged reads retain exact identities for incremental indexing, and private bounded state stores its checkpoint. |
 | LLM terminal agent | Strong | Pane inventory, bounded screen text, raw input, command spawn, semantic XML/actions, revisions, and change subscriptions support an observe/act loop without an MCP-specific API. |
-| PostgreSQL GUI | Strong | Exact container/network grants, process/execution APIs, bounded line/JSON output, cancellation, host-resolved credential references, published-port discovery, and virtualized rendered tables cover administration without placing passwords in argv. Credentials have host-private file isolation, not OS-keychain encryption; execution stdin and host port forwarding remain absent. |
+| PostgreSQL GUI | Strong | Exact container/network grants, process/execution APIs, bounded stdin/output, explicit EOF, cancellation, host-resolved credential references, published-port discovery, and virtualized rendered tables cover administration without placing passwords in argv. Credentials have host-private file isolation, not OS-keychain encryption; host port forwarding remains absent. |
 | Container/process inspector | Strong | Container inventories, immutable IDs and generations, exact resource selectors, process snapshots, executions, logs, lifecycle controls, and observed wait helpers are present. |
 | Single-file workspace editor | Strong | \`[filesystem]\` grants read, write, create, delete, and rename roots independently, so consent to modify one exact file cannot create, remove, or move it. \`stat\` plus \`writeObserved\` provides compare-and-swap replacement. |
 | UI inspection/automation | Strong | Native panes expose bounded, redacted semantic XML and revision-bound advertised actions; terminal panes expose bounded screen/history text. Arbitrary pixel/OCR access is intentionally absent. |

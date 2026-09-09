@@ -10,10 +10,10 @@ use std::cell::{Cell, RefCell};
 use hl_extension::port::{
     ContainerControl, ContainerInventory, ContainerOutput, ContainerSummary, DirectoryPage, Division, Entry,
     ExecutionSummary, ExtensionAcquisitionJob, ExtensionAcquisitionStatus, ExtensionCredential, ExtensionState,
-    ExtensionStateStore, ExtensionStore, ExtensionSummary, FileInventory, FileRange, FileRangeRequest, GridSize, HostError, ImageDetails,
-    ImagePruneResult, ImageStore, ImageSummary, Occupant, PaneSemanticAction, PaneSemanticTree, PaneSummary, PaneText,
-    PreferenceValue, ProcessList, SemanticActionKind, SemanticNode, TabSummary, TerminalSurface, TerminalTopology,
-    WorkspaceFiles, WorkspaceInventory, WorkspaceState,
+    ExtensionStateStore, ExtensionStore, ExtensionSummary, FileInventory, FileRange, FileRangeRequest, GridSize,
+    HostError, ImageDetails, ImagePruneResult, ImageStore, ImageSummary, Occupant, PaneSemanticAction,
+    PaneSemanticTree, PaneSummary, PaneText, PreferenceValue, ProcessList, SemanticActionKind, SemanticNode,
+    TabSummary, TerminalSurface, TerminalTopology, WorkspaceFiles, WorkspaceInventory, WorkspaceState,
 };
 use hl_extension::{
     Authority, Capability, ExtensionName, Failure, Grant, RelativePath, Reply, Request, Services, Session, Topic,
@@ -43,6 +43,7 @@ impl Ledger {
 
 struct Host {
     ledger: Ledger,
+    execution_input: RefCell<Vec<Vec<u8>>>,
     cancelled_revision: Cell<Option<u64>>,
     fail_notification: Cell<bool>,
 }
@@ -149,6 +150,7 @@ impl Host {
     fn new() -> Self {
         Self {
             ledger: Ledger::default(),
+            execution_input: RefCell::new(Vec::new()),
             cancelled_revision: Cell::new(None),
             fail_notification: Cell::new(false),
         }
@@ -334,6 +336,15 @@ impl ContainerControl for Host {
         self.ledger.note("executions.remove");
         Ok(())
     }
+    fn execution_write(&self, _id: &str, contents: &[u8]) -> Result<(), HostError> {
+        self.ledger.note("executions.write");
+        self.execution_input.borrow_mut().push(contents.to_vec());
+        Ok(())
+    }
+    fn execution_close_input(&self, _id: &str) -> Result<(), HostError> {
+        self.ledger.note("executions.close_input");
+        Ok(())
+    }
 
     fn execute(
         &self,
@@ -344,6 +355,7 @@ impl ContainerControl for Host {
         _environment: &[(String, hl_extension::ExecEnvironmentValue)],
         _user: Option<&str>,
         _working_directory: Option<&str>,
+        _stdin: bool,
     ) -> Result<String, HostError> {
         self.ledger.note("containers.exec");
         Ok("e1".into())
@@ -595,7 +607,7 @@ fn pane_semantic_read_and_control_are_separately_granted() {
         Ok(Reply::Semantics(_))
     ));
     assert!(session(&[Capability::PaneSemanticRead], &[])
-            .dispatch(&action, &services(&host))
+        .dispatch(&action, &services(&host))
         .is_err());
     session(&[Capability::PaneSemanticControl], &[])
         .dispatch(&action, &services(&host))
@@ -610,7 +622,7 @@ fn pane_semantic_read_and_control_are_separately_granted() {
 fn pane_discovery_requires_observation_without_content_authority() {
     let host = Host::new();
     assert!(session(&[], &[])
-            .dispatch(&Request::PaneList, &services(&host))
+        .dispatch(&Request::PaneList, &services(&host))
         .is_err());
     let reply = session(&[Capability::PaneObserve], &[])
         .dispatch(&Request::PaneList, &services(&host))
@@ -1429,6 +1441,7 @@ fn calls() -> Vec<(Request, Capability)> {
                 command: vec!["worker".into()],
                 user: None,
                 working_directory: None,
+                stdin: false,
             },
             Capability::ContainerExecute,
         ),
@@ -1568,7 +1581,10 @@ fn calls() -> Vec<(Request, Capability)> {
         (
             Request::FilesystemReadRanges {
                 ranges: vec![FileRangeRequest {
-                    path: path("logs/app.log"), offset: 0, limit: 8, observed: None,
+                    path: path("logs/app.log"),
+                    offset: 0,
+                    limit: 8,
+                    observed: None,
                 }],
             },
             Capability::FilesystemRead,
@@ -1711,6 +1727,7 @@ fn all_calls() -> Vec<(Request, Capability)> {
                 credentials: vec![("PGPASSWORD".into(), "postgres.password".into())],
                 user: None,
                 working_directory: None,
+                stdin: false,
             },
             Capability::ContainerExecute,
         ),
@@ -2041,26 +2058,26 @@ fn extension_acquisition_identifiers_are_bounded_before_the_host() {
     let host = Host::new();
     let mut session = session(&[Capability::ExtensionInstall], &[]);
     assert!(session
-            .dispatch(
-                &Request::ExtensionAcquisitionStart {
-                    reference: "x".repeat(513)
-                },
-                &services(&host)
-            )
+        .dispatch(
+            &Request::ExtensionAcquisitionStart {
+                reference: "x".repeat(513)
+            },
+            &services(&host)
+        )
         .is_err());
     assert!(session
-            .dispatch(
-                &Request::ExtensionAcquisitionStart {
-                    reference: "bad reference".into()
-                },
-                &services(&host)
-            )
+        .dispatch(
+            &Request::ExtensionAcquisitionStart {
+                reference: "bad reference".into()
+            },
+            &services(&host)
+        )
         .is_err());
     assert!(session
-            .dispatch(
-                &Request::ExtensionAcquisitionStatus { job: "x".repeat(129) },
-                &services(&host)
-            )
+        .dispatch(
+            &Request::ExtensionAcquisitionStatus { job: "x".repeat(129) },
+            &services(&host)
+        )
         .is_err());
     assert!(matches!(
         session.dispatch(
@@ -2945,6 +2962,7 @@ fn container_execution_lifecycle_and_removal_authority_are_independent() {
         environment: Vec::new(),
         user: None,
         working_directory: None,
+        stdin: false,
     };
     let stop = Request::ContainerStop {
         id: id.clone(),
@@ -3108,45 +3126,46 @@ fn holding_read_never_permits_the_matching_write() {
     let mut session = session(&[Capability::FilesystemRead, Capability::ContainerRead], &["logs"]);
 
     assert!(session
-            .dispatch(
-                &Request::FilesystemWrite {
-                    path: path("logs/app.log"),
-                    contents: b"x".to_vec()
-                },
-                &services(&host)
-            )
+        .dispatch(
+            &Request::FilesystemWrite {
+                path: path("logs/app.log"),
+                contents: b"x".to_vec()
+            },
+            &services(&host)
+        )
         .is_err());
     assert!(session
-            .dispatch(
-                &Request::ContainerStop {
-                    id: "c1".into(),
-                    generation: 4,
-                },
-                &services(&host)
-            )
+        .dispatch(
+            &Request::ContainerStop {
+                id: "c1".into(),
+                generation: 4,
+            },
+            &services(&host)
+        )
         .is_err());
     assert!(session
-            .dispatch(
-                &Request::ContainerKill {
-                    id: "c1".into(),
-                    generation: 4,
-                    signal: "SIGKILL".into(),
-                },
-                &services(&host),
-            )
+        .dispatch(
+            &Request::ContainerKill {
+                id: "c1".into(),
+                generation: 4,
+                signal: "SIGKILL".into(),
+            },
+            &services(&host),
+        )
         .is_err());
     assert!(session
-            .dispatch(
-                &Request::ContainerExec {
-                    environment: Vec::new(),
-                    id: "c1".into(),
-                    generation: 4,
-                    command: vec!["sh".into()],
-                    user: None,
-                    working_directory: None,
-                },
-                &services(&host),
-            )
+        .dispatch(
+            &Request::ContainerExec {
+                environment: Vec::new(),
+                id: "c1".into(),
+                generation: 4,
+                command: vec!["sh".into()],
+                user: None,
+                working_directory: None,
+                stdin: false,
+            },
+            &services(&host),
+        )
         .is_err());
     assert!(host.ledger.reached().is_empty());
 }
@@ -3177,21 +3196,21 @@ fn filesystem_read_and_write_scopes_are_independent_and_fail_before_the_service(
     host.ledger.clear();
 
     assert!(session
-            .dispatch(
-                &Request::FilesystemRead {
-                    path: path("src/lib.rs")
-                },
-                &services(&host)
-            )
+        .dispatch(
+            &Request::FilesystemRead {
+                path: path("src/lib.rs")
+            },
+            &services(&host)
+        )
         .is_ok());
     assert!(session
-            .dispatch(
-                &Request::FilesystemWrite {
-                    path: path("workspace.toml"),
-                    contents: b"x".to_vec()
-                },
-                &services(&host)
-            )
+        .dispatch(
+            &Request::FilesystemWrite {
+                path: path("workspace.toml"),
+                contents: b"x".to_vec()
+            },
+            &services(&host)
+        )
         .is_ok());
     host.ledger.clear();
     assert!(matches!(
@@ -3233,11 +3252,24 @@ fn filesystem_range_batch_confines_every_member_before_any_host_read() {
     });
     let request = Request::FilesystemReadRanges {
         ranges: vec![
-            FileRangeRequest { path: path("src/lib.rs"), offset: 0, limit: 8, observed: None },
-            FileRangeRequest { path: path("secrets.env"), offset: 0, limit: 8, observed: None },
+            FileRangeRequest {
+                path: path("src/lib.rs"),
+                offset: 0,
+                limit: 8,
+                observed: None,
+            },
+            FileRangeRequest {
+                path: path("secrets.env"),
+                offset: 0,
+                limit: 8,
+                observed: None,
+            },
         ],
     };
-    assert!(matches!(session.dispatch(&request, &services(&host)), Err(Failure::Denied { .. })));
+    assert!(matches!(
+        session.dispatch(&request, &services(&host)),
+        Err(Failure::Denied { .. })
+    ));
     assert!(host.ledger.reached().is_empty());
 }
 
@@ -3256,13 +3288,13 @@ fn one_file_write_consent_does_not_authorize_create_delete_or_rename() {
     });
 
     assert!(session
-            .dispatch(
-                &Request::FilesystemWrite {
-                    path: file.clone(),
-                    contents: b"{}".to_vec(),
-                },
-                &services(&host),
-            )
+        .dispatch(
+            &Request::FilesystemWrite {
+                path: file.clone(),
+                contents: b"{}".to_vec(),
+            },
+            &services(&host),
+        )
         .is_ok());
     host.ledger.clear();
 
@@ -3371,13 +3403,13 @@ fn execution_wait_rejects_unbounded_timeout_before_calling_host() {
     let host = Host::new();
     let mut session = session(&[Capability::ContainerRead], &[]);
     assert!(session
-            .dispatch(
-                &Request::ExecutionWait {
-                    id: "e".repeat(32),
-                    timeout_ms: 30_001
-                },
-                &services(&host)
-            )
+        .dispatch(
+            &Request::ExecutionWait {
+                id: "e".repeat(32),
+                timeout_ms: 30_001
+            },
+            &services(&host)
+        )
         .is_err());
     assert!(!host.ledger.reached().contains(&"executions.wait"));
 }
@@ -3429,14 +3461,14 @@ fn execution_logs_require_a_stream_before_calling_host() {
     let host = Host::new();
     let mut session = session(&[Capability::ContainerRead], &[]);
     assert!(session
-            .dispatch(
-                &Request::ExecutionLogs {
-                    id: "e".repeat(32),
-                    stdout: false,
-                    stderr: false
-                },
-                &services(&host)
-            )
+        .dispatch(
+            &Request::ExecutionLogs {
+                id: "e".repeat(32),
+                stdout: false,
+                stderr: false
+            },
+            &services(&host)
+        )
         .is_err());
     assert!(!host.ledger.reached().contains(&"executions.logs"));
 }
@@ -3536,6 +3568,55 @@ fn execution_output_window_is_bounded_before_inventory_authority() {
 }
 
 #[test]
+fn execution_stdin_is_bounded_authorized_and_explicitly_half_closed() {
+    let host = Host::new();
+    let id = "e".repeat(32);
+    let write = Request::ExecutionWrite {
+        id: id.clone(),
+        contents: b"select 1;\n".to_vec(),
+    };
+    let mut denied = session(&[Capability::ContainerRead], &[]);
+    assert!(matches!(
+        denied.dispatch(&write, &services(&host)),
+        Err(Failure::Denied { capability, .. }) if capability == "containers:input"
+    ));
+    assert!(host.ledger.reached().is_empty());
+
+    let mut allowed = session(&[Capability::ContainerInput], &[]);
+    for contents in [Vec::new(), vec![0; 65_537]] {
+        assert!(matches!(
+            allowed.dispatch(
+                &Request::ExecutionWrite {
+                    id: id.clone(),
+                    contents,
+                },
+                &services(&host),
+            ),
+            Err(Failure::Conflict { .. })
+        ));
+    }
+    assert!(host.ledger.reached().is_empty(), "invalid chunks reached the host");
+
+    assert_eq!(allowed.dispatch(&write, &services(&host)), Ok(Reply::Done));
+    assert_eq!(
+        allowed.dispatch(&Request::ExecutionCloseInput { id }, &services(&host),),
+        Ok(Reply::Done)
+    );
+    assert_eq!(host.execution_input.borrow().as_slice(), [b"select 1;\n".to_vec()]);
+    assert_eq!(
+        host.ledger.reached(),
+        vec![
+            "executions.inspect",
+            "containers.list",
+            "executions.write",
+            "executions.inspect",
+            "containers.list",
+            "executions.close_input",
+        ]
+    );
+}
+
+#[test]
 fn container_exec_returns_the_real_execution_identity() {
     let host = Host::new();
     let mut session = session(&[Capability::ContainerExecute], &[]);
@@ -3548,6 +3629,7 @@ fn container_exec_returns_the_real_execution_identity() {
             command: vec!["worker".into()],
             user: None,
             working_directory: None,
+            stdin: false,
         },
         &services(&host),
     );
@@ -3570,12 +3652,39 @@ fn container_exec_returns_the_real_execution_identity() {
                 command: vec!["worker".into()],
                 user: Some("1000".into()),
                 working_directory: Some("/work".into()),
+                stdin: false,
             },
             &services(&host),
         )
         .expect("exec starts");
     assert_eq!(reply, Reply::Identity("e1".into()));
     assert_eq!(host.ledger.reached(), vec!["containers.list", "containers.exec"]);
+}
+
+#[test]
+fn retaining_execution_stdin_requires_input_authority_in_addition_to_execute() {
+    let host = Host::new();
+    let request = Request::ContainerExec {
+        id: "c".repeat(64),
+        generation: 4,
+        command: vec!["cat".into()],
+        environment: Vec::new(),
+        user: None,
+        working_directory: None,
+        stdin: true,
+    };
+    let mut execute_only = session(&[Capability::ContainerExecute], &[]);
+    assert!(matches!(
+        execute_only.dispatch(&request, &services(&host)),
+        Err(Failure::Denied { capability, .. }) if capability == "containers:input"
+    ));
+    assert!(host.ledger.reached().is_empty());
+
+    let mut interactive = session(&[Capability::ContainerExecute, Capability::ContainerInput], &[]);
+    assert_eq!(
+        interactive.dispatch(&request, &services(&host)),
+        Ok(Reply::Identity("e1".into()))
+    );
 }
 
 #[test]
@@ -3597,6 +3706,7 @@ fn exec_environment_is_bounded_unique_and_redacted_before_service_access() {
         ],
         user: None,
         working_directory: None,
+        stdin: false,
     };
     assert!(!format!("{request:?}").contains(secret));
     let failure = session
@@ -3631,6 +3741,7 @@ fn exec_environment_is_bounded_unique_and_redacted_before_service_access() {
             environment,
             user: None,
             working_directory: None,
+            stdin: false,
         };
         assert!(matches!(
             session.dispatch(&request, &services(&host)),
@@ -3648,6 +3759,7 @@ fn exec_environment_is_bounded_unique_and_redacted_before_service_access() {
                 environment: vec![("PGPASSWORD".into(), hl_extension::ExecEnvironmentValue::new(secret))],
                 user: None,
                 working_directory: None,
+                stdin: false,
             },
             &services(&host),
         )
@@ -3666,6 +3778,7 @@ fn credential_execution_requires_both_grants_and_resolves_only_inside_the_host()
         credentials: vec![("PGPASSWORD".into(), "postgres.password".into())],
         user: None,
         working_directory: None,
+        stdin: false,
     };
     let host = Host::new();
     let state = CredentialPort { read: Cell::new(false) };
@@ -3858,7 +3971,7 @@ fn a_topic_cannot_be_followed_without_its_namespace_capability() {
     let mut session = session(&[Capability::ContainerRead], &[]);
 
     assert!(session
-            .dispatch(&Request::EventSubscribe { topic: Topic::Terminal }, &services(&host))
+        .dispatch(&Request::EventSubscribe { topic: Topic::Terminal }, &services(&host))
         .is_err());
     assert!(!session.may_emit(Topic::Terminal));
 }

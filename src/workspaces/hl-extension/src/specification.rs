@@ -79,6 +79,8 @@ const REQUEST_TO_REPLY: &[(&str, &str)] = &[
     ("execution_kill", "done"),
     ("execution_cancel", "done"),
     ("execution_remove", "done"),
+    ("execution_write", "done"),
+    ("execution_close_input", "done"),
     ("container_create", "identity"),
     ("container_start", "done"),
     ("container_stop", "done"),
@@ -201,6 +203,7 @@ fn request_capability(request: &str) -> Capability {
         "container_exec" | "container_exec_credential" | "execution_kill" | "execution_cancel" | "execution_remove" => {
             Capability::ContainerExecute
         }
+        "execution_write" | "execution_close_input" => Capability::ContainerInput,
         "container_attach_terminal" => Capability::ContainerAttach,
         "image_list" | "image_inspect" => Capability::ImageRead,
         "image_pull_start" | "image_pull_status" | "image_pull_cancel" => Capability::ImagePull,

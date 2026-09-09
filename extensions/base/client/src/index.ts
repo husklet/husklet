@@ -388,6 +388,29 @@ function exactPaneInput(input: string | Iterable<number>) {
   return Uint8Array.from(values);
 }
 
+function exactExecutionInput(input: string | Iterable<number>) {
+  if (typeof input === 'string') {
+    const bytes = new Uint8Array(64 * 1024 + 1);
+    const encoded = new TextEncoder().encodeInto(input, bytes);
+    if (encoded.read !== input.length || encoded.written === 0 || encoded.written > 64 * 1024) {
+      throw new RangeError('execution stdin chunks must contain between 1 and 65536 UTF-8 bytes');
+    }
+    return bytes.subarray(0, encoded.written);
+  }
+  const values: number[] = [];
+  for (const value of input ?? []) {
+    if (values.length === 64 * 1024)
+      throw new RangeError('execution stdin chunks must contain between 1 and 65536 bytes');
+    if (!Number.isInteger(value) || value < 0 || value > 255) {
+      throw new TypeError('execution stdin bytes must be integers from 0 through 255');
+    }
+    values.push(value);
+  }
+  if (values.length === 0)
+    throw new RangeError('execution stdin chunks must contain between 1 and 65536 bytes');
+  return Uint8Array.from(values);
+}
+
 function exactStateBytes(input: Iterable<number>) {
   const values: number[] = [];
   for (const value of input ?? []) {
@@ -839,6 +862,47 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
         done('execution_remove', {
           id: immutableIdentity(id, [32], 'execution'),
         }),
+      writeExecutionStdin: (id, input) => {
+        const contents = exactExecutionInput(input);
+        return done('execution_write', {
+          id: immutableIdentity(id, [32], 'execution'),
+          contents: [...contents],
+        });
+      },
+      closeExecutionStdin: (id) =>
+        done('execution_close_input', {
+          id: immutableIdentity(id, [32], 'execution'),
+        }),
+      pipeExecutionStdin: async (
+        id,
+        source,
+        { signal, close = true }: { signal?: AbortSignal; close?: boolean } = {},
+      ) => {
+        const executionId = immutableIdentity(id, [32], 'execution');
+        if (
+          source === null ||
+          source === undefined ||
+          (typeof source[Symbol.asyncIterator] !== 'function' &&
+            typeof source[Symbol.iterator] !== 'function')
+        ) {
+          throw new TypeError('execution stdin source must be an iterable of bounded chunks');
+        }
+        let chunks = 0;
+        let bytes = 0;
+        for await (const chunk of source) {
+          requireOutputActive(signal);
+          const contents = exactExecutionInput(chunk);
+          await api.containers.writeExecutionStdin(executionId, contents);
+          chunks += 1;
+          bytes += contents.byteLength;
+          requireOutputActive(signal);
+        }
+        if (close) {
+          requireOutputActive(signal);
+          await api.containers.closeExecutionStdin(executionId);
+        }
+        return { chunks, bytes, closed: close };
+      },
       create: async (configuration) => {
         if (!configuration || typeof configuration !== 'object' || Array.isArray(configuration)) {
           throw new TypeError('container creation requires a configuration object');
@@ -886,11 +950,13 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
           environment = [],
           user,
           workingDirectory,
+          stdin = false,
         }: {
           command?: string[];
           environment?: [string, string][];
           user?: string;
           workingDirectory?: string;
+          stdin?: boolean;
         } = {},
       ) =>
         expect(
@@ -900,13 +966,14 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
             environment: exactExecEnvironment(environment),
             user: user ?? null,
             working_directory: workingDirectory ?? null,
+            ...(stdin ? { stdin: true } : {}),
           }),
           'identity',
         ),
       execWithCredentials: async (
         id,
         generation,
-        { command, environment = [], credentials, user, workingDirectory },
+        { command, environment = [], credentials, user, workingDirectory, stdin = false },
       ) =>
         expect(
           await session.call('container_exec_credential', {
@@ -919,6 +986,7 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
             ]),
             user: user ?? null,
             working_directory: workingDirectory ?? null,
+            ...(stdin ? { stdin: true } : {}),
           }),
           'identity',
         ),
@@ -3667,6 +3735,8 @@ const facadeOverrides = Object.freeze({
   execution_kill: 'containers.signalExecution',
   execution_cancel: 'containers.cancelExecution',
   execution_remove: 'containers.removeExecution',
+  execution_write: 'containers.writeExecutionStdin',
+  execution_close_input: 'containers.closeExecutionStdin',
   container_attach_terminal: 'containers.attachTerminal',
   container_exec_credential: 'containers.execWithCredentials',
   image_pull_start: 'images.startPull',
@@ -3768,6 +3838,9 @@ export const protocolCoverage = Object.freeze({
       'signalExecution',
       'cancelExecution',
       'removeExecution',
+      'writeExecutionStdin',
+      'closeExecutionStdin',
+      'pipeExecutionStdin',
       'create',
       'start',
       'stop',

@@ -71,6 +71,47 @@ async fn session_upgrades_writes_closes_and_decodes_ordered_output() {
 }
 
 #[tokio::test]
+async fn split_pipe_halves_apply_write_backpressure_and_keep_output_alive_after_eof() {
+    let root = TempDir::new().unwrap();
+    let socket = root.path().join("daemon.sock");
+    let listener = listener(&socket);
+    let server = tokio::spawn(async move {
+        let (mut peer, _) = listener.accept().await.unwrap();
+        request(&mut peer).await;
+        peer.write_all(b"HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\n")
+            .await
+            .unwrap();
+        let mut input = [0; 8];
+        peer.read_exact(&mut input).await.unwrap();
+        assert_eq!(&input, b"one\ntwo\n");
+        assert_eq!(
+            peer.read(&mut input).await.unwrap(),
+            0,
+            "writer half was explicitly closed"
+        );
+        for fragment in [&b"\x01\0\0"[..], &b"\0\0\0\0\x05do"[..], &b"ne\n"[..]] {
+            peer.write_all(fragment).await.unwrap();
+        }
+    });
+
+    let session = Client::unix(&socket)
+        .unwrap()
+        .containers()
+        .attach("split", true, true, true)
+        .await
+        .unwrap();
+    let (mut input, mut output) = session.into_pipes().unwrap();
+    input.write(b"one\n").await.unwrap();
+    input.write(b"two\n").await.unwrap();
+    input.close().await.unwrap();
+    let frame = output.next().await.unwrap().unwrap();
+    assert_eq!(frame.channel(), Channel::Stdout);
+    assert_eq!(frame.bytes().as_ref(), b"done\n");
+    assert!(output.next().await.unwrap().is_none());
+    server.await.unwrap();
+}
+
+#[tokio::test]
 async fn terminal_session_preserves_raw_chunks_writes_and_eof() {
     let root = TempDir::new().unwrap();
     let socket = root.path().join("daemon.sock");
