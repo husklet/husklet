@@ -60,7 +60,7 @@ const BY_TAG: Record<string, Record<string, StoryValue>> = {
   Switch: { checked: true },
   Checkbox: { checked: true },
   Radio: { checked: true },
-  ToggleButton: { checked: true },
+  ToggleButton: { label: 'Toggle button', checked: true },
   Expander: { expanded: true },
   Accordion: { expanded: true },
   Entry: { value: 'Editable text' },

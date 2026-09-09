@@ -13,6 +13,7 @@ import {
   SEARCH_RESULT_LIMIT,
   interactionDetail,
   interactionProps,
+  exampleFor,
   searchResults,
 } from '../dist/app.js';
 import { grouped, tags } from '../dist/catalogue.js';
@@ -80,6 +81,37 @@ test('every component renders with its defaults as sane patches', () => {
       `<${tag.name}> arrived with no properties and no children`,
     );
   }
+});
+
+test('every catalogue component receives a complete generated reference page', () => {
+  for (const tag of tags) {
+    const frame = host().render(
+      h(Preview, {
+        name: tag.name,
+        opened: defaults(tag.name),
+        triggers: tag.triggers,
+      }),
+    );
+    const labels = frame.patches
+      .filter((patch) => patch.SetProp?.prop === 'Label')
+      .map((patch) => patch.SetProp.value.Text);
+    assert.ok(labels.includes('Overview'), `<${tag.name}> has no overview`);
+    assert.ok(labels.includes('API'), `<${tag.name}> has no API reference`);
+    assert.ok(labels.includes('Usage'), `<${tag.name}> has no usage guidance`);
+    assert.ok(labels.includes('Interactions'), `<${tag.name}> has no interaction contract`);
+    assert.ok(
+      created(frame.patches).some((entry) => entry.tag === tag.name),
+      `<${tag.name}> has no live specimen`,
+    );
+  }
+});
+
+test('generated examples are concise valid-looking JSX derived from specimen defaults', () => {
+  assert.equal(
+    exampleFor('Button', { label: 'Run task', enabled: true, size: 'small', pad: { top: 2 } }),
+    '<Button label="Run task" enabled={true} size="small" />',
+  );
+  assert.equal(exampleFor('Column', {}), '<Column />');
 });
 
 test('the playground renders flows and only one bounded component family', () => {
@@ -484,7 +516,7 @@ test('the preview demonstrates declared interactions with a live bounded console
   const preview = node(first.patches, 'Button', 'Button');
   assert.ok(preview, 'the interactive preview button is absent');
   assert.ok(
-    node(first.patches, 'InlineMessage', 'Interact with the preview to inspect onInvoke, onKey.'),
+    node(first.patches, 'InlineMessage', 'Interact with the specimen to inspect onInvoke, onKey.'),
   );
 
   const before = stage.frames.length;
@@ -566,7 +598,7 @@ test('the interaction console preserves a bounded sequence and can be cleared', 
     stage.surface.dispatch({ trigger: 'Invoke', node: clear, id: `${clear}:Invoke`, value: null }),
   );
   assert.ok(
-    node(stage.since(before), 'InlineMessage', 'Interact with the preview to inspect onInvoke.'),
+    node(stage.since(before), 'InlineMessage', 'Interact with the specimen to inspect onInvoke.'),
   );
 });
 

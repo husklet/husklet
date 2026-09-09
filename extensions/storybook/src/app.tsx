@@ -28,7 +28,13 @@ import {
 
 import { component, grouped, notes, type Family, type Tag } from './catalogue.js';
 import { OPENING, defaults, spaced, type StoryChild, type StoryDefaults } from './defaults.js';
-import { amountOf, lengthValue, modeOf, type ControlRow } from './editors.js';
+import { amountOf, lengthValue, modeOf, rows, type ControlRow } from './editors.js';
+import {
+  ApiReference,
+  ComponentDocument,
+  DocumentationSection,
+  SpecimenGrid,
+} from './component-document.js';
 import { LargeDataTableStory, LargeRecordSource } from './large-table.js';
 import { ACQUISITION_STORY, AcquisitionProgressStory } from './acquisition.js';
 import { FORM_STORY, ValidatedSettingsFormStory } from './form.js';
@@ -351,6 +357,18 @@ export function Preview({
   // stories are exhausted by the branches above and intentionally have no defaults.
   const instance = opened as StoryDefaults;
   const flow = FLOW_STORIES.includes(name);
+  if (!flow && !(name === 'DataTable' && largeSource)) {
+    return (
+      <CatalogueDocument
+        name={name}
+        instance={instance}
+        handlers={handlers}
+        triggers={triggers}
+        interactions={interactions}
+        clearInteractions={() => setInteractions([])}
+      />
+    );
+  }
   return (
     <Column grow={true} gap={2} pad={4}>
       {flow ? null : <Heading key={'title'} label={spaced(name)} scale={'title'} wrap={true} />}
@@ -469,6 +487,123 @@ export function Preview({
           ]}
     </Column>
   );
+}
+
+/**
+ * The generated reference page every catalogue component receives. Bespoke
+ * pages replace this baseline only when they can teach more, never with less.
+ */
+export function CatalogueDocument({
+  name,
+  instance,
+  handlers,
+  triggers,
+  interactions,
+  clearInteractions,
+}: {
+  name: string;
+  instance: StoryDefaults;
+  handlers: Record<string, (event: Report) => void>;
+  triggers: string[];
+  interactions: Interaction[];
+  clearInteractions: () => void;
+}) {
+  const contract = component(name);
+  const family = grouped().find((candidate) => candidate.name === contract.family);
+  const summary =
+    family?.note ?? `${spaced(name)} belongs to the ${family?.label ?? contract.family} family.`;
+  const specimen = nativeComponent(
+    name,
+    { ...present(instance.props), ...handlers },
+    instance.children.map(child),
+  );
+  return (
+    <ComponentDocument name={spaced(name)} summary={summary}>
+      <DocumentationSection title="Overview">
+        <Section pad={3} width="fill">
+          {specimen}
+        </Section>
+      </DocumentationSection>
+      <DocumentationSection title="API">
+        <ApiReference example={exampleFor(name, instance.props)} rows={rows(name)} />
+      </DocumentationSection>
+      <SpecimenGrid>
+        <DocumentationSection title="Usage">
+          <Text
+            label={`Use ${spaced(name)} for ${family?.label.toLocaleLowerCase() ?? contract.family} interfaces. Prefer its semantic properties over manual sizing or color overrides.`}
+            color="text-dim"
+            wrap
+          />
+        </DocumentationSection>
+        <DocumentationSection title="Interactions">
+          <Text
+            label={
+              triggers.length === 0
+                ? 'Presentational component. It reports no direct user interaction.'
+                : `Reports ${triggers.map((trigger) => `on${trigger}`).join(', ')}. Exercise the live specimen to inspect bounded event details.`
+            }
+            color="text-dim"
+            wrap
+          />
+        </DocumentationSection>
+      </SpecimenGrid>
+      {triggers.length > 0 ? (
+        <DocumentationSection title="Event inspector">
+          <InteractionConsole
+            interactions={interactions}
+            triggers={triggers}
+            onClear={clearInteractions}
+          />
+        </DocumentationSection>
+      ) : null}
+    </ComponentDocument>
+  );
+}
+
+function InteractionConsole({
+  interactions,
+  triggers,
+  onClear,
+}: {
+  interactions: Interaction[];
+  triggers: string[];
+  onClear: () => void;
+}) {
+  return (
+    <Column gap={1}>
+      <Row align="center" gap={1}>
+        <Text label="Recent interactions" color="text-dim" grow />
+        {interactions.length > 0 ? (
+          <Button label="Clear" size="small" variant="ghost" onInvoke={onClear} />
+        ) : null}
+      </Row>
+      {interactions.length === 0 ? (
+        <InlineMessage
+          label={`Interact with the specimen to inspect ${triggers.map((trigger) => `on${trigger}`).join(', ')}.`}
+          tone="neutral"
+        />
+      ) : (
+        interactions.map((interaction) => (
+          <InlineMessage
+            key={interaction.sequence}
+            label={`#${interaction.sequence} ${interaction.trigger} received${interaction.detail ? ` · ${interaction.detail}` : ''}`}
+            tone="positive"
+          />
+        ))
+      )}
+    </Column>
+  );
+}
+
+/** A concise copyable starting point derived from the same defaults as the specimen. */
+export function exampleFor(name: string, props: Record<string, unknown>): string {
+  const written = Object.entries(props)
+    .filter(([, value]) => ['string', 'number', 'boolean'].includes(typeof value))
+    .slice(0, 3)
+    .map(([key, value]) =>
+      typeof value === 'string' ? `${key}=${JSON.stringify(value)}` : `${key}={${String(value)}}`,
+    );
+  return `<${name}${written.length > 0 ? ` ${written.join(' ')}` : ''} />`;
 }
 
 /** Real handlers for every interaction the selected component declares. */

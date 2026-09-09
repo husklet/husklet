@@ -21,6 +21,7 @@ mod unix {
         "Entry",
         "Select",
         "Switch",
+        "ToggleButton",
         "Extension acquisition",
         "Validated settings form",
         "Keyboard and semantic actions",
@@ -706,6 +707,9 @@ mod unix {
                     switch.tooltip_text().as_deref() == Some("Restore panes on launch")
                 })
                 .set_active(false);
+            }
+            "ToggleButton" => {
+                find::<gtk::ToggleButton>(root, |_| true).emit_clicked();
             }
             "DataTable" => {
                 let entry = find::<gtk::Entry>(root, |entry| entry.text().starts_with("record-"));
