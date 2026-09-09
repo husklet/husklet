@@ -7,6 +7,7 @@ import {
   CardContent,
   CardHeader,
   Column,
+  Container,
   ConfirmAction,
   Entry,
   Expander,
@@ -682,7 +683,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
 
   const content = (
     <Scroll grow width="fill" height="fill">
-      <Column pad={2} gap={2}>
+      <Container pad={2} gap={2}>
         <Heading label="Extensions" scale="title" />
         <Text label="Add trusted tools and control their workspace access." color="text-dim" wrap />
         <Column gap={3} width="fill">
@@ -1394,7 +1395,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
             </ResourceState>
           </Column>
         </Column>
-      </Column>
+      </Container>
     </Scroll>
   );
   return (

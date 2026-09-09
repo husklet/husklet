@@ -7,6 +7,7 @@ import {
   CardContent,
   CardHeader,
   Column,
+  Container,
   ConfirmAction,
   EmptyState,
   Entry,
@@ -569,10 +570,14 @@ function Page({
 }) {
   return (
     <Scroll grow width="fill" height="fill">
-      <Column width="fill" pad={2} gap={2}>
-        <Heading label={label} scale="title" />
-        <Text label={subtitle} color="text-dim" wrap />
-        {children}
+      <Column width="fill" pad={2}>
+        <Container>
+          <Column width="fill" gap={2}>
+            <Heading label={label} scale="title" />
+            <Text label={subtitle} color="text-dim" wrap />
+            {children}
+          </Column>
+        </Container>
       </Column>
     </Scroll>
   );

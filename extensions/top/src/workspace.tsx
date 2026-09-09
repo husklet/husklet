@@ -9,6 +9,7 @@ import {
   CardContent,
   ColorPicker,
   Column,
+  Container,
   Entry,
   FormControlLabel,
   Heading,
@@ -173,8 +174,8 @@ export function Workspace({ api }: { api: WorkspaceApi }) {
   const dirty = hydrated && changedFrom(configuration, observed, numbers);
   return (
     <Scroll grow width="fill" height="fill">
-      <Column pad={2} gap={2}>
-        <Card grow={false} width="fill" variant="outline">
+      <Container pad={2} gap={2}>
+        <Card grow={false} width="fill" variant="plain">
           <CardContent gap={2}>
             <Heading label="Workspace" scale="title" />
             <Text
@@ -351,7 +352,7 @@ export function Workspace({ api }: { api: WorkspaceApi }) {
             </SettingsGroup>
           </CardContent>
         </Card>
-      </Column>
+      </Container>
     </Scroll>
   );
 }

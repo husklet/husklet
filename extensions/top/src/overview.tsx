@@ -153,7 +153,6 @@ export function Overview({
       <Column width="fill" pad={2} gap={2}>
         <Row width="fill" gap={1} align="center" wrap>
           <Heading label="Workspace overview" scale="title" />
-          <Spacer />
           {refreshing ? <Spinner /> : null}
           <Button
             label={refreshing ? 'Refreshing…' : 'Refresh all'}
@@ -162,7 +161,7 @@ export function Overview({
           />
         </Row>
         <Text label="Current inventory and reported runtime attention." color="text-dim" wrap />
-        <Row width="fill" gap={2} wrap>
+        <Row width="fill" gap={1} wrap>
           <Summary title="Containers" {...containersSummary} onOpen={() => onOpen('containers')} />
           <Summary
             title="Processes"
@@ -214,9 +213,9 @@ function Summary({
   onOpen: () => void;
 }) {
   return (
-    <Card grow={false} width={{ minimum: { chars: 20 } }} variant="outline">
-      <CardActionArea tooltip={`Open ${label}`} onInvoke={onOpen}>
-        <CardContent gap={1} pad={1}>
+    <Card grow={false} width={{ minimum: { chars: 26 } }} variant="plain">
+      <CardActionArea variant="filled" tooltip={`Open ${label}`} onInvoke={onOpen}>
+        <CardContent gap={1} pad={2}>
           <Row gap={1} align="center" width="fill">
             <Text label={label} color="text-dim" />
             <Spacer />
