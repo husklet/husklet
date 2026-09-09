@@ -488,7 +488,8 @@ test('Top owns workspace settings and extension management in the same tab', asy
   invoke(stage, 'Extensions');
   await settled();
   await settled();
-  assert.ok(labelled(stage, 'Browse extensions'));
+  assert.ok(labelled(stage, 'Discover'));
+  assert.ok(labelled(stage, '1 available extension'));
   assert.ok(labelled(stage, 'Component playground'));
   assert.ok(
     labelled(stage, 'Image · ghcr.io/husklet/husklet/extension-storybook:latest'),
@@ -503,10 +504,10 @@ test('Top owns workspace settings and extension management in the same tab', asy
   );
   assert.ok(labelled(stage, 'No extensions installed'));
   assert.equal(labelled(stage, 'Workspace control'), undefined);
-  assert.deepEqual(ancestorTags(stage, 'Browse extensions').slice(0, 2), ['Column', 'Column']);
+  assert.deepEqual(ancestorTags(stage, 'Discover').slice(0, 3), ['Row', 'Column', 'Column']);
   assert.deepEqual(ancestorTags(stage, 'Installed').slice(0, 3), ['Row', 'Column', 'Column']);
   assert.deepEqual(
-    ancestorProperty(stage, 'Browse extensions', 'Column', 'Width'),
+    ancestorProperty(stage, 'Discover', 'Column', 'Width'),
     { Length: 'Fill' },
     'extension sections use the full page width without separating related content',
   );
@@ -516,7 +517,7 @@ test('Top owns workspace settings and extension management in the same tab', asy
   );
   assert.equal(labelled(stage, 'Version 2.0.0'), undefined, 'the header version is not repeated');
   assert.ok(labelled(stage, 'Technical details'));
-  assert.deepEqual(ancestorTags(stage, 'Review Component playground installation').slice(0, 5), [
+  assert.deepEqual(ancestorTags(stage, 'Review Component playground').slice(0, 5), [
     'Row',
     'CardContent',
     'Card',
@@ -531,6 +532,11 @@ test('Top owns workspace settings and extension management in the same tab', asy
   assert.deepEqual(ancestorProperty(stage, 'Component playground', 'Card', 'Width'), {
     Length: 'Fill',
   });
+  assert.deepEqual(
+    taggedProperty(stage, 'Refresh installed extensions', 'IconButton', 'Icon'),
+    { Text: 'view-refresh-symbolic' },
+    'inventory refresh is a compact icon action instead of a competing text button',
+  );
   assert.equal(
     taggedProperty(stage, 'Install from an OCI image', 'Expander', 'Expanded')?.Flag,
     false,
@@ -727,7 +733,7 @@ test('extension discovery reviews the first-party Storybook without requiring a 
     }),
   );
   await settled();
-  invoke(stage, 'Review Component playground installation');
+  invoke(stage, 'Review Component playground');
   await settled();
   await settled();
   assert.deepEqual(references, ['ghcr.io/husklet/husklet/extension-storybook:latest']);
@@ -784,11 +790,11 @@ test('extension discovery keeps unknown compatibility reviewable and blocks know
   await settled();
   await settled();
   assert.ok(labelled(stage, 'Compatibility not declared'));
-  assert.equal(isEnabled(stage, 'Review Unknown installation'), true);
+  assert.equal(isEnabled(stage, 'Review Unknown'), true);
   assert.ok(labelled(stage, 'Incompatible · supports arm64; workspace is amd64'));
-  assert.equal(isEnabled(stage, 'Review ARM only installation'), false);
+  assert.equal(isEnabled(stage, 'Review ARM only'), false);
   assert.ok(labelled(stage, 'Incompatible · requires protocol 999; this client uses 1'));
-  assert.equal(isEnabled(stage, 'Review Future protocol installation'), false);
+  assert.equal(isEnabled(stage, 'Review Future protocol'), false);
 });
 
 test('an installed catalogue extension exposes its update review without retyping a reference', async () => {
@@ -837,7 +843,7 @@ test('an installed catalogue extension exposes its update review without retypin
   assert.ok(labelled(stage, 'Review update'));
   assert.ok(labelled(stage, 'Update to Version 2.0.0 · Compatibility not declared'));
   assert.equal(
-    labelled(stage, 'Review Component playground installation'),
+    labelled(stage, 'Review Component playground'),
     undefined,
     'installed catalogue entries do not also appear as new installations',
   );
@@ -1080,7 +1086,7 @@ test('extension discovery can retry a failed catalogue without leaving the page'
   invoke(stage, 'Retry catalogue');
   await settled();
   assert.equal(attempts, 2);
-  assert.ok(labelled(stage, 'Review Component playground installation'));
+  assert.ok(labelled(stage, 'Review Component playground'));
 });
 
 test('extension inspection keeps invalid and failed references recoverable with a direct retry', async () => {
@@ -1766,6 +1772,15 @@ test('installed extensions expose truthful enabled, disabled, fault and retry st
     }),
   );
   await settled();
+  assert.ok(labelled(stage, 'Manage extension'));
+  assert.ok(
+    ancestorTags(stage, 'Disable').includes('Expander'),
+    'secondary lifecycle controls stay inside one compact management disclosure',
+  );
+  assert.ok(
+    ancestorTags(stage, 'Remove').includes('Expander'),
+    'destructive removal does not compete with the primary card action',
+  );
   invoke(stage, 'Disable');
   invoke(stage, 'Disable');
   await settled();

@@ -12,6 +12,7 @@ import {
   Expander,
   FormControlLabel,
   Heading,
+  IconButton,
   InlineMessage,
   RecoveryState,
   ResourceState,
@@ -683,18 +684,24 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
     <Scroll grow width="fill" height="fill">
       <Column pad={2} gap={2}>
         <Heading label="Extensions" scale="title" />
-        <Text
-          label="Install, update, enable, disable, and remove workspace extensions."
-          color="text-dim"
-          wrap
-        />
+        <Text label="Add trusted tools and control their workspace access." color="text-dim" wrap />
         <Column gap={3} width="fill">
           <Column gap={2} width="fill">
-            {!acquisition && <Heading label="Browse extensions" scale="caption" />}
+            {!acquisition && (
+              <Row gap={1} wrap>
+                <Heading label="Discover" scale="caption" grow={false} align="start" />
+                {catalogueState === 'ready' && availableCatalogue.length > 0 ? (
+                  <Badge
+                    label={countLabel(availableCatalogue.length, 'available extension')}
+                    tone="neutral"
+                  />
+                ) : null}
+              </Row>
+            )}
             {!acquisition && (
               <Column gap={2}>
                 <Text
-                  label="Add trusted tools to this workspace. You will review access before anything is installed."
+                  label="Curated for Husklet. Nothing is installed until you review its exact access."
                   color="text-dim"
                   width={COPY_WIDTH}
                   wrap
@@ -721,7 +728,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                     {availableCatalogue.map((entry) => {
                       const compatibility = catalogueCompatibility(entry, workspaceArchitecture);
                       return (
-                        <Card key={entry.id} grow={false} width="fill" variant="filled">
+                        <Card key={entry.id} grow={false} width="fill" variant="outline">
                           <CardHeader
                             label={entry.title}
                             detail={`${entry.publisher} · Version ${entry.version}`}
@@ -748,7 +755,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                             </Row>
                             <Row>
                               <Button
-                                label={`Review ${entry.title} installation`}
+                                label={`Review ${entry.title}`}
                                 variant="filled"
                                 tone="accent"
                                 enabled={!busy && compatibility.compatible !== false}
@@ -1233,11 +1240,15 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
             )}
           </Column>
           <Column gap={2} width="fill">
-            <Row gap={2}>
-              <Heading label="Installed" scale="caption" />
-              <Button
-                label="Refresh"
-                variant="outline"
+            <Row gap={1} wrap>
+              <Heading label="Installed" scale="caption" grow={false} align="start" />
+              {inventoryState !== 'loading' ? (
+                <Badge label={countLabel(installed.length, 'extension')} tone="neutral" />
+              ) : null}
+              <IconButton
+                label="Refresh installed extensions"
+                icon="view-refresh-symbolic"
+                variant="ghost"
                 enabled={!busy && inventoryState !== 'loading'}
                 onInvoke={reload}
               />
@@ -1272,7 +1283,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                       key={`${extension.name}:${extension.image_digest}`}
                       grow={false}
                       width="fill"
-                      variant="filled"
+                      variant="outline"
                     >
                       <CardHeader
                         label={extension.name}
@@ -1294,7 +1305,6 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                           ) : null}
                         </Row>
                         <ExtensionFault extension={extension} />
-                        <InstalledPermissionSummary extension={extension} />
                         {updateCompatibility ? (
                           <Text
                             label={
@@ -1337,15 +1347,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                               enabled={!busy}
                               onInvoke={() => lifecycle(extension, 'retry')}
                             />
-                          ) : extension.enabled ? (
-                            <Button
-                              key="lifecycle"
-                              label="Disable"
-                              variant="ghost"
-                              enabled={!busy}
-                              onInvoke={() => lifecycle(extension, 'disable')}
-                            />
-                          ) : (
+                          ) : !extension.enabled ? (
                             <Button
                               key="lifecycle"
                               label="Enable"
@@ -1354,19 +1356,36 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                               enabled={!busy}
                               onInvoke={() => lifecycle(extension, 'enable')}
                             />
-                          )}
-                          {extension.name !== 'top' && (
-                            <ConfirmAction
-                              key="remove"
-                              label="Remove"
-                              confirmLabel={`Remove ${extension.name}`}
-                              question={`Remove ${extension.name} from this workspace?`}
-                              authorityKey={extension.image_digest}
-                              enabled={!busy}
-                              onConfirm={() => lifecycle(extension, 'remove')}
-                            />
-                          )}
+                          ) : null}
                         </Row>
+                        {extension.name === 'top' ? (
+                          <InstalledPermissionSummary extension={extension} />
+                        ) : (
+                          <Expander label="Manage extension" expanded={false}>
+                            <Column gap={1}>
+                              <InstalledPermissionSummary extension={extension} />
+                              <Separator orientation="horizontal" />
+                              <Row gap={1} wrap>
+                                {extension.enabled && !extension.status.startsWith('fault:') ? (
+                                  <Button
+                                    label="Disable"
+                                    variant="ghost"
+                                    enabled={!busy}
+                                    onInvoke={() => lifecycle(extension, 'disable')}
+                                  />
+                                ) : null}
+                                <ConfirmAction
+                                  label="Remove"
+                                  confirmLabel={`Remove ${extension.name}`}
+                                  question={`Remove ${extension.name} from this workspace?`}
+                                  authorityKey={extension.image_digest}
+                                  enabled={!busy}
+                                  onConfirm={() => lifecycle(extension, 'remove')}
+                                />
+                              </Row>
+                            </Column>
+                          </Expander>
+                        )}
                       </CardContent>
                     </Card>
                   );
