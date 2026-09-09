@@ -382,14 +382,14 @@ impl Theme {
     #[must_use]
     pub fn dark() -> Self {
         let colors = [
-            (Token::Ground, Rgb::new(0x14, 0x15, 0x18)),
-            (Token::Surface, Rgb::new(0x1a, 0x1c, 0x20)),
-            (Token::Raised, Rgb::new(0x23, 0x26, 0x2b)),
-            (Token::Line, Rgb::new(0x2e, 0x32, 0x38)),
-            (Token::Text, Rgb::new(0xe6, 0xe8, 0xeb)),
-            (Token::TextDim, Rgb::new(0x9a, 0xa0, 0xa8)),
-            (Token::TextFaint, Rgb::new(0x6b, 0x71, 0x79)),
-            (Token::Accent, Rgb::new(0x4d, 0x9d, 0xff)),
+            (Token::Ground, Rgb::new(0x0f, 0x11, 0x15)),
+            (Token::Surface, Rgb::new(0x17, 0x1a, 0x20)),
+            (Token::Raised, Rgb::new(0x21, 0x25, 0x2d)),
+            (Token::Line, Rgb::new(0x32, 0x38, 0x43)),
+            (Token::Text, Rgb::new(0xf0, 0xf2, 0xf5)),
+            (Token::TextDim, Rgb::new(0xa7, 0xae, 0xba)),
+            (Token::TextFaint, Rgb::new(0x7f, 0x87, 0x95)),
+            (Token::Accent, Rgb::new(0x55, 0x9d, 0xf7)),
             (Token::Positive, Rgb::new(0x3f, 0xb9, 0x50)),
             (Token::Warning, Rgb::new(0xd2, 0x9a, 0x2c)),
             (Token::Danger, Rgb::new(0xe5, 0x53, 0x53)),
@@ -412,7 +412,7 @@ impl Theme {
     /// renders legibly instead of transparently.
     #[must_use]
     pub fn color(&self, token: Token) -> Rgb {
-        self.colors.get(&token).copied().unwrap_or(Rgb::new(0xe6, 0xe8, 0xeb))
+        self.colors.get(&token).copied().unwrap_or(Rgb::new(0xf0, 0xf2, 0xf5))
     }
 }
 
@@ -439,7 +439,7 @@ mod tests {
         for token in Token::ALL {
             assert!(theme.colors.contains_key(token), "missing {token:?}");
         }
-        assert_eq!(theme.color(Token::Ground), Rgb::new(0x14, 0x15, 0x18));
+        assert_eq!(theme.color(Token::Ground), Rgb::new(0x0f, 0x11, 0x15));
     }
 
     #[test]

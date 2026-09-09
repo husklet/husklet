@@ -29,8 +29,8 @@ fn controls(css: &mut String, theme: &Theme) {
     let radius = theme.radius.pixels().unwrap_or(4);
     let _ = writeln!(
         css,
-        "button {{ background: {raised}; color: {text}; border: 1px solid {line}; border-radius: {radius}px; min-height: 28px; min-width: 28px; padding: 3px 10px; font-size: 13px; font-weight: 500; }}\n\
-         button:hover {{ background: {line}; }}\n\
+        "button {{ background: {raised}; color: {text}; border: 1px solid {line}; border-radius: {radius}px; min-height: 28px; min-width: 28px; padding: 3px 10px; font-size: 13px; font-weight: 500; box-shadow: none; }}\n\
+         button:hover {{ background: {line}; border-color: {dim}; }}\n\
          button:focus-visible {{ outline: 2px solid {accent}; outline-offset: 2px; }}\n\
          button:disabled {{ color: {faint}; background: {surface}; }}\n\
          entry, spinbutton, textview, textview text, dropdown, dropdown > button, calendar {{ \
@@ -70,7 +70,7 @@ fn base(css: &mut String, theme: &Theme) {
          .hl-surface {{ background: {surface}; }}\n\
          * {{ outline-color: {accent}; }}\n\
          .hl-code, .monospace {{ font-family: {mono}; }}\n\
-         .hl-card {{ background: {surface}; border: 1px solid {line}; border-radius: {radius}px; }}\n\
+         .hl-card {{ background: {surface}; border: 1px solid {line}; border-radius: {radius}px; box-shadow: 0 1px 2px rgba(0,0,0,.22); }}\n\
          .hl-toolbar, .hl-headerbar {{ background: {raised}; border-bottom: 1px solid {line}; }}\n\
          .hl-sidebar {{ background: {surface}; border-right: 1px solid {line}; }}",
         ground = theme.color(Token::Ground).hex(),
@@ -179,7 +179,7 @@ fn components(css: &mut String, theme: &Theme) {
          .hl-navigationmenu {{ padding: 2px 4px; }}\n\
          .hl-navigationmenuitem {{ background: transparent; color: {dim}; border: 0; border-radius: {radius}px; min-height: 30px; padding: 4px 8px; font-weight: 500; }}\n\
          .hl-navigationmenuitem:hover {{ background: {raised}; color: {text}; }}\n\
-         .hl-navigationmenuitem:checked, .hl-navigationmenuitem:checked:hover {{ background: {raised}; color: {text}; box-shadow: inset 3px 0 0 {accent}; }}\n\
+         .hl-navigationmenuitem:checked, .hl-navigationmenuitem:checked:hover {{ background: {raised}; color: {text}; box-shadow: inset 2px 0 0 {accent}; }}\n\
          .hl-separator {{ background: {line}; min-height: 1px; min-width: 1px; }}\n\
          .hl-datatable, .hl-list {{ background: {surface}; border: 1px solid {line}; border-radius: {radius}px; }}\n\
          .hl-heading {{ font-weight: 600; }}\n\
@@ -254,7 +254,7 @@ mod tests {
             }
         }
         assert!(
-            css.contains(".variant-outline:disabled") && css.contains("color: #6b7179; border-color: #2e3238"),
+            css.contains(".variant-outline:disabled") && css.contains("color: #7f8795; border-color: #323843"),
             "semantic variants must not override disabled affordance"
         );
     }
@@ -277,7 +277,7 @@ mod tests {
         assert!(css.contains("button:focus-visible { outline: 2px"));
         assert!(css.contains(".hl-navigationmenuitem { background: transparent"));
         assert!(css.contains(
-            ".hl-navigationmenuitem:checked, .hl-navigationmenuitem:checked:hover { background: #23262b; color: #e6e8eb; box-shadow: inset 3px 0 0 #4d9dff"
+            ".hl-navigationmenuitem:checked, .hl-navigationmenuitem:checked:hover { background: #21252d; color: #f0f2f5; box-shadow: inset 2px 0 0 #559df7"
         ));
         assert!(css.contains(".hl-card > box { padding: 8px"));
     }
