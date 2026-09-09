@@ -8023,6 +8023,10 @@
     },
     {
       "capability": "containers:read",
+      "request": "container_inspect_observed"
+    },
+    {
+      "capability": "containers:read",
       "request": "container_processes"
     },
     {
@@ -8522,6 +8526,10 @@
     {
       "reply": "container",
       "request": "container_inspect"
+    },
+    {
+      "reply": "container",
+      "request": "container_inspect_observed"
     },
     {
       "reply": "processes",
@@ -10071,6 +10079,32 @@
                 "optional": false,
                 "schema": {
                   "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "container_inspect_observed",
+          "payload": {
+            "fields": [
+              {
+                "name": "id",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "generation",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "signed": false
                 }
               }
             ],
@@ -13607,7 +13641,7 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:b7894178576cadba",
+  "source_fingerprint": "fnv1a64:f876033459adc8f1",
   "specification_version": 1,
   "topics": [
     {

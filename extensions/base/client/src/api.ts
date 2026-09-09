@@ -910,6 +910,8 @@ export interface WorkspaceApi {
   containers: {
     list(): Promise<ContainerSummary[]>;
     inspect(id: string): Promise<ContainerSummary>;
+    /** Inspect only when the immutable container remains at the selected lifecycle generation. */
+    inspectObserved(id: string, generation: number): Promise<ContainerSummary>;
     processes(
       id: string,
       options?: { snapshot?: string; after?: number; limit?: number },

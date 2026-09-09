@@ -589,6 +589,7 @@ impl Session {
             }
             Request::ContainerList
             | Request::ContainerInspect { .. }
+            | Request::ContainerInspectObserved { .. }
             | Request::ContainerProcesses { .. }
             | Request::ContainerLogs { .. }
             | Request::ExecutionInspect { .. }
@@ -751,6 +752,19 @@ impl Session {
                 let target = self.resolve_container(id, port.port())?;
                 Ok(Reply::Container(port.inspect(&target.id)?))
             }
+            Request::ContainerInspectObserved { id, generation } => {
+                let target = self.resolve_container(id, port.port())?;
+                let inspected = port.inspect(&target.id)?;
+                if inspected.generation != *generation {
+                    return Err(Failure::Conflict {
+                        detail: format!(
+                            "container {id} generation changed from {generation} to {}",
+                            inspected.generation
+                        ),
+                    });
+                }
+                Ok(Reply::Container(inspected))
+            }
             Request::ContainerProcesses {
                 id,
                 snapshot,
@@ -762,9 +776,10 @@ impl Session {
                         detail: "container process page limit must be between 1 and 128".into(),
                     });
                 }
-                if snapshot.as_ref().is_some_and(|value| {
-                    value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit())
-                }) {
+                if snapshot
+                    .as_ref()
+                    .is_some_and(|value| value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()))
+                {
                     return Err(Failure::Conflict {
                         detail: "container process snapshot must be 64 hexadecimal characters".into(),
                     });

@@ -2,10 +2,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use syn::{Attribute, Fields, GenericArgument, Item, PathArguments, Type};
 
-use crate::{Capability, Frame, Kind, Topic, PROTOCOL};
+use crate::{Capability, Frame, Kind, PROTOCOL, Topic};
 
 const SOURCES: &[(&str, &str)] = &[
     ("src/lib.rs", include_str!("lib.rs")),
@@ -69,6 +69,7 @@ const REQUEST_TO_REPLY: &[(&str, &str)] = &[
     ("extension_update", "extension"),
     ("container_list", "containers"),
     ("container_inspect", "container"),
+    ("container_inspect_observed", "container"),
     ("container_processes", "processes"),
     ("container_logs", "logs"),
     ("execution_inspect", "execution"),
@@ -189,6 +190,7 @@ fn request_capability(request: &str) -> Capability {
         | "extension_update" => Capability::ExtensionInstall,
         "container_list"
         | "container_inspect"
+        | "container_inspect_observed"
         | "container_processes"
         | "container_logs"
         | "execution_inspect"

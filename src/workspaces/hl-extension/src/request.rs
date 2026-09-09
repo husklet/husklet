@@ -143,6 +143,10 @@ pub enum Request {
     ContainerInspect {
         id: String,
     },
+    ContainerInspectObserved {
+        id: String,
+        generation: u64,
+    },
     ContainerProcesses {
         id: String,
         snapshot: Option<String>,
@@ -566,6 +570,7 @@ impl Request {
             | Self::ExtensionUpdate { .. } => Capability::ExtensionInstall,
             Self::ContainerList
             | Self::ContainerInspect { .. }
+            | Self::ContainerInspectObserved { .. }
             | Self::ContainerProcesses { .. }
             | Self::ContainerLogs { .. }
             | Self::ExecutionInspect { .. }

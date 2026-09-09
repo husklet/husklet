@@ -86,6 +86,7 @@ order; the JavaScript client's checks are never treated as a security boundary.
 
 - `host.containers.list(...)` — `container_list`, requires `containers:read`.
 - `host.containers.inspect(...)` — `container_inspect`, requires `containers:read`.
+- `host.containers.inspectObserved(...)` — `container_inspect_observed`, requires `containers:read`.
 - `host.containers.logs(...)` — `container_logs`, requires `containers:read`.
 - `host.containers.writeExecutionStdin(...)` — `execution_write`, requires `containers:input`.
 - `host.containers.closeExecutionStdin(...)` — `execution_close_input`, requires `containers:input`.

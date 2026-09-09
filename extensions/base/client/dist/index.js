@@ -670,6 +670,16 @@ export function workspace(session, { signal } = {}) {
         containers: {
             list: async () => expect(await session.call('container_list'), 'containers'),
             inspect: async (id) => expect(await session.call('container_inspect', { id }), 'container'),
+            inspectObserved: async (id, generation) => {
+                const observedGeneration = containerMutation(id, generation).generation;
+                const container = expect(await session.call('container_inspect_observed', {
+                    id: immutableIdentity(id, [32, 64], 'container'),
+                    generation: observedGeneration,
+                }), 'container');
+                if (container.id !== id || container.generation !== observedGeneration)
+                    throw new TypeError('host returned a different observed container generation');
+                return container;
+            },
             processes: async (id, { snapshot, after = 0, limit = 128, } = {}) => {
                 if (!Number.isSafeInteger(after) || after < 0)
                     throw new RangeError('container process cursor must be a nonnegative safe integer');

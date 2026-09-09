@@ -1308,6 +1308,13 @@ fn calls() -> Vec<(Request, Capability)> {
         (Request::ContainerList, Capability::ContainerRead),
         (Request::ContainerInspect { id: "c1".into() }, Capability::ContainerRead),
         (
+            Request::ContainerInspectObserved {
+                id: "c1".into(),
+                generation: 0,
+            },
+            Capability::ContainerRead,
+        ),
+        (
             Request::ContainerProcesses {
                 id: "c1".into(),
                 snapshot: None,
@@ -4034,6 +4041,24 @@ fn a_host_failure_is_distinguished_from_a_refusal() {
         matches!(failure, Failure::Absent { .. }),
         "'it does not exist' must not read as 'you may not', got {failure:?}"
     );
+    assert_eq!(host.ledger.reached(), vec!["containers.list", "containers.inspect"]);
+}
+
+#[test]
+fn observed_container_inspection_rejects_a_changed_lifecycle_generation() {
+    let host = Host::new();
+    let mut session = session(&[Capability::ContainerRead], &[]);
+
+    assert!(matches!(
+        session.dispatch(
+            &Request::ContainerInspectObserved {
+                id: "c1".into(),
+                generation: 1,
+            },
+            &services(&host),
+        ),
+        Err(Failure::Conflict { detail }) if detail.contains("changed from 1 to 0")
+    ));
     assert_eq!(host.ledger.reached(), vec!["containers.list", "containers.inspect"]);
 }
 

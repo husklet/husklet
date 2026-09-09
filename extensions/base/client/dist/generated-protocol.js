@@ -1,5 +1,5 @@
 // Generated from Rust hl-extension protocol/v1.json. Do not edit.
-// Protocol artifact fnv1a64:114c59b510d362b8
+// Protocol artifact fnv1a64:a6335f2d3bb88b2c
 export const PROTOCOL_SPECIFICATION_VERSION = 1;
 export const PROTOCOL_VERSION = 1;
 export const PROTOCOL_BOUNDS = Object.freeze({
@@ -336,6 +336,7 @@ export const PROTOCOL_REPLIES = Object.freeze({
   "extension_update": "extension",
   "container_list": "containers",
   "container_inspect": "container",
+  "container_inspect_observed": "container",
   "container_processes": "processes",
   "container_logs": "logs",
   "execution_inspect": "execution",
@@ -463,6 +464,7 @@ export const PROTOCOL_REQUEST_CAPABILITIES = Object.freeze({
   "extension_update": "extensions:install",
   "container_list": "containers:read",
   "container_inspect": "containers:read",
+  "container_inspect_observed": "containers:read",
   "container_processes": "containers:read",
   "container_logs": "containers:read",
   "execution_inspect": "containers:read",
@@ -9336,6 +9338,32 @@ const roots = {
               "optional": false,
               "schema": {
                 "kind": "string"
+              }
+            }
+          ],
+          "kind": "struct"
+        }
+      },
+      {
+        "name": "container_inspect_observed",
+        "payload": {
+          "fields": [
+            {
+              "name": "id",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            },
+            {
+              "name": "generation",
+              "optional": false,
+              "schema": {
+                "bits": 64,
+                "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "signed": false
               }
             }
           ],
