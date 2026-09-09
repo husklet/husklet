@@ -754,36 +754,42 @@ export function ContainerCreate({
                 />
               </Column>
             </Expander>
-            <Column gap={1} width="fill">
-              <Heading label={'Process'} scale={'body'} />
-              <Row gap={1} wrap={true}>
-                <ArgumentEditor
-                  label="Entrypoint"
-                  value={draft.entrypoint}
-                  enabled={editable}
-                  onChange={(value) => update('entrypoint', value)}
+            <Expander label="Process overrides" expanded={false}>
+              <Column gap={1} width="fill">
+                <Text
+                  label="Optional. Entrypoint replaces the image program; Command supplies its arguments. Add each argument with Enter or Add."
+                  color="text-dim"
+                  wrap
                 />
-                <ArgumentEditor
-                  label="Command"
-                  value={draft.command}
+                <Row gap={1} wrap={true}>
+                  <ArgumentEditor
+                    label="Entrypoint"
+                    value={draft.entrypoint}
+                    enabled={editable}
+                    onChange={(value) => update('entrypoint', value)}
+                  />
+                  <ArgumentEditor
+                    label="Command"
+                    value={draft.command}
+                    enabled={editable}
+                    onChange={(value) => update('command', value)}
+                  />
+                </Row>
+                <EntryField
+                  label="Working directory"
+                  value={draft.workingDirectory}
+                  placeholder={'Working directory (optional)'}
                   enabled={editable}
-                  onChange={(value) => update('command', value)}
+                  width={{ chars: 36 }}
+                  onChange={(value) => update('workingDirectory', value)}
                 />
-              </Row>
-              <EntryField
-                label="Working directory"
-                value={draft.workingDirectory}
-                placeholder={'Working directory (optional)'}
-                enabled={editable}
-                width={{ chars: 36 }}
-                onChange={(value) => update('workingDirectory', value)}
-              />
-              <EnvironmentEditor
-                value={draft.environment}
-                enabled={editable}
-                onChange={(value) => update('environment', value)}
-              />
-            </Column>
+                <EnvironmentEditor
+                  value={draft.environment}
+                  enabled={editable}
+                  onChange={(value) => update('environment', value)}
+                />
+              </Column>
+            </Expander>
             <Expander label="Advanced resources and networking">
               <Column gap={1}>
                 <Heading label={'Resources and connectivity'} scale={'body'} />

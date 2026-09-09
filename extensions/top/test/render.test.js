@@ -4041,11 +4041,23 @@ test('container creation groups its compact form and uses a human label editor',
   );
   for (const label of [
     'Identity and image',
-    'Process',
+    'Process overrides',
     'Resources and connectivity',
     'Mounts accept named volumes only. Published host ports may be left automatic.',
   ])
     assert.ok(labelled(stage, label), `${label} is available in the semantic tree`);
+  assert.equal(
+    taggedProperty(stage, 'Process overrides', 'Expander', 'Expanded')?.Flag,
+    false,
+    'optional process fields stay out of the primary creation path',
+  );
+  assert.ok(
+    labelled(
+      stage,
+      'Optional. Entrypoint replaces the image program; Command supplies its arguments. Add each argument with Enter or Add.',
+    ),
+    'process terminology is explained before it is requested',
+  );
   const placeholders = frame.patches
     .filter((patch) => patch.SetProp?.prop === 'Placeholder')
     .map((patch) => patch.SetProp.value.Text);
