@@ -60,6 +60,7 @@ fn controls(css: &mut String, theme: &Theme) {
          progressbar progress {{ background: {accent}; }}\n\
          checkbutton check {{ background: {ground}; border: 1px solid {line}; }}\n\
          checkbutton check:checked {{ background: {accent}; }}\n\
+         checkbutton:focus, checkbutton:focus-visible {{ outline: 2px solid {accent}; outline-offset: 2px; }}\n\
          .hl-table {{ background: {ground}; border: 1px solid {line}; border-radius: {radius}px; }}\n\
          .hl-tablehead .hl-tablecell {{ background: {raised}; color: {text}; font-weight: 600; }}\n\
          .hl-tablecell {{ min-height: 32px; padding: 6px 8px; border-bottom: 1px solid {line}; }}\n\
@@ -385,6 +386,9 @@ mod tests {
         assert!(css.contains(".hl-select:focus-within { border-color: #559df7; box-shadow: 0 0 0 1px #559df7;"));
         assert!(css.contains(".hl-select:disabled, .hl-select button:disabled { border-color: #87909f;"));
         assert!(css.contains("switch:disabled { opacity: .55;"));
+        assert!(css.contains(
+            "checkbutton:focus, checkbutton:focus-visible { outline: 2px solid #559df7; outline-offset: 2px;"
+        ));
         assert!(css.contains(
             "entry.tone-danger, .hl-entry.tone-danger { border-color: #e55353; box-shadow: 0 0 0 1px #e55353;"
         ));

@@ -22,6 +22,7 @@ mod unix {
         "Select",
         "Switch",
         "ToggleButton",
+        "Checkbox",
         "Extension acquisition",
         "Validated settings form",
         "Keyboard and semantic actions",
@@ -205,7 +206,7 @@ mod unix {
         // native root. Manually allocating it while unrooted exercises no valid
         // GTK lifecycle and leaves its factories measuring stale children.
         let realized_window = gtk::Window::new();
-        let narrow_story = matches!(story, "Button" | "Entry" | "Select" | "DataTable");
+        let narrow_story = matches!(story, "Button" | "Entry" | "Select" | "Checkbox" | "DataTable");
         realized_window.set_default_size(if narrow_story { 600 } else { 1_200 }, 800);
         realized_window.set_child(Some(&root));
         realized_window.present();
@@ -521,6 +522,17 @@ mod unix {
                 "documented ToggleButton did not visibly acknowledge its checked-state change"
             );
             capture_story(&realized_window, "ToggleButton unchecked");
+        }
+        if story == "Checkbox" {
+            settle_toolkit();
+            let checkbox =
+                find::<gtk::CheckButton>(&root, |button| button.label().as_deref() == Some("Include diagnostics"));
+            assert!(
+                !checkbox.is_active(),
+                "controlled Checkbox did not retain Space activation"
+            );
+            assert!(checkbox.grab_focus(), "controlled Checkbox restores native focus");
+            capture_story(&realized_window, "Checkbox focused unchecked");
         }
         if story == "Extension acquisition" {
             assert!(
@@ -848,6 +860,15 @@ mod unix {
             "ToggleButton" => {
                 find::<gtk::ToggleButton>(root, |button| button.tooltip_text().as_deref() == Some("Pin this tab"))
                     .emit_clicked();
+            }
+            "Checkbox" => {
+                let checkbox =
+                    find::<gtk::CheckButton>(root, |button| button.label().as_deref() == Some("Include diagnostics"));
+                assert!(checkbox.grab_focus(), "Checkbox accepts native keyboard focus");
+                assert!(checkbox.has_focus(), "Checkbox exposes its focus-visible state");
+                let before = checkbox.is_active();
+                checkbox.activate();
+                assert_ne!(checkbox.is_active(), before, "Space activation toggles Checkbox state");
             }
             "DataTable" => {
                 let entry = find::<gtk::Entry>(root, |entry| entry.text().starts_with("record-"));

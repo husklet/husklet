@@ -76,6 +76,7 @@ import { EntryWorkbench } from './entry.js';
 import { SelectWorkbench } from './select.js';
 import { SwitchWorkbench } from './switch.js';
 import { ToggleButtonWorkbench } from './toggle-button.js';
+import { CheckboxWorkbench } from './checkbox.js';
 
 const { useMemo, useRef, useState } = React;
 
@@ -206,6 +207,8 @@ export function Playground({
           <SwitchWorkbench />
         ) : selected === 'ToggleButton' ? (
           <ToggleButtonWorkbench />
+        ) : selected === 'Checkbox' ? (
+          <CheckboxWorkbench />
         ) : (
           <Preview
             key={`preview-${selected}`}
