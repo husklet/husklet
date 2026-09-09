@@ -358,7 +358,7 @@ mod unix {
             send_report(&surface, &mut wire, 99, |event| {
                 matches!(event, hl_gui::Event::Invoke { .. })
             });
-            let success = format!("Connected container {container_id} to network {network_id}.");
+            let success = "Connected api-worker to development".to_owned();
             apply_until(&mut wire, &mut tree, &mut surface, &success, |request| match request {
                 Request::NetworkConnect {
                     reference,
@@ -442,6 +442,12 @@ mod unix {
                 &success_root,
                 &format!("Container · {}", &container_id[..12])
             ));
+            assert!(has_label(&success_root, "Technical details"));
+            find_expander(&success_root, "Technical details").set_expanded(true);
+            settle_toolkit();
+            assert!(has_label(&success_root, &format!("Container ID · {container_id}")));
+            assert!(has_label(&success_root, &format!("Network ID · {network_id}")));
+            assert!(!has_placeholder(&success_root, "Aliases, comma-separated (optional)"));
         }
         let stderr = child.stop();
         assert!(stderr.is_empty(), "{fixture}/{name} wrote to stderr: {stderr}");
@@ -629,6 +635,38 @@ mod unix {
 
     fn find_toggle(root: &gtk::Widget, label: &str) -> gtk::ToggleButton {
         find_toggle_optional(root, label).unwrap_or_else(|| panic!("toggle {label:?} was not found"))
+    }
+
+    fn find_expander(root: &gtk::Widget, label: &str) -> gtk::Expander {
+        if let Some(expander) = root.downcast_ref::<gtk::Expander>() {
+            if has_label(root, label) {
+                return expander.clone();
+            }
+        }
+        let mut child = root.first_child();
+        while let Some(current) = child {
+            child = current.next_sibling();
+            if let Some(expander) = find_expander_optional(&current, label) {
+                return expander;
+            }
+        }
+        panic!("expander {label:?} was not found")
+    }
+
+    fn find_expander_optional(root: &gtk::Widget, label: &str) -> Option<gtk::Expander> {
+        if let Some(expander) = root.downcast_ref::<gtk::Expander>() {
+            if has_label(root, label) {
+                return Some(expander.clone());
+            }
+        }
+        let mut child = root.first_child();
+        while let Some(current) = child {
+            child = current.next_sibling();
+            if let Some(expander) = find_expander_optional(&current, label) {
+                return Some(expander);
+            }
+        }
+        None
     }
 
     fn find_toggle_optional(root: &gtk::Widget, label: &str) -> Option<gtk::ToggleButton> {

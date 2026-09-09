@@ -46,7 +46,9 @@ type Creation = { state: 'idle' | 'loading' | 'success' | 'error'; name: string;
 type EndpointRequest = {
   verb: 'connect' | 'disconnect';
   network: string;
+  networkName: string;
   container: string;
+  containerName: string;
   aliases: string[];
 };
 type Operation = {
@@ -170,7 +172,11 @@ export function Networks({
     return {
       verb,
       network: resourceReference(network),
+      networkName: network.name || shortId(resourceReference(network)),
       container: containerId,
+      containerName:
+        (containers.data ?? []).find((candidate) => candidate.id === containerId)?.name ||
+        shortId(containerId),
       aliases: verb === 'connect' ? endpointAliases(aliases) : [],
     };
   };
@@ -461,7 +467,7 @@ export function Networks({
                               tone="neutral"
                             />
                           )}
-                          {container ? (
+                          {endpointAction === 'connect' ? (
                             <Entry
                               value={aliases}
                               placeholder="Aliases, comma-separated (optional)"
@@ -541,11 +547,28 @@ function OperationStatus({
     );
   if (operation.state === 'success' && request)
     return (
-      <Text
-        label={`${request.verb === 'connect' ? 'Connected' : 'Disconnected'} container ${request.container} ${request.verb === 'connect' ? 'to' : 'from'} network ${request.network}${request.aliases.length ? ` with ${request.aliases.length} endpoint alias${request.aliases.length === 1 ? '' : 'es'}` : ''}.`}
-        color="positive"
-        wrap
-      />
+      <Column gap={1} align="start" width="fill">
+        <Text
+          label={`${request.verb === 'connect' ? 'Connected' : 'Disconnected'} ${request.containerName} ${request.verb === 'connect' ? 'to' : 'from'} ${request.networkName}`}
+          color="positive"
+          wrap
+        />
+        <Row gap={1} wrap>
+          <Badge label={`Container · ${shortId(request.container)}`} />
+          <Badge label={`Network · ${shortId(request.network)}`} />
+          {request.aliases.length ? (
+            <Badge
+              label={`${request.aliases.length} endpoint alias${request.aliases.length === 1 ? '' : 'es'}`}
+            />
+          ) : null}
+        </Row>
+        <Expander label="Technical details">
+          <Column gap={1}>
+            <Text label={`Container ID · ${request.container}`} wrap />
+            <Text label={`Network ID · ${request.network}`} wrap />
+          </Column>
+        </Expander>
+      </Column>
     );
   return null;
 }

@@ -6442,12 +6442,7 @@ test('network connect validates aliases, exposes progress, success, bounded fail
   release();
   await settled();
   await settled();
-  assert.ok(
-    labelled(
-      stage,
-      `Connected container ${'b'.repeat(64)} to network ${'a'.repeat(32)} with 2 endpoint aliases.`,
-    ),
-  );
+  assert.ok(labelled(stage, 'Connected container-1 to private'));
 
   invoke(stage, 'Connect');
   await settled();
@@ -6512,7 +6507,10 @@ test('successful network attachment retains its receipt and verified expanded me
   invoke(stage, 'Connect');
   await settled();
   await settled();
-  assert.ok(labelled(stage, `Connected container ${container} to network ${network}.`));
+  assert.ok(labelled(stage, 'Connected container-1 to private'));
+  assert.ok(labelled(stage, `Container ID · ${container}`));
+  assert.ok(labelled(stage, `Network ID · ${network}`));
+  assert.ok(labelled(stage, 'Technical details'));
   assert.ok(labelled(stage, 'Connected containers · 1'));
   assert.ok(labelled(stage, `Container · ${container.slice(0, 12)}`));
   assert.ok(labelled(stage, 'Refresh connections'));
@@ -6561,7 +6559,7 @@ test('a successful attachment retains its receipt when membership reinspection i
   invoke(stage, 'Connect');
   await settled();
   await settled();
-  assert.ok(labelled(stage, `Connected container ${container} to network ${network}.`));
+  assert.ok(labelled(stage, 'Connected container-1 to private'));
   assert.ok(labelled(stage, 'Open Extensions'));
   assert.equal(labelled(stage, 'Connected containers · 1'), undefined);
 });
@@ -6604,7 +6602,8 @@ test('successful disconnect retains its receipt and verified empty membership', 
   invoke(stage, 'Confirm disconnect');
   await settled();
   await settled();
-  assert.ok(labelled(stage, `Disconnected container ${container} from network ${network}.`));
+  assert.ok(labelled(stage, 'Disconnected container-1 from private'));
+  assert.equal(labelled(stage, 'Aliases, comma-separated (optional)'), undefined);
   assert.ok(labelled(stage, 'Connected containers · 0'));
   assert.ok(labelled(stage, 'No connected containers'));
 });
@@ -6725,7 +6724,7 @@ test('disconnect consent snapshots immutable identities and can be cancelled wit
   await settled();
   await settled();
   assert.deepEqual(calls, [[network, second]]);
-  assert.ok(labelled(stage, `Disconnected container ${second} from network ${network}.`));
+  assert.ok(labelled(stage, 'Disconnected container-2 from private'));
 });
 
 test('a failed final confirmation stays visible and retryable', async () => {
