@@ -504,9 +504,16 @@ fn a_wrapping_row_shares_spare_width_between_growing_children() {
 /// only the wrapping threshold; grow must still consume the row after layout.
 fn a_wrapping_row_gives_one_growing_child_the_whole_row() {
     let mut stage = Stage::new();
+    let scroll = stage.producer.create(Tag::Scroll);
+    stage.producer.set(scroll, Prop::Width, PropValue::Length(Length::Fill));
+    stage.producer.append(NodeId::ROOT, scroll);
+    let page = stage.producer.create(Tag::Column);
+    stage.producer.set(page, Prop::Width, PropValue::Length(Length::Fill));
+    stage.producer.append(scroll, page);
     let row = stage.producer.create(Tag::Row);
     stage.producer.set(row, Prop::Wrap, PropValue::Flag(true));
-    stage.producer.append(NodeId::ROOT, row);
+    stage.producer.set(row, Prop::Width, PropValue::Length(Length::Fill));
+    stage.producer.append(page, row);
     let card = stage.producer.create(Tag::Column);
     stage.producer.set(
         card,
