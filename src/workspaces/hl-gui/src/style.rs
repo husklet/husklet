@@ -388,7 +388,7 @@ impl Theme {
             (Token::Line, Rgb::new(0x32, 0x38, 0x43)),
             (Token::Text, Rgb::new(0xf0, 0xf2, 0xf5)),
             (Token::TextDim, Rgb::new(0xa7, 0xae, 0xba)),
-            (Token::TextFaint, Rgb::new(0x7f, 0x87, 0x95)),
+            (Token::TextFaint, Rgb::new(0x87, 0x90, 0x9f)),
             (Token::Accent, Rgb::new(0x55, 0x9d, 0xf7)),
             (Token::Positive, Rgb::new(0x3f, 0xb9, 0x50)),
             (Token::Warning, Rgb::new(0xd2, 0x9a, 0x2c)),
@@ -426,6 +426,26 @@ impl Default for Theme {
 mod tests {
     use super::{Length, Rgb, Theme, Token};
 
+    fn luminance(color: Rgb) -> f64 {
+        let channel = |value: u8| {
+            let value = f64::from(value) / 255.0;
+            if value <= 0.04045 {
+                value / 12.92
+            } else {
+                ((value + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * channel(color.red) + 0.7152 * channel(color.green) + 0.0722 * channel(color.blue)
+    }
+
+    fn contrast(first: Rgb, second: Rgb) -> f64 {
+        let (bright, dark) = match (luminance(first), luminance(second)) {
+            (first, second) if first > second => (first, second),
+            (first, second) => (second, first),
+        };
+        (bright + 0.05) / (dark + 0.05)
+    }
+
     #[test]
     fn steps_clamp_to_the_generated_class_range() {
         assert_eq!(Length::Step(3).pixels(), Some(12));
@@ -445,5 +465,18 @@ mod tests {
     #[test]
     fn colors_render_as_lowercase_hex() {
         assert_eq!(Rgb::new(0x4d, 0x9d, 0xff).hex(), "#4d9dff");
+    }
+
+    #[test]
+    fn dark_theme_text_remains_readable_on_every_application_surface() {
+        let theme = Theme::dark();
+        for foreground in [Token::Text, Token::TextDim, Token::TextFaint] {
+            for background in [Token::Ground, Token::Surface, Token::Raised] {
+                assert!(
+                    contrast(theme.color(foreground), theme.color(background)) >= 4.5,
+                    "{foreground:?} is unreadable on {background:?}"
+                );
+            }
+        }
     }
 }

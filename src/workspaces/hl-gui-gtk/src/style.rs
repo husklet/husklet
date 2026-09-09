@@ -254,7 +254,7 @@ mod tests {
             }
         }
         assert!(
-            css.contains(".variant-outline:disabled") && css.contains("color: #7f8795; border-color: #323843"),
+            css.contains(".variant-outline:disabled") && css.contains("color: #87909f; border-color: #323843"),
             "semantic variants must not override disabled affordance"
         );
     }
