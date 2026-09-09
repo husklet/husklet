@@ -133,9 +133,13 @@ export function defaults(name: string): StoryDefaults {
   if (props.label === undefined && BY_TAG[name] === undefined && !LABELLESS.has(tag.family)) {
     props.label = spaced(name);
   }
-  const children = tag.acceptsChildren ? SAMPLE.map((child) => ({ ...child })) : [];
+  const children =
+    tag.acceptsChildren && !LABEL_DRIVEN.has(name) ? SAMPLE.map((child) => ({ ...child })) : [];
   return { props, children };
 }
+
+/** Controls expose children for custom content, but their default specimen is a concise text label. */
+const LABEL_DRIVEN = new Set(['Button', 'IconButton', 'ToggleButton', 'Fab', 'SpeedDialAction']);
 
 /** Families whose containers read better without a caption of their own. */
 const LABELLESS = new Set(['layout']);

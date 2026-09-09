@@ -112,6 +112,7 @@ test('generated examples are concise valid-looking JSX derived from specimen def
     '<Button label="Run task" enabled={true} size="small" />',
   );
   assert.equal(exampleFor('Column', {}), '<Column />');
+  assert.deepEqual(defaults('ToggleButton').children, []);
 });
 
 test('the playground renders flows and only one bounded component family', () => {

@@ -514,14 +514,22 @@ export function CatalogueDocument({
     family?.note ?? `${spaced(name)} belongs to the ${family?.label ?? contract.family} family.`;
   const specimen = nativeComponent(
     name,
-    { ...present(instance.props), ...handlers },
+    {
+      ...present(instance.props),
+      ...handlers,
+      width: 'content',
+      height: 'content',
+      grow: false,
+    },
     instance.children.map(child),
   );
   return (
     <ComponentDocument name={spaced(name)} summary={summary}>
       <DocumentationSection title="Overview">
         <Section pad={3} width="fill">
-          {specimen}
+          <Row width="fill" align="center" justify="start">
+            {specimen}
+          </Row>
         </Section>
       </DocumentationSection>
       <DocumentationSection title="API">
