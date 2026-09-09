@@ -4735,6 +4735,7 @@ test('container controls follow the real daemon lifecycle states', () => {
   assert.equal(isEnabled(stage, 'Remove'), true, 'created containers are removable');
   assert.equal(isEnabled(stage, 'Start'), true, 'created containers are startable');
   assert.equal(taggedProperty(stage, 'Start', 'Button', 'Variant')?.Variant, 'Filled');
+  assert.equal(taggedProperty(stage, 'Start', 'Button', 'Tone')?.Tone, 'Accent');
 
   stage = host();
   stage.render(h(Containers, { api, resource: inventory('exited') }));

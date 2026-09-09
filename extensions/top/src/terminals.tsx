@@ -460,11 +460,7 @@ export function Terminals({
         onRetry={resource.reload}
       >
         {view.records.map((tab, tabIndex) => (
-          <Card
-            key={tab.id}
-            width="fill"
-            variant={tab.pinned ? 'filled' : 'outline'}
-          >
+          <Card key={tab.id} width="fill" variant={tab.pinned ? 'filled' : 'outline'}>
             <CardHeader
               label={tab.title}
               detail={`Tab ${tabIndex + 1}`}

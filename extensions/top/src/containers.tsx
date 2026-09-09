@@ -231,6 +231,7 @@ export function Containers({ api, resource, containerDetails, onOpenExecution }:
                     <Button
                       label="Start"
                       variant="filled"
+                      tone="accent"
                       enabled={busy === ''}
                       onInvoke={() => act('start', item.id, undefined, item.generation)}
                     />
