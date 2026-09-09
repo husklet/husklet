@@ -28,6 +28,7 @@ import {
 } from './container-detail.js';
 import { ContainerRename } from './container-rename.js';
 import type { Resource } from './overview.js';
+import { ResourceList } from './resource-list.js';
 
 const { useEffect, useMemo, useRef, useState } = React;
 
@@ -207,72 +208,74 @@ export function Containers({
           retryLabel={'Retry containers'}
           onRetry={resource.reload}
         >
-          {view.records.map((item) => (
-            <Card key={item.id} variant={selected === item.id ? 'filled' : 'outline'}>
-              <CardHeader
-                label={item.name || shortId(item.id)}
-                detail={item.image}
-                align="start"
-                width="fill"
-              />
-              <CardContent gap={1} align="start" width="fill">
-                <Row gap={1} align="center" justify="start" width="fill" wrap>
-                  <Badge label={item.state} tone={stateTone(item.state)} />
-                  <Text label={`ID ${shortId(item.id)}`} color="text-dim" />
-                </Row>
-              </CardContent>
-              <CardActions gap={1} align="start" justify="start" width="fill">
-                <Row gap={1} wrap justify="start">
-                  {selected === item.id &&
-                  inspection.state === 'error' &&
-                  isAuthorityDenial(inspection.error) ? null : (
-                    <Button
-                      label={
-                        selected === item.id
-                          ? inspection.state === 'loading'
-                            ? 'Reading details…'
-                            : inspection.state === 'error'
-                              ? 'Retry details'
-                              : 'Hide details'
-                          : 'Details'
-                      }
-                      variant="filled"
-                      tone="accent"
-                      enabled={busy === ''}
-                      onInvoke={() => toggleDetails(item)}
-                    />
-                  )}
-                  {startable(item.state) ? (
-                    <Button
-                      label="Start"
-                      variant="outline"
-                      enabled={busy === ''}
-                      onInvoke={() => act('start', item.id, undefined, item.generation)}
-                    />
-                  ) : null}
-                </Row>
-                <ContainerActions
-                  api={api}
-                  item={item}
-                  busy={busy}
-                  act={act}
-                  remove={remove}
-                  reload={resource.reload}
+          <ResourceList>
+            {view.records.map((item) => (
+              <Card key={item.id} variant={selected === item.id ? 'filled' : 'outline'}>
+                <CardHeader
+                  label={item.name || shortId(item.id)}
+                  detail={item.image}
+                  align="start"
+                  width="fill"
                 />
-              </CardActions>
-              {selected === item.id ? (
-                <ContainerDetail
-                  api={api}
-                  container={item}
-                  act={act}
-                  inspection={inspection}
-                  onRetry={() => inspect(item)}
-                  onOpenExecution={onOpenExecution}
-                  onOpenExtensions={onOpenExtensions}
-                />
-              ) : null}
-            </Card>
-          ))}
+                <CardContent gap={1} align="start" width="fill">
+                  <Row gap={1} align="center" justify="start" width="fill" wrap>
+                    <Badge label={item.state} tone={stateTone(item.state)} />
+                    <Text label={`ID ${shortId(item.id)}`} color="text-dim" />
+                  </Row>
+                </CardContent>
+                <CardActions gap={1} align="start" justify="start" width="fill">
+                  <Row gap={1} wrap justify="start">
+                    {selected === item.id &&
+                    inspection.state === 'error' &&
+                    isAuthorityDenial(inspection.error) ? null : (
+                      <Button
+                        label={
+                          selected === item.id
+                            ? inspection.state === 'loading'
+                              ? 'Reading details…'
+                              : inspection.state === 'error'
+                                ? 'Retry details'
+                                : 'Hide details'
+                            : 'Details'
+                        }
+                        variant="filled"
+                        tone="accent"
+                        enabled={busy === ''}
+                        onInvoke={() => toggleDetails(item)}
+                      />
+                    )}
+                    {startable(item.state) ? (
+                      <Button
+                        label="Start"
+                        variant="outline"
+                        enabled={busy === ''}
+                        onInvoke={() => act('start', item.id, undefined, item.generation)}
+                      />
+                    ) : null}
+                  </Row>
+                  <ContainerActions
+                    api={api}
+                    item={item}
+                    busy={busy}
+                    act={act}
+                    remove={remove}
+                    reload={resource.reload}
+                  />
+                </CardActions>
+                {selected === item.id ? (
+                  <ContainerDetail
+                    api={api}
+                    container={item}
+                    act={act}
+                    inspection={inspection}
+                    onRetry={() => inspect(item)}
+                    onOpenExecution={onOpenExecution}
+                    onOpenExtensions={onOpenExtensions}
+                  />
+                ) : null}
+              </Card>
+            ))}
+          </ResourceList>
           <Omitted count={view.omitted} />
         </ResourceState>
       )}

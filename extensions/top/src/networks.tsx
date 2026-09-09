@@ -33,6 +33,7 @@ import {
   shortId,
 } from './model.js';
 import type { Resource } from './overview.js';
+import { ResourceList } from './resource-list.js';
 import { AuthorityRecovery } from './authority-recovery.js';
 
 type Inspection = {
@@ -285,169 +286,176 @@ export function Networks({
             retryLabel="Retry networks"
             onRetry={resource.reload}
           >
-            {view.records.map((network) => {
-              const id = resourceReference(network);
-              const membership =
-                inspection.id === id && inspection.state === 'ready'
-                  ? (inspection.detail?.endpoints ?? network.endpoints)
-                  : network.endpoints;
-              const containerId = container.trim();
-              const validContainer = immutableContainerId(containerId);
-              const membershipUnknown =
-                inspection.id === id && validContainer && (!membership || membership.truncated);
-              const endpointAction = validContainer
-                ? membership?.containers.includes(containerId)
-                  ? 'disconnect'
-                  : membership && !membership.truncated
-                    ? 'connect'
-                    : null
-                : null;
-              const inspectionNeedsAccess =
-                inspection.id === id &&
-                inspection.state === 'error' &&
-                isAuthorityDenial(inspection.error);
-              return (
-                <Card key={id} width="fill" variant={inspection.id === id ? 'filled' : 'outline'}>
-                  <CardHeader
-                    label={network.name}
-                    detail={`${network.driver} · ${network.scope}`}
-                    align="start"
-                    width="fill"
-                  />
-                  {network.kind === 'builtin' ? (
-                    <CardContent gap={1}>
-                      <Badge label="Built-in · protected" tone="accent" />
-                    </CardContent>
-                  ) : null}
-                  {membershipUnknown ? (
-                    <CardContent gap={1}>
-                      <Text
-                        label="Attachment status unknown for this container · Inspect to resolve"
-                        color="warning"
-                        wrap
-                      />
-                    </CardContent>
-                  ) : null}
-                  <CardContent gap={1}>
-                    <Row>
-                      {!inspectionNeedsAccess ? (
-                        <Button
-                          label={
-                            inspection.id === id && inspection.state === 'error'
-                              ? 'Retry inspect'
-                              : 'Inspect'
-                          }
-                          variant="outline"
-                          onInvoke={() => inspect(network)}
-                        />
-                      ) : null}
-                    </Row>
-                  </CardContent>
-                  {network.kind !== 'builtin' ? (
-                    <CardContent gap={1}>
-                      <Expander label="Danger zone">
-                        <Column gap={1}>
-                          <Text
-                            label="Removing this network disconnects it from the workspace and cannot be undone."
-                            color="text-dim"
-                            wrap
-                          />
-                          <Row>
-                            <ConfirmAction
-                              authorityKey={`network:${id}:remove`}
-                              label="Remove"
-                              confirmLabel="Confirm remove"
-                              pendingLabel="Confirm remove"
-                              question={`Remove immutable network ${id} (${network.name})?`}
-                              onConfirm={() => remove(network)}
-                            />
-                          </Row>
-                        </Column>
-                      </Expander>
-                    </CardContent>
-                  ) : null}
-                  {disconnectRequest?.network === id ? (
-                    <DisconnectConsent
-                      request={disconnectRequest}
-                      loading={operation.state === 'loading'}
-                      onConfirm={attach}
-                      onCancel={() => setDisconnectRequest(null)}
+            <ResourceList>
+              {view.records.map((network) => {
+                const id = resourceReference(network);
+                const membership =
+                  inspection.id === id && inspection.state === 'ready'
+                    ? (inspection.detail?.endpoints ?? network.endpoints)
+                    : network.endpoints;
+                const containerId = container.trim();
+                const validContainer = immutableContainerId(containerId);
+                const membershipUnknown =
+                  inspection.id === id && validContainer && (!membership || membership.truncated);
+                const endpointAction = validContainer
+                  ? membership?.containers.includes(containerId)
+                    ? 'disconnect'
+                    : membership && !membership.truncated
+                      ? 'connect'
+                      : null
+                  : null;
+                const inspectionNeedsAccess =
+                  inspection.id === id &&
+                  inspection.state === 'error' &&
+                  isAuthorityDenial(inspection.error);
+                return (
+                  <Card key={id} width="fill" variant={inspection.id === id ? 'filled' : 'outline'}>
+                    <CardHeader
+                      label={network.name}
+                      detail={`${network.driver} · ${network.scope}`}
+                      align="start"
+                      width="fill"
                     />
-                  ) : null}
-                  {inspection.id === id ? (
-                    <>
-                      <NetworkDetail inspection={inspection} onOpenExtensions={onOpenExtensions} />
-                      {inspection.state === 'ready' ? (
-                        <CardContent gap={1}>
-                          <Heading label="Container attachment" scale="caption" />
-                          <Text
-                            label="Connect or disconnect one inspected container from this network."
-                            color="text-dim"
-                            wrap
+                    {network.kind === 'builtin' ? (
+                      <CardContent gap={1}>
+                        <Badge label="Built-in · protected" tone="accent" />
+                      </CardContent>
+                    ) : null}
+                    {membershipUnknown ? (
+                      <CardContent gap={1}>
+                        <Text
+                          label="Attachment status unknown for this container · Inspect to resolve"
+                          color="warning"
+                          wrap
+                        />
+                      </CardContent>
+                    ) : null}
+                    <CardContent gap={1}>
+                      <Row>
+                        {!inspectionNeedsAccess ? (
+                          <Button
+                            label={
+                              inspection.id === id && inspection.state === 'error'
+                                ? 'Retry inspect'
+                                : 'Inspect'
+                            }
+                            variant="outline"
+                            onInvoke={() => inspect(network)}
                           />
-                          {containerChoices.length ? (
-                            <Row gap={1} align="center" wrap width="fill">
-                              <Select
-                                value={container}
-                                choices={containerChoices}
-                                tooltip={container || 'Choose a container by name and immutable ID'}
+                        ) : null}
+                      </Row>
+                    </CardContent>
+                    {network.kind !== 'builtin' ? (
+                      <CardContent gap={1}>
+                        <Expander label="Danger zone">
+                          <Column gap={1}>
+                            <Text
+                              label="Removing this network disconnects it from the workspace and cannot be undone."
+                              color="text-dim"
+                              wrap
+                            />
+                            <Row>
+                              <ConfirmAction
+                                authorityKey={`network:${id}:remove`}
+                                label="Remove"
+                                confirmLabel="Confirm remove"
+                                pendingLabel="Confirm remove"
+                                question={`Remove immutable network ${id} (${network.name})?`}
+                                onConfirm={() => remove(network)}
+                              />
+                            </Row>
+                          </Column>
+                        </Expander>
+                      </CardContent>
+                    ) : null}
+                    {disconnectRequest?.network === id ? (
+                      <DisconnectConsent
+                        request={disconnectRequest}
+                        loading={operation.state === 'loading'}
+                        onConfirm={attach}
+                        onCancel={() => setDisconnectRequest(null)}
+                      />
+                    ) : null}
+                    {inspection.id === id ? (
+                      <>
+                        <NetworkDetail
+                          inspection={inspection}
+                          onOpenExtensions={onOpenExtensions}
+                        />
+                        {inspection.state === 'ready' ? (
+                          <CardContent gap={1}>
+                            <Heading label="Container attachment" scale="caption" />
+                            <Text
+                              label="Connect or disconnect one inspected container from this network."
+                              color="text-dim"
+                              wrap
+                            />
+                            {containerChoices.length ? (
+                              <Row gap={1} align="center" wrap width="fill">
+                                <Select
+                                  value={container}
+                                  choices={containerChoices}
+                                  tooltip={
+                                    container || 'Choose a container by name and immutable ID'
+                                  }
+                                  width={{ minimum: { chars: 10 }, maximum: { chars: 38 } }}
+                                  enabled={operation.state !== 'loading'}
+                                  onChange={(event) => {
+                                    setContainer(String(event.value ?? ''));
+                                    setOperation({ state: 'idle', request: null, error: null });
+                                    setDisconnectRequest(null);
+                                  }}
+                                />
+                                {endpointAction === 'connect' ? (
+                                  <Button
+                                    label="Connect"
+                                    variant="filled"
+                                    tone="accent"
+                                    enabled={operation.state !== 'loading'}
+                                    onInvoke={() => begin(network, 'connect')}
+                                  />
+                                ) : null}
+                                {endpointAction === 'disconnect' ? (
+                                  <Button
+                                    label="Disconnect"
+                                    variant="outline"
+                                    tone="danger"
+                                    enabled={operation.state !== 'loading'}
+                                    onInvoke={() => begin(network, 'disconnect')}
+                                  />
+                                ) : null}
+                              </Row>
+                            ) : (
+                              <InlineMessage
+                                label={
+                                  containers.loading
+                                    ? 'Reading containers…'
+                                    : 'No containers are available to attach.'
+                                }
+                                tone="neutral"
+                              />
+                            )}
+                            {container ? (
+                              <Entry
+                                value={aliases}
+                                placeholder="Aliases, comma-separated (optional)"
                                 width={{ minimum: { chars: 10 }, maximum: { chars: 38 } }}
                                 enabled={operation.state !== 'loading'}
                                 onChange={(event) => {
-                                  setContainer(String(event.value ?? ''));
+                                  setAliases(String(event.value ?? ''));
                                   setOperation({ state: 'idle', request: null, error: null });
-                                  setDisconnectRequest(null);
                                 }}
                               />
-                              {endpointAction === 'connect' ? (
-                                <Button
-                                  label="Connect"
-                                  variant="filled"
-                                  tone="accent"
-                                  enabled={operation.state !== 'loading'}
-                                  onInvoke={() => begin(network, 'connect')}
-                                />
-                              ) : null}
-                              {endpointAction === 'disconnect' ? (
-                                <Button
-                                  label="Disconnect"
-                                  variant="outline"
-                                  tone="danger"
-                                  enabled={operation.state !== 'loading'}
-                                  onInvoke={() => begin(network, 'disconnect')}
-                                />
-                              ) : null}
-                            </Row>
-                          ) : (
-                            <InlineMessage
-                              label={
-                                containers.loading
-                                  ? 'Reading containers…'
-                                  : 'No containers are available to attach.'
-                              }
-                              tone="neutral"
-                            />
-                          )}
-                          {container ? (
-                            <Entry
-                              value={aliases}
-                              placeholder="Aliases, comma-separated (optional)"
-                              width={{ minimum: { chars: 10 }, maximum: { chars: 38 } }}
-                              enabled={operation.state !== 'loading'}
-                              onChange={(event) => {
-                                setAliases(String(event.value ?? ''));
-                                setOperation({ state: 'idle', request: null, error: null });
-                              }}
-                            />
-                          ) : null}
-                          <OperationStatus operation={operation} onRetry={attach} />
-                        </CardContent>
-                      ) : null}
-                    </>
-                  ) : null}
-                </Card>
-              );
-            })}
+                            ) : null}
+                            <OperationStatus operation={operation} onRetry={attach} />
+                          </CardContent>
+                        ) : null}
+                      </>
+                    ) : null}
+                  </Card>
+                );
+              })}
+            </ResourceList>
             <Omitted count={view.omitted} />
           </ResourceState>
         )}

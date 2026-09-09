@@ -24,6 +24,7 @@ import {
 } from '@husklet/react';
 import { VolumeDetailsSource, bounded, boundedMessage } from './model.js';
 import type { Resource } from './overview.js';
+import { ResourceList } from './resource-list.js';
 
 type Inspection = {
   name: string;
@@ -188,61 +189,63 @@ export function Volumes({
         retryLabel="Retry volumes"
         onRetry={resource.reload}
       >
-        {view.records.map((volume) => {
-          const inspectionNeedsAccess =
-            inspection.name === volume.name &&
-            inspection.state === 'error' &&
-            isAuthorityDenial(inspection.error);
-          return (
-            <Card
-              key={`${volume.name}:${volume.generation}`}
-              variant={inspection.name === volume.name ? 'filled' : 'outline'}
-            >
-              <CardHeader label={volume.name} detail={volume.driver} align="start" width="fill" />
-              <CardContent>
-                <Row>
-                  <Button
-                    label={
-                      inspectionNeedsAccess
-                        ? 'Access required'
-                        : inspection.name === volume.name && inspection.state === 'error'
-                          ? 'Retry inspect'
-                          : 'Inspect'
-                    }
-                    variant="filled"
-                    tone="accent"
-                    enabled={!inspectionNeedsAccess}
-                    onInvoke={() => inspect(volume)}
-                  />
-                </Row>
-              </CardContent>
-              {!inspectionNeedsAccess ? (
+        <ResourceList>
+          {view.records.map((volume) => {
+            const inspectionNeedsAccess =
+              inspection.name === volume.name &&
+              inspection.state === 'error' &&
+              isAuthorityDenial(inspection.error);
+            return (
+              <Card
+                key={`${volume.name}:${volume.generation}`}
+                variant={inspection.name === volume.name ? 'filled' : 'outline'}
+              >
+                <CardHeader label={volume.name} detail={volume.driver} align="start" width="fill" />
                 <CardContent>
-                  <Expander label="Danger zone" width="fill" align="start">
-                    <Column gap={1}>
-                      <Text
-                        label="Removing this volume permanently deletes its stored data."
-                        color="text-dim"
-                        wrap
-                      />
-                      <Row>
-                        <ConfirmAction
-                          authorityKey={`volume:${volume.name}:${volume.generation}:remove`}
-                          label="Remove"
-                          confirmLabel="Confirm remove"
-                          pendingLabel="Confirm remove"
-                          question={`Remove volume ${volume.name} generation ${volume.generation}?`}
-                          onConfirm={() => remove(volume)}
-                        />
-                      </Row>
-                    </Column>
-                  </Expander>
+                  <Row>
+                    <Button
+                      label={
+                        inspectionNeedsAccess
+                          ? 'Access required'
+                          : inspection.name === volume.name && inspection.state === 'error'
+                            ? 'Retry inspect'
+                            : 'Inspect'
+                      }
+                      variant="filled"
+                      tone="accent"
+                      enabled={!inspectionNeedsAccess}
+                      onInvoke={() => inspect(volume)}
+                    />
+                  </Row>
                 </CardContent>
-              ) : null}
-              {inspection.name === volume.name ? <VolumeDetail inspection={inspection} /> : null}
-            </Card>
-          );
-        })}
+                {!inspectionNeedsAccess ? (
+                  <CardContent>
+                    <Expander label="Danger zone" width="fill" align="start">
+                      <Column gap={1}>
+                        <Text
+                          label="Removing this volume permanently deletes its stored data."
+                          color="text-dim"
+                          wrap
+                        />
+                        <Row>
+                          <ConfirmAction
+                            authorityKey={`volume:${volume.name}:${volume.generation}:remove`}
+                            label="Remove"
+                            confirmLabel="Confirm remove"
+                            pendingLabel="Confirm remove"
+                            question={`Remove volume ${volume.name} generation ${volume.generation}?`}
+                            onConfirm={() => remove(volume)}
+                          />
+                        </Row>
+                      </Column>
+                    </Expander>
+                  </CardContent>
+                ) : null}
+                {inspection.name === volume.name ? <VolumeDetail inspection={inspection} /> : null}
+              </Card>
+            );
+          })}
+        </ResourceList>
         <Omitted count={view.omitted} />
       </ResourceState>
     </Page>

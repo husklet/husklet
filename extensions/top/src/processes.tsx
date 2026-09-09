@@ -18,6 +18,7 @@ import {
 } from '@husklet/react';
 import { bounded, boundedMessage, processRows, shortId } from './model.js';
 import type { Resource } from './overview.js';
+import { ResourceList } from './resource-list.js';
 
 const SAMPLING_CONCURRENCY = 8;
 const OBSERVED_AT = new Intl.DateTimeFormat('en-US', {
@@ -133,30 +134,32 @@ export function Processes({
         {observed > 0 ? (
           <Text label={`Observed ${OBSERVED_AT.format(observed)} UTC`} color="text-dim" />
         ) : null}
-        {view.records.map((process, index) => {
-          const pid = process.cells.PID ?? process.cells.Pid ?? process.cells.pid ?? '—';
-          const command =
-            process.cells.CMD ??
-            process.cells.Command ??
-            process.cells.COMMAND ??
-            process.values.at(-1) ??
-            'Process';
-          const detail = Object.entries(process.cells)
-            .filter(([key]) => !['PID', 'Pid', 'pid', 'CMD', 'Command', 'COMMAND'].includes(key))
-            .map(([key, value]) => `${key} ${value}`)
-            .join(' · ');
-          return (
-            <Card key={`${process.container}:${pid}:${index}`} variant="outline">
-              <CardHeader label={command} detail={process.container} align="start" width="fill" />
-              <CardContent>
-                <Row gap={2}>
-                  <Badge label={`PID ${pid}`} />
-                  <Text label={detail} color="text-dim" />
-                </Row>
-              </CardContent>
-            </Card>
-          );
-        })}
+        <ResourceList>
+          {view.records.map((process, index) => {
+            const pid = process.cells.PID ?? process.cells.Pid ?? process.cells.pid ?? '—';
+            const command =
+              process.cells.CMD ??
+              process.cells.Command ??
+              process.cells.COMMAND ??
+              process.values.at(-1) ??
+              'Process';
+            const detail = Object.entries(process.cells)
+              .filter(([key]) => !['PID', 'Pid', 'pid', 'CMD', 'Command', 'COMMAND'].includes(key))
+              .map(([key, value]) => `${key} ${value}`)
+              .join(' · ');
+            return (
+              <Card key={`${process.container}:${pid}:${index}`} variant="outline">
+                <CardHeader label={command} detail={process.container} align="start" width="fill" />
+                <CardContent>
+                  <Row gap={2}>
+                    <Badge label={`PID ${pid}`} />
+                    <Text label={detail} color="text-dim" />
+                  </Row>
+                </CardContent>
+              </Card>
+            );
+          })}
+        </ResourceList>
         <Omitted count={view.omitted} />
         {snapshots.some(({ rows }) => rows.truncated) ? (
           <Text
