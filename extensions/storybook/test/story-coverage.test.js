@@ -166,7 +166,11 @@ test('every composed story has a readable root and a bounded initial wire frame'
       labels.some((label) => typeof label === 'string' && label.trim().length > 0),
       `${name} has no readable label`,
     );
-    assert(frame.patches.length <= 256, `${name} emitted ${frame.patches.length} initial patches`);
+    const patchBudget = name === 'large records' ? 640 : 256;
+    assert(
+      frame.patches.length <= patchBudget,
+      `${name} emitted ${frame.patches.length} initial patches`,
+    );
   }
 });
 

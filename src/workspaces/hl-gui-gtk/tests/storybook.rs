@@ -300,7 +300,10 @@ mod unix {
             live.emit_clicked();
             settle_toolkit();
             let popover = find::<gtk::Popover>(&live.clone().upcast(), |_| true);
-            assert!(popover.is_visible(), "Select open-list specimen did not reveal its options");
+            assert!(
+                popover.is_visible(),
+                "Select open-list specimen did not reveal its options"
+            );
             capture_story(&realized_window, "Select open");
             capture_widget(
                 &realized_window,
@@ -311,9 +314,8 @@ mod unix {
             settle_toolkit();
         }
         let toggle_before = if story == "ToggleButton" {
-            let toggle = find::<gtk::ToggleButton>(&root, |button| {
-                button.tooltip_text().as_deref() == Some("Pin this tab")
-            });
+            let toggle =
+                find::<gtk::ToggleButton>(&root, |button| button.tooltip_text().as_deref() == Some("Pin this tab"));
             let label = find::<gtk::Label>(&toggle.clone().upcast(), |label| label.text() == "Pin tab");
             assert!(
                 (28..=44).contains(&toggle.height()),
@@ -375,7 +377,11 @@ mod unix {
                     .into_iter()
                     .filter(|scroll| scroll.has_css_class("hl-scroll"))
                     .collect::<Vec<_>>();
-                assert_eq!(panes.len(), 2, "Storybook keeps navigation and inspector panes");
+                assert_eq!(
+                    panes.len(),
+                    3,
+                    "Storybook keeps navigation, document, and bounded API panes",
+                );
                 assert!(
                     panes.iter().all(|pane| pane.width() >= 150),
                     "wide Storybook panes were clipped to {:?}",
@@ -427,6 +433,24 @@ mod unix {
                 "Storybook materialized an unbounded row window"
             );
             surface.rows(&window).expect("GTK accepts the bounded row window");
+            settle_toolkit();
+            let view = find::<gtk::ColumnView>(&root, |_| true);
+            let model = view.model().expect("ready DataTable keeps a selection model");
+            assert!(model.select_item(0, true), "ready DataTable selects a visible row");
+            settle_toolkit();
+            let selection = surface
+                .reports()
+                .drain()
+                .into_iter()
+                .find(|event| matches!(event, hl_gui::Event::Select { .. }))
+                .expect("native row selection produces a typed event");
+            let payload = codec::interaction(&selection, Some(PRIMARY_SLOT))
+                .expect("row selection has a production wire representation");
+            wire.send(&Frame::new(ChannelId::new(97), Kind::Event, payload))
+                .expect("row selection returns to Node");
+            let selected = receive_rerender(&mut wire, story);
+            tree.apply(&selected, &mut surface)
+                .expect("selected row acknowledgement renders in GTK");
         }
         assert!(readable_heading(&root), "{story} has no readable GTK heading");
         if story == "Bounded streaming log" {
@@ -475,9 +499,8 @@ mod unix {
             .unwrap_or_else(|error| panic!("{story} rerender failed in GTK: {error:?}"));
         if let Some(before) = toggle_before {
             settle_toolkit();
-            let toggle = find::<gtk::ToggleButton>(&root, |button| {
-                button.tooltip_text().as_deref() == Some("Pin this tab")
-            });
+            let toggle =
+                find::<gtk::ToggleButton>(&root, |button| button.tooltip_text().as_deref() == Some("Pin this tab"));
             assert_ne!(
                 toggle.is_active(),
                 before,
@@ -596,6 +619,12 @@ mod unix {
                 !sorted.patches.is_empty(),
                 "accepted native sort is observable in the story"
             );
+            let view = find::<gtk::ColumnView>(&root, |_| true);
+            assert!(view.grab_focus(), "ready DataTable accepts keyboard focus");
+            let model = view.model().expect("rerendered DataTable keeps its selection model");
+            assert!(model.select_item(0, true), "selected evidence survives the rerender");
+            settle_toolkit();
+            capture_story(&realized_window, "DataTable ready selected");
         }
         root.measure(gtk::Orientation::Horizontal, -1);
         root.measure(gtk::Orientation::Vertical, 300);
@@ -803,10 +832,8 @@ mod unix {
                 .set_active(false);
             }
             "ToggleButton" => {
-                find::<gtk::ToggleButton>(root, |button| {
-                    button.tooltip_text().as_deref() == Some("Pin this tab")
-                })
-                .emit_clicked();
+                find::<gtk::ToggleButton>(root, |button| button.tooltip_text().as_deref() == Some("Pin this tab"))
+                    .emit_clicked();
             }
             "DataTable" => {
                 let entry = find::<gtk::Entry>(root, |entry| entry.text().starts_with("record-"));

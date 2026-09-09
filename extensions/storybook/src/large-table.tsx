@@ -2,11 +2,13 @@ import React from 'react';
 import {
   Banner,
   Button,
+  Code,
   Column,
   DataTable,
   EmptyState,
   Entry,
   Heading,
+  Expander,
   InlineMessage,
   Progress,
   Row,
@@ -14,6 +16,13 @@ import {
   Text,
 } from '@husklet/react';
 import type { ColumnSpec, EditReport, InterfaceSourceMutation, SortReport } from '@husklet/react';
+import {
+  ApiReference,
+  ComponentDocument,
+  DocumentationSection,
+  SpecimenGrid,
+} from './component-document.js';
+import { rows } from './editors.js';
 
 const { useRef, useState } = React;
 export const LOGICAL_ROWS = 1_000_000;
@@ -205,108 +214,162 @@ export function LargeDataTableStory({ source }: { source: LargeRecordSource }) {
     void source.configure(changed);
   };
   return (
-    <Column gap={2} grow={true}>
-      <Heading label={'1,000,000 logical records'} scale={'title'} wrap={true} />
-      <Text
-        label={
-          'Only host-requested 128-row windows exist in memory. Resize or scroll to request another window.'
-        }
-        wrap={true}
-      />
-      <Row gap={2} wrap={true}>
-        <Entry
-          value={filter}
-          placeholder={'Filter records'}
-          onFocus={() => record('focused filter')}
-          onChange={(event) => {
-            update({ filter: String(event.value ?? '') });
-            record('filtered records');
-          }}
+    <ComponentDocument
+      name="DataTable"
+      summary="DataTable presents large structured collections with native selection, sorting, editing, and bounded row windows."
+    >
+      <DocumentationSection title="Overview">
+        <Code
+          value={'<DataTable source={records} schema={columns} onSelect={selectRecord} />'}
+          wrap
         />
-        <Button
-          label={descending ? 'Sort ascending' : 'Sort descending'}
-          onFocus={() => record('focused sort')}
-          onInvoke={() => {
-            update({ descending: !descending });
-            record(descending ? 'sorted ascending' : 'sorted descending');
-          }}
+        <Text
+          label="Ready rows carry stable identities so focus, selection, and edits survive window changes."
+          wrap
         />
-        <Select
-          value={state}
-          choices={['ready', 'loading', 'empty', 'error'].map((value) => ({ value, label: value }))}
-          onFocus={() => record('focused state')}
-          onChange={(event) => {
-            const next = sourceState(event.value);
-            update({ state: next });
-            record(`state ${next}`);
-          }}
-        />
-      </Row>
-      {state === 'loading'
-        ? [
-            <Column key={'loading'} gap={1}>
-              <Text label={'Waiting for a row window'} />
-              <Progress />
-            </Column>,
-          ]
-        : state === 'empty'
+      </DocumentationSection>
+      <DocumentationSection title="Behavior">
+        <Row gap={2} wrap={true}>
+          <Entry
+            value={filter}
+            placeholder={'Filter records'}
+            onFocus={() => record('focused filter')}
+            onChange={(event) => {
+              update({ filter: String(event.value ?? '') });
+              record('filtered records');
+            }}
+          />
+          <Button
+            label={descending ? 'Sort ascending' : 'Sort descending'}
+            onFocus={() => record('focused sort')}
+            onInvoke={() => {
+              update({ descending: !descending });
+              record(descending ? 'sorted ascending' : 'sorted descending');
+            }}
+          />
+          <Select
+            value={state}
+            choices={['ready', 'loading', 'empty', 'error'].map((value) => ({
+              value,
+              label: value,
+            }))}
+            onFocus={() => record('focused state')}
+            onChange={(event) => {
+              const next = sourceState(event.value);
+              update({ state: next });
+              record(`state ${next}`);
+            }}
+          />
+        </Row>
+        {state === 'loading'
           ? [
-              <EmptyState
-                key={'empty'}
-                label={'No matching records'}
-                detail={'Change the filter or state control.'}
-              />,
+              <Column key={'loading'} gap={1}>
+                <Text label={'Waiting for a row window'} />
+                <Progress />
+              </Column>,
             ]
-          : state === 'error'
+          : state === 'empty'
             ? [
-                <Banner key={'error'} label={'The source rejected this window'} tone={'danger'} />,
-                <Button
-                  key={'retry'}
-                  label={'Retry row source'}
-                  onInvoke={() => {
-                    update({ state: 'loading' });
-                    record('retrying row source');
-                  }}
+                <EmptyState
+                  key={'empty'}
+                  label={'No matching records'}
+                  detail={'Change the filter or state control.'}
                 />,
               ]
-            : []}
-      <DataTable
-        source={SOURCE}
-        schema={SCHEMA}
-        grow={true}
-        onFocus={() => record('focused records')}
-        onSelect={(event) => {
-          const rows = Array.isArray(event.collection?.rows)
-            ? event.collection.rows.slice(0, 1)
-            : [];
-          const current =
-            event.collection?.source === SOURCE && event.collection?.version === source.version;
-          const label =
-            !current || rows.length === 0
-              ? 'No current record selected'
-              : `Selected immutable record ${String(rows[0].id)}`;
-          setSelected(label);
-          record(label.toLowerCase());
-        }}
-        onEdit={async (event) => {
-          const result = await source.edit(event);
-          record(
-            result.accepted
-              ? `renamed immutable record ${event.row.id}`
-              : `edit refused: ${result.reason}`,
-          );
-        }}
-        onSort={async (event) => {
-          const result = await source.sort(event);
-          if (result.accepted) setDescending(Boolean(event.descending));
-          record(
-            result.accepted
-              ? `sorted ${event.column} ${event.descending ? 'descending' : 'ascending'}`
-              : `sort refused: ${result.reason}`,
-          );
-        }}
-      />
-      <Text label={selected} color={'text-dim'} />
+            : state === 'error'
+              ? [
+                  <Banner
+                    key={'error'}
+                    label={'The source rejected this window'}
+                    tone={'danger'}
+                  />,
+                  <Button
+                    key={'retry'}
+                    label={'Retry row source'}
+                    onInvoke={() => {
+                      update({ state: 'loading' });
+                      record('retrying row source');
+                    }}
+                  />,
+                ]
+              : []}
+        <DataTable
+          source={SOURCE}
+          schema={SCHEMA}
+          grow={true}
+          onFocus={() => record('focused records')}
+          onSelect={(event) => {
+            const rows = Array.isArray(event.collection?.rows)
+              ? event.collection.rows.slice(0, 1)
+              : [];
+            const current =
+              event.collection?.source === SOURCE && event.collection?.version === source.version;
+            const label =
+              !current || rows.length === 0
+                ? 'No current record selected'
+                : `Selected immutable record ${String(rows[0].id)}`;
+            setSelected(label);
+            record(label.toLowerCase());
+          }}
+          onEdit={async (event) => {
+            const result = await source.edit(event);
+            record(
+              result.accepted
+                ? `renamed immutable record ${event.row.id}`
+                : `edit refused: ${result.reason}`,
+            );
+          }}
+          onSort={async (event) => {
+            const result = await source.sort(event);
+            if (result.accepted) setDescending(Boolean(event.descending));
+            record(
+              result.accepted
+                ? `sorted ${event.column} ${event.descending ? 'descending' : 'ascending'}`
+                : `sort refused: ${result.reason}`,
+            );
+          }}
+        />
+        <Text label={selected} color={'text-dim'} />
+      </DocumentationSection>
+      <DocumentationSection title="States and recovery">
+        <SpecimenGrid>
+          <Text label="Loading · retain the table frame and announce the requested window." wrap />
+          <Text label="Empty · explain why there are no rows and how to broaden the query." wrap />
+          <Text label="Recoverable error · keep Retry adjacent to the failed source." wrap />
+          <Text
+            label="Edit accepted · advance the source version and retain immutable row identity."
+            wrap
+          />
+          <Text
+            label="Edit rejected · preserve the cell and explain stale authority or invalid input."
+            wrap
+          />
+          <Text
+            label="Truncated window · render at most 128 rows, then request the next bounded range."
+            wrap
+          />
+        </SpecimenGrid>
+      </DocumentationSection>
+      <DocumentationSection title="Keyboard and accessibility">
+        <Text
+          label="Move focus into the grid, use arrow keys to traverse visible cells, Space to select a row, and Enter to edit an editable cell. Announce loading, errors, and edit results without moving focus."
+          wrap
+        />
+      </DocumentationSection>
+      <DocumentationSection title="API">
+        <ApiReference rows={rows('DataTable')} />
+      </DocumentationSection>
+      <Expander label="Advanced · million-row virtualization" expanded={false} width="fill">
+        <Column gap={2} pad={2}>
+          <Heading label={'1,000,000 logical records'} scale={'title'} wrap={true} />
+          <Text
+            label={
+              'Only host-requested 128-row windows exist in memory. Scrolling requests the next window without materializing the collection.'
+            }
+            wrap
+          />
+        </Column>
+      </Expander>
       <Text
         label={`Recent operations (${interactions.length}/${OPERATION_HISTORY_LIMIT})`}
         color={'text-dim'}
@@ -320,6 +383,6 @@ export function LargeDataTableStory({ source }: { source: LargeRecordSource }) {
             />,
           ]
         : interactions.map((item) => <InlineMessage key={item} label={item} tone={'positive'} />)}
-    </Column>
+    </ComponentDocument>
   );
 }

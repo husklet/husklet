@@ -38,8 +38,33 @@ test('one DataTable node represents one million rows without materializing row n
     .map((patch) => patch.Create.tag);
   assert.equal(source.length(), LOGICAL_ROWS);
   assert.equal(created.filter((tag) => tag === 'DataTable').length, 1);
-  assert.equal(created.filter((tag) => tag === 'TableRow' || tag === 'TableCell').length, 0);
-  assert(created.length < 20, `one million logical rows created ${created.length} React nodes`);
+  assert(
+    created.filter((tag) => tag === 'TableRow' || tag === 'TableCell').length <= 96,
+    'the fixed API reference must remain bounded independently of the logical row count',
+  );
+  assert(created.length < 160, `one million logical rows created ${created.length} React nodes`);
+});
+
+test('DataTable teaches bounded behavior and recovery before the advanced stress contract', () => {
+  const frame = host().render(h(LargeDataTableStory, { source: new LargeRecordSource() }));
+  const labels = frame.patches
+    .filter((patch) => patch.SetProp?.prop === 'Label')
+    .map((patch) => patch.SetProp.value?.Text);
+  for (const label of [
+    'DataTable',
+    'Overview',
+    'Behavior',
+    'States and recovery',
+    'Keyboard and accessibility',
+    'API',
+    'Advanced · million-row virtualization',
+  ]) {
+    assert(labels.includes(label), `missing ${label}`);
+  }
+  assert(labels.indexOf('Behavior') < labels.indexOf('API'));
+  assert(labels.indexOf('States and recovery') < labels.indexOf('API'));
+  assert(labels.some((label) => label?.includes('Edit rejected')));
+  assert(labels.some((label) => label?.includes('Truncated window')));
 });
 
 test('sort, filter, resize and all states remain bounded source operations', async () => {
