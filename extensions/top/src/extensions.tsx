@@ -1443,7 +1443,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                                 <ConfirmAction
                                   label="Remove"
                                   confirmLabel={`Remove ${extension.name}`}
-                                  question={`Remove ${extension.name} from this workspace?`}
+                                  question={`Remove ${extension.name} and permanently delete its private workspace data?`}
                                   authorityKey={extension.image_digest}
                                   enabled={!busy}
                                   onConfirm={() => lifecycle(extension, 'remove')}
