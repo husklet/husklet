@@ -2296,27 +2296,27 @@ test('terminal management exposes exact pin state and acts through immutable tab
     placeholderProperty(stage, 'New tab title', 'Width'),
     'tab creation stays compact instead of consuming the page height',
   );
-  assert.ok(labelled(stage, '1 terminal pane'));
-  assert.ok(labelled(stage, 'Pane 1 · Terminal'));
+  assert.ok(labelled(stage, '1 pane'));
+  assert.ok(labelled(stage, 'Pane 1'));
   assert.equal(
-    ancestorProperty(stage, 'Open tab', 'Row', 'Wrap')?.Flag,
+    ancestorProperty(stage, 'Focus tab', 'Row', 'Wrap')?.Flag,
     true,
     'terminal actions reflow instead of leaving the narrow pane',
   );
   assert.equal(
-    ancestorProperty(stage, 'Pane 1 · Terminal', 'Card', 'Justify'),
-    undefined,
-    'terminal cards do not override fill width with a conflicting cross-axis alignment',
+    ancestorProperty(stage, 'Pane 1', 'Row', 'Wrap')?.Flag,
+    true,
+    'pane identity and its one view action reflow together',
   );
   assert.ok(
-    ancestorProperty(stage, 'Pane 1 · Terminal', 'Card', 'Width'),
-    'terminal inventory cards share the available page width',
+    ancestorProperty(stage, 'Pane 1', 'Row', 'Width'),
+    'terminal pane rows share the available page width',
   );
   invoke(stage, 'Pin tab');
   await settled();
   await settled();
   assert.deepEqual(calls, [['pin', 'p7', true], ['reload']]);
-  invoke(stage, 'Open tab');
+  invoke(stage, 'Focus tab');
   await settled();
   assert.deepEqual(calls.at(-1), ['focus', 's4']);
 });
@@ -4815,14 +4815,13 @@ test('container controls follow the real daemon lifecycle states', () => {
   stage.render(h(Containers, { api, resource: inventory('running') }));
   assert.equal(labelled(stage, 'Remove'), undefined, 'running cards omit an invalid remove action');
   assert.equal(taggedProperty(stage, 'More actions', 'Expander', 'Expanded')?.Flag, false);
-  assert.equal(taggedProperty(stage, 'Details', 'Button', 'Variant')?.Variant, 'Outline');
+  assert.equal(taggedProperty(stage, 'Details', 'Button', 'Variant')?.Variant, 'Filled');
 
   stage = host();
   stage.render(h(Containers, { api, resource: inventory('created') }));
   assert.equal(isEnabled(stage, 'Remove'), true, 'created containers are removable');
   assert.equal(isEnabled(stage, 'Start'), true, 'created containers are startable');
-  assert.equal(taggedProperty(stage, 'Start', 'Button', 'Variant')?.Variant, 'Filled');
-  assert.equal(taggedProperty(stage, 'Start', 'Button', 'Tone')?.Tone, 'Accent');
+  assert.equal(taggedProperty(stage, 'Start', 'Button', 'Variant')?.Variant, 'Outline');
 
   stage = host();
   stage.render(h(Containers, { api, resource: inventory('exited') }));
@@ -5115,7 +5114,7 @@ test('container details load through the bounded source and a failed read is ret
   );
 });
 
-test('empty container inspection remains understandable and leaves quick actions available', async () => {
+test('empty container inspection remains understandable and withholds unproven actions', async () => {
   const controlled = {
     containers: {
       inspect: async () => ({}),
@@ -5137,10 +5136,7 @@ test('empty container inspection remains understandable and leaves quick actions
   await settled();
   await settled();
   assert.ok(labelled(stage, 'No container details'));
-  assert.ok(
-    labelled(stage, 'Quick actions'),
-    'empty metadata does not withdraw operational controls',
-  );
+  assert.equal(labelled(stage, 'Quick actions'), undefined);
 });
 
 test('execution details, separate bounded streams, wait and retry are operational', async () => {

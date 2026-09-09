@@ -2,7 +2,6 @@ import React from 'react';
 import {
   Button,
   Card,
-  CardActions,
   CardContent,
   CardHeader,
   Column,
@@ -468,25 +467,57 @@ export function Terminals({
               width="fill"
             />
             <CardContent gap={1}>
-              <Text
-                label={
-                  tab.panes.length === 0
-                    ? `${tab.pinned ? 'Pinned · ' : ''}Workspace overview or extension tab · no terminal panes`
-                    : `${tab.pinned ? 'Pinned · ' : ''}${tab.panes.length} terminal pane${tab.panes.length === 1 ? '' : 's'}`
-                }
-                color="text-dim"
-                wrap
-              />
+              <Row gap={1} align="center" width="fill" wrap>
+                <Text
+                  label={
+                    tab.panes.length === 0
+                      ? `${tab.pinned ? 'Pinned · ' : ''}Overview or extension tab · no terminal panes`
+                      : `${tab.pinned ? 'Pinned · ' : ''}${tab.panes.length} pane${tab.panes.length === 1 ? '' : 's'}`
+                  }
+                  color="text-dim"
+                  wrap
+                />
+                {busy === tab.id ? <Spinner /> : null}
+              </Row>
+              <Row gap={1} wrap justify="start">
+                <Button
+                  label="Focus tab"
+                  enabled={busy === '' && Boolean(tab.panes[0])}
+                  variant="filled"
+                  tone="accent"
+                  onInvoke={() => {
+                    void focus(tab);
+                  }}
+                />
+                <Button
+                  label={
+                    tab.pinned
+                      ? 'Unpin tab'
+                      : tab.panes.length === 0
+                        ? 'Pin overview tab'
+                        : 'Pin tab'
+                  }
+                  enabled={busy === ''}
+                  variant="outline"
+                  onInvoke={() => {
+                    void pin(tab);
+                  }}
+                />
+              </Row>
               {tab.panes.map((pane, paneIndex) => (
-                <Row key={pane.slot} gap={1} align="center" width="fill" wrap>
-                  <Text
-                    label={`Pane ${paneIndex + 1} · ${pane.occupant === 'terminal' ? 'Terminal' : 'Interface'}${pane.provider ? ` · ${pane.provider.extension}/${pane.provider.provider}` : ''}`}
-                    color="text-dim"
-                  />
+                <Row key={pane.slot} gap={1} align="center" width="fill" wrap justify="start">
+                  <Column gap={0} width={{ minimum: { chars: 18 }, maximum: { chars: 54 } }}>
+                    <Heading label={`Pane ${paneIndex + 1}`} scale="caption" />
+                    <Text
+                      label={`${pane.occupant === 'terminal' ? 'Terminal' : 'Interface'}${pane.provider ? ` · ${pane.provider.extension}/${pane.provider.provider}` : ''}`}
+                      color="text-dim"
+                      wrap
+                    />
+                  </Column>
                   <Button
                     label={`${selected === pane.slot ? 'Refresh' : 'View'} pane ${paneIndex + 1}`}
                     enabled={busy === ''}
-                    variant="ghost"
+                    variant="outline"
                     onInvoke={() => {
                       void inspect(pane.slot);
                     }}
@@ -529,7 +560,7 @@ export function Terminals({
                         )}
                       </Column>
                     </Expander>
-                    <Expander label="Input" expanded={readable.kind === 'terminal'}>
+                    <Expander label="Input" expanded={false}>
                       <Column gap={1}>
                         {readable.kind === 'terminal' && !cursor ? (
                           <Text
@@ -584,6 +615,13 @@ export function Terminals({
                               }}
                             />
                           </Row>
+                        ) : null}
+                        {readable.kind === 'terminal' ? (
+                          <Text
+                            label="Commands are parsed as argv: spaces separate arguments, while quotes and backslashes preserve spaces. No shell is added."
+                            color="text-dim"
+                            wrap
+                          />
                         ) : null}
                       </Column>
                     </Expander>
@@ -763,33 +801,6 @@ export function Terminals({
                 </Card>
               ) : null}
             </CardContent>
-            <CardActions gap={1}>
-              <Row gap={1} wrap justify="end">
-                {busy === tab.id ? <Spinner /> : null}
-                <Button
-                  label={
-                    tab.pinned
-                      ? 'Unpin tab'
-                      : tab.panes.length === 0
-                        ? 'Pin overview tab'
-                        : 'Pin tab'
-                  }
-                  enabled={busy === ''}
-                  variant="ghost"
-                  onInvoke={() => {
-                    void pin(tab);
-                  }}
-                />
-                <Button
-                  label="Open tab"
-                  enabled={busy === '' && Boolean(tab.panes[0])}
-                  variant="ghost"
-                  onInvoke={() => {
-                    void focus(tab);
-                  }}
-                />
-              </Row>
-            </CardActions>
           </Card>
         ))}
         <Omitted count={view.omitted} />

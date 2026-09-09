@@ -211,33 +211,55 @@ export function Containers({ api, resource, containerDetails, onOpenExecution }:
               <CardContent gap={1} align="start" width="fill">
                 <Row gap={1} align="center" justify="start" width="fill" wrap>
                   <Badge label={item.state} tone={stateTone(item.state)} />
+                  <Text label={`ID ${shortId(item.id)}`} color="text-dim" />
                 </Row>
-                <ContainerRename
-                  api={api}
-                  container={item}
-                  reload={resource.reload}
-                  blocked={busy !== ''}
-                />
-                <ContainerActions item={item} busy={busy} act={act} remove={remove} />
               </CardContent>
               <CardActions gap={1} align="start" justify="start" width="fill">
                 <Row gap={1} wrap justify="start">
                   <Button
-                    label={selected === item.id ? 'Hide details' : 'Details'}
-                    variant="outline"
+                    label={
+                      selected === item.id
+                        ? inspection.state === 'loading'
+                          ? 'Reading details…'
+                          : inspection.state === 'error' && isAuthorityDenial(inspection.error)
+                            ? 'Access required'
+                            : inspection.state === 'error'
+                              ? 'Retry details'
+                              : 'Hide details'
+                        : 'Details'
+                    }
+                    variant="filled"
+                    tone="accent"
+                    enabled={
+                      busy === '' &&
+                      !(
+                        selected === item.id &&
+                        inspection.state === 'error' &&
+                        isAuthorityDenial(inspection.error)
+                      )
+                    }
                     onInvoke={() => toggleDetails(item)}
                   />
                   {startable(item.state) ? (
                     <Button
                       label="Start"
-                      variant="filled"
-                      tone="accent"
+                      variant="outline"
                       enabled={busy === ''}
                       onInvoke={() => act('start', item.id, undefined, item.generation)}
                     />
                   ) : null}
                 </Row>
               </CardActions>
+              <CardContent gap={1} align="start" width="fill">
+                <ContainerActions
+                  api={api}
+                  item={item}
+                  busy={busy}
+                  act={act}
+                  remove={remove}
+                  reload={resource.reload}
+                />
+              </CardContent>
               {selected === item.id ? (
                 <ContainerDetail
                   api={api}
@@ -258,69 +280,85 @@ export function Containers({ api, resource, containerDetails, onOpenExecution }:
 }
 
 function ContainerActions({
+  api,
   item,
   busy,
   act,
   remove,
+  reload,
 }: {
+  api: WorkspaceApi;
   item: ContainerSummary;
   busy: string;
   act: LifecycleAction;
   remove: (item: ContainerSummary) => void | Promise<void>;
+  reload: () => void | Promise<void>;
 }) {
   const blocked = busy !== '';
   const running = item.state === 'running';
   const active = running || item.state === 'paused';
   return (
     <Expander label="More actions" expanded={false} width="fill" align="start">
-      <Row gap={1} wrap align="center">
-        {active ? (
-          <Button
-            label="Restart"
-            variant="ghost"
-            enabled={!blocked}
-            onInvoke={() => act('restart', item.id, undefined, item.generation)}
-          />
-        ) : null}
-        {active ? (
-          <Button
-            label={item.state === 'paused' ? 'Resume' : 'Pause'}
-            variant="ghost"
-            enabled={!blocked}
-            onInvoke={() =>
-              act(
-                item.state === 'paused' ? 'unpause' : 'pause',
-                item.id,
-                undefined,
-                item.generation,
-              )
-            }
-          />
-        ) : null}
-        {active || item.state === 'restarting' ? (
-          <ConfirmAction
-            label="Stop"
-            confirmLabel="Confirm stop"
-            pendingLabel="Confirm stop"
-            authorityKey={`container:${item.id}:stop`}
-            question={`Stop ${item.name || shortId(item.id)} with immutable ID ${item.id}?`}
-            enabled={!blocked}
-            onConfirm={() => act('stop', item.id, undefined, item.generation)}
-          />
-        ) : null}
-        {removable(item.state) ? (
-          <ConfirmAction
-            label="Remove"
-            confirmLabel="Confirm remove"
-            pendingLabel="Confirm remove"
-            authorityKey={`container:${item.id}:remove`}
-            question={`Remove inactive container ${item.name || shortId(item.id)} with immutable ID ${item.id}?`}
-            enabled={!blocked}
-            onConfirm={() => remove(item)}
-          />
-        ) : null}
-      </Row>
+      <Column gap={1} align="start" width="fill">
+        <ContainerRename api={api} container={item} reload={reload} blocked={blocked} />
+        <Row gap={1} wrap align="center">
+          {active ? (
+            <Button
+              label="Restart"
+              variant="ghost"
+              enabled={!blocked}
+              onInvoke={() => act('restart', item.id, undefined, item.generation)}
+            />
+          ) : null}
+          {active ? (
+            <Button
+              label={item.state === 'paused' ? 'Resume' : 'Pause'}
+              variant="ghost"
+              enabled={!blocked}
+              onInvoke={() =>
+                act(
+                  item.state === 'paused' ? 'unpause' : 'pause',
+                  item.id,
+                  undefined,
+                  item.generation,
+                )
+              }
+            />
+          ) : null}
+          {active || item.state === 'restarting' ? (
+            <ConfirmAction
+              label="Stop"
+              confirmLabel="Confirm stop"
+              pendingLabel="Confirm stop"
+              authorityKey={`container:${item.id}:stop`}
+              question={`Stop ${item.name || shortId(item.id)} with immutable ID ${item.id}?`}
+              enabled={!blocked}
+              onConfirm={() => act('stop', item.id, undefined, item.generation)}
+            />
+          ) : null}
+          {removable(item.state) ? (
+            <ConfirmAction
+              label="Remove"
+              confirmLabel="Confirm remove"
+              pendingLabel="Confirm remove"
+              authorityKey={`container:${item.id}:remove`}
+              question={`Remove inactive container ${item.name || shortId(item.id)} with immutable ID ${item.id}?`}
+              enabled={!blocked}
+              onConfirm={() => remove(item)}
+            />
+          ) : null}
+        </Row>
+      </Column>
     </Expander>
+  );
+}
+
+function isAuthorityDenial(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const failure = error as { kind?: unknown; message?: unknown };
+  return (
+    failure.kind === 'denied' ||
+    (typeof failure.message === 'string' && failure.message.includes('consented resource scope'))
   );
 }
 

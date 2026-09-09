@@ -11,6 +11,7 @@ import {
   Heading,
   Badge,
   IconButton,
+  InlineMessage,
   ResourceState,
   Row,
   Separator,
@@ -211,6 +212,9 @@ export function ContainerDetail({
       setAttachment({ state: 'error', slot: '', error });
     }
   };
+  const accessRequired = inspection.state === 'error' && isAuthorityDenial(inspection.error);
+  const inspected = inspection.state === 'ready' && inspection.count > 0;
+  const operational = inspected && container.state === 'running';
   return (
     <CardContent gap={2}>
       <ResourceState
@@ -224,101 +228,142 @@ export function ContainerDetail({
         loadingLabel={'Reading container details…'}
         emptyLabel={'No container details'}
         emptyDetail={'The host returned no inspectable fields.'}
-        error={boundedMessage(inspection.error)}
-        retryLabel={'Retry details'}
-        onRetry={onRetry}
+        error={accessRequired ? '' : boundedMessage(inspection.error)}
+        retryLabel={accessRequired ? undefined : 'Retry details'}
+        onRetry={accessRequired ? undefined : onRetry}
       >
         <StructuredDetail value={inspection.detail} />
       </ResourceState>
-      <Separator />
-      <Heading label={'Quick actions'} scale={'caption'} />
-      <Row gap={1} wrap={true}>
-        <Button label={'Load logs'} onInvoke={readLogs} />
-        <ConfirmAction
-          authorityKey={`container:${container.id}:kill:SIGKILL`}
-          label={'Kill'}
-          confirmLabel={'Confirm kill'}
-          pendingLabel={'Confirm kill'}
-          question={`Force-kill ${container.name || shortId(container.id)} with immutable ID ${container.id}?`}
-          onConfirm={() => act('kill', container.id, 'SIGKILL', container.generation)}
-        />
-      </Row>
-      {logs === null ? null : <Text label={logs || 'No log output.'} wrap={true} />}
-      <Separator />
-      <Heading label={'Run a command'} scale={'caption'} />
-      <Text
-        label={
-          'Execute captures output for later inspection. Attach terminal opens the same command interactively.'
-        }
-        color={'text-dim'}
-        wrap={true}
-      />
-      <CommandEditor
-        program={command.program}
-        arguments_={command.arguments}
-        enabled={execution.state !== 'loading' && attachment.state !== 'loading'}
-        onProgramChange={(program) => setCommand((value) => ({ ...value, program }))}
-        onArgumentsChange={(arguments_) =>
-          setCommand((value) => ({ ...value, arguments: arguments_ }))
-        }
-      />
-      <Expander label={'Execution options'}>
-        <Column gap={1}>
-          <Entry
-            value={command.user}
-            placeholder={'Run as user (optional)'}
-            enabled={execution.state !== 'loading'}
-            onChange={(event) =>
-              setCommand((value) => ({ ...value, user: String(event.value ?? '') }))
-            }
-          />
-          <Entry
-            value={command.workingDirectory}
-            placeholder={'Working directory (optional)'}
-            enabled={execution.state !== 'loading'}
-            onChange={(event) =>
-              setCommand((value) => ({ ...value, workingDirectory: String(event.value ?? '') }))
-            }
-          />
-        </Column>
-      </Expander>
-      <Row gap={1} wrap={true}>
-        <Button
-          label={execution.state === 'loading' ? 'Executing…' : 'Execute'}
-          enabled={execution.state !== 'loading' && command.program.trim().length > 0}
-          onInvoke={run}
-        />
-        <Button
-          label={attachment.state === 'loading' ? 'Attaching…' : 'Attach terminal'}
-          enabled={
-            attachment.state !== 'loading' &&
-            command.program.trim().length > 0 &&
-            container.state === 'running'
-          }
-          onInvoke={attach}
-        />
-      </Row>
-      {attachment.state === 'error' ? (
-        <Text label={boundedMessage(attachment.error)} color={'danger'} wrap={true} />
-      ) : null}
-      {attachment.state === 'ready' ? (
-        <Text
-          label={`Interactive terminal opened in ${attachment.slot}.`}
-          color={'positive'}
-          wrap={true}
+      {accessRequired ? (
+        <InlineMessage
+          label="This extension was not granted access to inspect this container. Change its exact container access from Extensions, then inspect again."
+          tone="warning"
         />
       ) : null}
-      {execution.state === 'error' ? (
-        <Text label={boundedMessage(execution.error)} color={'danger'} wrap={true} />
+      {inspected && container.state !== 'running' ? (
+        <InlineMessage
+          label="Start this container before running commands or opening an interactive terminal."
+          tone="neutral"
+        />
       ) : null}
-      {execution.state === 'ready' ? (
-        <Row gap={1} wrap={true} align={'center'}>
-          <Text label={`Execution ${execution.id} created.`} color={'positive'} wrap={true} />
-          {onOpenExecution ? (
-            <Button label={'Inspect execution'} onInvoke={() => onOpenExecution(execution.id)} />
+      {!inspected ? null : (
+        <>
+          <Separator />
+          <Heading label={'Quick actions'} scale={'caption'} />
+          <Row gap={1} wrap={true}>
+            <Button label={'Load logs'} onInvoke={readLogs} />
+            {operational ? (
+              <ConfirmAction
+                authorityKey={`container:${container.id}:kill:SIGKILL`}
+                label={'Kill'}
+                confirmLabel={'Confirm kill'}
+                pendingLabel={'Confirm kill'}
+                question={`Force-kill ${container.name || shortId(container.id)} with immutable ID ${container.id}?`}
+                onConfirm={() => act('kill', container.id, 'SIGKILL', container.generation)}
+              />
+            ) : null}
+          </Row>
+          {logs === null ? null : <Text label={logs || 'No log output.'} wrap={true} />}
+          {operational ? (
+            <>
+              <Separator />
+              <Heading label={'Run a command'} scale={'caption'} />
+              <Text
+                label={
+                  'Execute captures output for later inspection. Attach terminal opens the same command interactively.'
+                }
+                color={'text-dim'}
+                wrap={true}
+              />
+              <CommandEditor
+                program={command.program}
+                arguments_={command.arguments}
+                enabled={execution.state !== 'loading' && attachment.state !== 'loading'}
+                onProgramChange={(program) => setCommand((value) => ({ ...value, program }))}
+                onArgumentsChange={(arguments_) =>
+                  setCommand((value) => ({ ...value, arguments: arguments_ }))
+                }
+              />
+              <Expander label={'Execution options'}>
+                <Column gap={1}>
+                  <Entry
+                    value={command.user}
+                    placeholder={'Run as user (optional)'}
+                    enabled={execution.state !== 'loading'}
+                    onChange={(event) =>
+                      setCommand((value) => ({ ...value, user: String(event.value ?? '') }))
+                    }
+                  />
+                  <Entry
+                    value={command.workingDirectory}
+                    placeholder={'Working directory (optional)'}
+                    enabled={execution.state !== 'loading'}
+                    onChange={(event) =>
+                      setCommand((value) => ({
+                        ...value,
+                        workingDirectory: String(event.value ?? ''),
+                      }))
+                    }
+                  />
+                </Column>
+              </Expander>
+              <Row gap={1} wrap={true}>
+                <Button
+                  label={execution.state === 'loading' ? 'Executing…' : 'Execute'}
+                  enabled={execution.state !== 'loading' && command.program.trim().length > 0}
+                  onInvoke={run}
+                />
+                <Button
+                  label={attachment.state === 'loading' ? 'Attaching…' : 'Attach terminal'}
+                  enabled={
+                    attachment.state !== 'loading' &&
+                    command.program.trim().length > 0 &&
+                    container.state === 'running'
+                  }
+                  onInvoke={attach}
+                />
+              </Row>
+              {attachment.state === 'error' ? (
+                <Text label={boundedMessage(attachment.error)} color={'danger'} wrap={true} />
+              ) : null}
+              {attachment.state === 'ready' ? (
+                <Text
+                  label={`Interactive terminal opened in ${attachment.slot}.`}
+                  color={'positive'}
+                  wrap={true}
+                />
+              ) : null}
+              {execution.state === 'error' ? (
+                <Text label={boundedMessage(execution.error)} color={'danger'} wrap={true} />
+              ) : null}
+              {execution.state === 'ready' ? (
+                <Row gap={1} wrap={true} align={'center'}>
+                  <Text
+                    label={`Execution ${execution.id} created.`}
+                    color={'positive'}
+                    wrap={true}
+                  />
+                  {onOpenExecution ? (
+                    <Button
+                      label={'Inspect execution'}
+                      onInvoke={() => onOpenExecution(execution.id)}
+                    />
+                  ) : null}
+                </Row>
+              ) : null}
+            </>
           ) : null}
-        </Row>
-      ) : null}
+        </>
+      )}
     </CardContent>
+  );
+}
+
+function isAuthorityDenial(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const failure = error as { kind?: unknown; message?: unknown };
+  return (
+    failure.kind === 'denied' ||
+    (typeof failure.message === 'string' && failure.message.includes('consented resource scope'))
   );
 }

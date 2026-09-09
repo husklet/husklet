@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement as h } from 'react';
-import { Executions, Images, Volumes } from '../dist/app.js';
+import { Containers, Executions, Images, Volumes } from '../dist/app.js';
 import { host } from './host.js';
 
 const resource = (data) => ({ data, loading: false, error: null, reload: async () => {} });
@@ -63,6 +63,48 @@ test('volume authority refusal gives one recovery path and withholds removal', a
     ),
   );
   assert.equal(currentLabels(stage).includes('Remove'), false);
+});
+
+test('container authority refusal explains recovery and withholds detail operations', async () => {
+  const denied = Object.assign(new Error('outside the consented resource scope'), {
+    kind: 'denied',
+  });
+  const stage = host();
+  stage.render(
+    h(Containers, {
+      api: {
+        containers: {
+          inspect: async () => {
+            throw denied;
+          },
+        },
+      },
+      resource: resource([
+        {
+          id: 'container-private',
+          name: 'private-api',
+          image: 'internal/api:latest',
+          state: 'running',
+          generation: 4,
+        },
+      ]),
+    }),
+  );
+
+  invoke(stage, 'Details');
+  await settled();
+  await settled();
+  assert.ok(labelled(stage, 'Access required'));
+  assert.ok(
+    labelled(
+      stage,
+      'This extension was not granted access to inspect this container. Change its exact container access from Extensions, then inspect again.',
+    ),
+  );
+  assert.equal(currentLabels(stage).includes('Retry details'), false);
+  assert.equal(currentLabels(stage).includes('Load logs'), false);
+  assert.equal(currentLabels(stage).includes('Kill'), false);
+  assert.equal(currentLabels(stage).includes('Execute'), false);
 });
 
 test('execution output has an observable loading state and explicit empty result', async () => {

@@ -1339,9 +1339,7 @@ test(
         requests.some(
           (request) =>
             request.call === 'interface_render_at' &&
-            request.with.frame.patches.some(
-              (patch) => patch.SetProp?.value?.Text === 'Pane 1 · Terminal',
-            ),
+            request.with.frame.patches.some((patch) => patch.SetProp?.value?.Text === 'Pane 1'),
         ),
       );
       peer.write(
@@ -1353,7 +1351,7 @@ test(
         pinned: true,
       });
       peer.write(
-        encode({ channel: 47, kind: KIND.event, payload: invocation(requests, 'Open tab') }),
+        encode({ channel: 47, kind: KIND.event, payload: invocation(requests, 'Focus tab') }),
       );
       await until(() => calls.includes('terminal_focus_pane'));
       assert.deepEqual(requests.find((request) => request.call === 'terminal_focus_pane').with, {
