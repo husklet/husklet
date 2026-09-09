@@ -11,6 +11,7 @@ type Configuration = {
   roots: string[];
   suffixes?: string[];
   chunkBytes?: number;
+  maxDocumentBytes?: number;
   once?: boolean;
   model?: { container: string; generation: number; command: string[] };
 };
@@ -22,7 +23,8 @@ if (!configuration?.path || !configuration.roots?.length) {
   throw new TypeError('usage: embeddings-indexer.ts JSON(path, roots, suffixes?, model?, once?)');
 }
 const suffixes = configuration.suffixes ?? ['.md', '.txt', '.ts'];
-const chunkBytes = Math.max(1, Math.min(configuration.chunkBytes ?? 64 * 1024, 512 * 1024));
+const chunkBytes = Math.max(1, Math.min(configuration.chunkBytes ?? 64 * 1024, 64 * 1024));
+const maxDocumentBytes = configuration.maxDocumentBytes ?? 16 * 1024 * 1024;
 const checkpointCodec = {
   decode(value: unknown): Checkpoint {
     if (value === undefined) return { version: 1, revision: 0, documents: {} };
@@ -53,14 +55,12 @@ try {
   const index = async (entry: FileEntry, persist = true) => {
     const exact = entry.identity ? entry : await host.files.stat(entry.path);
     if (!exact.identity || checkpoint.documents[entry.path]?.identity === exact.identity) return;
-    const bytes: number[] = [];
-    for await (const range of host.files.readChunks(entry.path, {
+    const document = await host.files.readText(entry.path, {
+      maxBytes: maxDocumentBytes,
       chunkBytes,
       observed: exact.identity,
       signal: controller.signal,
-    })) {
-      bytes.push(...range.contents); // each next() applies consumer backpressure
-    }
+    });
     let digest: string;
     if (configuration.model) {
       const result = await host.containers.execText(
@@ -75,23 +75,25 @@ try {
       digest = result.stdout.trim(); // replace with the model's vector/index identifier
     } else {
       digest = Array.from(
-        new Uint8Array(await crypto.subtle.digest('SHA-256', new Uint8Array(bytes))),
+        new Uint8Array(
+          await crypto.subtle.digest('SHA-256', new TextEncoder().encode(document.text)),
+        ),
       )
         .map((byte) => byte.toString(16).padStart(2, '0'))
         .join('');
     }
-    const document = { identity: exact.identity, digest, bytes: bytes.length };
+    const indexed = { identity: document.identity, digest, bytes: document.bytes };
     if (persist)
       checkpoint = (
         await host.state.updateJson(checkpointCodec, (current) => ({
           ...current,
-          documents: { ...current.documents, [entry.path]: document },
+          documents: { ...current.documents, [entry.path]: indexed },
         }))
       ).value;
     process.stdout.write(
       `${JSON.stringify({ path: entry.path, identity: exact.identity, digest })}\n`,
     );
-    return document;
+    return indexed;
   };
 
   const inventory = await host.files.inventory();

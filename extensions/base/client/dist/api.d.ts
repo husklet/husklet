@@ -534,6 +534,12 @@ export interface FileRange {
     eof: boolean;
     truncated: boolean;
 }
+/** One identity-stable UTF-8 file collected under an explicit caller-owned bound. */
+export interface FileText {
+    text: string;
+    identity: string;
+    bytes: number;
+}
 export interface ExtensionState {
     identity: string;
     contents: number[];
@@ -1474,6 +1480,13 @@ export interface WorkspaceApi {
             observed?: string | null;
             signal?: AbortSignal;
         }): AsyncGenerator<FileRange, void, void>;
+        /** Read one identity-stable UTF-8 file without allowing its aggregate allocation to exceed maxBytes. */
+        readText(path: string, options: {
+            maxBytes: number;
+            chunkBytes?: number;
+            observed?: string | null;
+            signal?: AbortSignal;
+        }): Promise<FileText>;
         write(path: string, contents: Iterable<number>): Promise<void>;
         /** Atomically replace exactly the file identity returned by stat/readRange. */
         writeObserved(path: string, observed: string, contents: Iterable<number>): Promise<string>;

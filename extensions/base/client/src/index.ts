@@ -1736,6 +1736,55 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
           cursor += range.contents.length;
         }
       },
+      readText: async (
+        path,
+        {
+          maxBytes,
+          chunkBytes = 65_536,
+          observed = null,
+          signal,
+        }: {
+          maxBytes: number;
+          chunkBytes?: number;
+          observed?: string | null;
+          signal?: AbortSignal;
+        },
+      ) => {
+        if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > 64 * 1024 * 1024) {
+          throw new RangeError(
+            'filesystem text maxBytes must be an integer between 1 and 67108864',
+          );
+        }
+        const [, limit] = exactFileRange(0, chunkBytes);
+        const decoder = new TextDecoder('utf-8', { fatal: true });
+        const parts: string[] = [];
+        let bytes = 0;
+        let identity = observed;
+        try {
+          for await (const range of api.files.readChunks(path, {
+            chunkBytes: limit,
+            observed,
+            signal,
+          })) {
+            if (range.total > maxBytes || bytes + range.contents.length > maxBytes) {
+              throw new RangeError(
+                `filesystem text ${path} exceeds the caller's ${maxBytes} byte limit`,
+              );
+            }
+            identity ??= range.identity;
+            bytes += range.contents.length;
+            parts.push(decoder.decode(Uint8Array.from(range.contents), { stream: !range.eof }));
+          }
+          parts.push(decoder.decode());
+        } catch (error) {
+          if (error instanceof TypeError && /encoded data was not valid/i.test(error.message)) {
+            throw new TypeError(`filesystem text ${path} is not valid UTF-8`, { cause: error });
+          }
+          throw error;
+        }
+        if (!identity) throw new TypeError('host returned a filesystem file without an identity');
+        return { text: parts.join(''), identity, bytes };
+      },
       stat: async (path) => expect(await session.call('filesystem_stat', { path }), 'entry'),
       write: (path, contents) => done('filesystem_write', { path, contents: [...contents] }),
       writeObserved: async (path, observed, contents) =>
@@ -3797,6 +3846,7 @@ export const protocolCoverage = Object.freeze({
       'readRange',
       'readRanges',
       'readChunks',
+      'readText',
       'stat',
       'write',
       'writeObserved',

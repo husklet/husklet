@@ -181,6 +181,8 @@ order; the JavaScript client's checks are never treated as a security boundary.
 - `host.files.removeObserved(...)` — `filesystem_remove_observed`, requires `filesystem:write`.
 - `host.files.watchChanges(...)` — polls cursor-safe bounded pages and delivers change, truncation, and cursor-only advances so an indexer can durably resume even when consent filtering hides every path in a revision; requires `filesystem:read`.
 - `host.files.readRanges(...)` — reads up to 64 separately confined stable ranges in one 64 KiB aggregate request; requires `filesystem:read`.
+- `host.files.readChunks(...)` — iterates an identity-pinned file through bounded ranges with consumer backpressure; requires `filesystem:read`.
+- `host.files.readText(path, { maxBytes, ... })` — reads identity-pinned UTF-8 across range boundaries, rejects malformed text, and refuses a file larger than the caller's explicit byte budget; requires `filesystem:read`.
 
 ## Private extension state
 
