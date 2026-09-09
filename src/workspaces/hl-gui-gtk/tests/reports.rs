@@ -370,9 +370,7 @@ fn controlled(widget: &gtk::Widget, trigger: Trigger) -> bool {
 
 /// The components whose interaction is a value changing.
 fn valued(widget: &gtk::Widget) {
-    let nested_splitter = widget
-        .first_child()
-        .and_then(|child| child.downcast::<gtk::Paned>().ok());
+    let nested_splitter = descendant_paned(widget);
     if let Some(splitter) = widget.downcast_ref::<gtk::Paned>().or(nested_splitter.as_ref()) {
         splitter.set_position(splitter.position().saturating_add(17));
         return;
@@ -404,4 +402,24 @@ fn valued(widget: &gtk::Widget) {
     if let Some(editable) = widget.dynamic_cast_ref::<gtk::Editable>() {
         editable.set_text("typed");
     }
+}
+
+fn descendant_paned(widget: &gtk::Widget) -> Option<gtk::Paned> {
+    let mut pending = Vec::new();
+    let mut child = widget.first_child();
+    while let Some(current) = child {
+        child = current.next_sibling();
+        pending.push(current);
+    }
+    while let Some(current) = pending.pop() {
+        if let Ok(paned) = current.clone().downcast::<gtk::Paned>() {
+            return Some(paned);
+        }
+        let mut child = current.first_child();
+        while let Some(descendant) = child {
+            child = descendant.next_sibling();
+            pending.push(descendant);
+        }
+    }
+    None
 }

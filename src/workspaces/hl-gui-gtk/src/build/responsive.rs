@@ -37,12 +37,14 @@ impl ObjectImpl for Pane {
     fn properties() -> &'static [glib::ParamSpec] {
         static PROPERTIES: OnceLock<Vec<glib::ParamSpec>> = OnceLock::new();
         PROPERTIES.get_or_init(|| {
-            vec![glib::ParamSpecInt::builder("breakpoint")
-                .minimum(240)
-                .maximum(4096)
-                .default_value(640)
-                .read_only()
-                .build()]
+            vec![
+                glib::ParamSpecInt::builder("breakpoint")
+                    .minimum(240)
+                    .maximum(4096)
+                    .default_value(640)
+                    .read_only()
+                    .build(),
+            ]
         })
     }
 
@@ -83,7 +85,9 @@ impl WidgetImpl for Pane {
         let layout = self.layout();
         let paned = self.paned();
         let expanded = width >= self.breakpoint.get();
-        paned.set_position(if expanded { self.wide_position.get() } else { 0 });
+        if expanded {
+            paned.set_position(self.wide_position.get());
+        }
         if let Some(compact) = layout.first_child().filter(|child| !child.eq(paned)) {
             compact.set_visible(!expanded);
         }
@@ -171,7 +175,7 @@ pub(crate) fn set_position(widget: &gtk::Widget, position: i32) -> bool {
 
 pub(crate) fn remember_position(widget: &gtk::Widget, position: i32) {
     if let Some(pane) = widget.downcast_ref::<ResponsivePane>() {
-        if pane.imp().paned().start_child().is_some_and(|child| child.is_visible()) {
+        if pane.imp().paned().is_visible() && pane.imp().paned().start_child().is_some_and(|child| child.is_visible()) {
             pane.imp().wide_position.set(position);
         }
     }
