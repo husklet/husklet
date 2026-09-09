@@ -1396,7 +1396,13 @@ export interface WorkspaceApi {
     /** Reads a stable file identity as consumer-driven bounded chunks until EOF. */
     readChunks(
       path: string,
-      options?: { offset?: number; chunkBytes?: number; signal?: AbortSignal },
+      options?: {
+        offset?: number;
+        chunkBytes?: number;
+        /** Pin every range to an identity obtained from stat, inventory, or persisted state. */
+        observed?: string | null;
+        signal?: AbortSignal;
+      },
     ): AsyncGenerator<FileRange, void, void>;
     write(path: string, contents: Iterable<number>): Promise<void>;
     /** Atomically replace exactly the file identity returned by stat/readRange. */

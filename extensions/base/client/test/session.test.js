@@ -16,41 +16,154 @@ import {
 } from '../dist/index.js';
 import { CONTROL, KIND, Reader, encode } from '../dist/wire.js';
 
-test('real Unix range batch preserves ordered paths and one bounded frame', async () => {
-  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-range-batch-'));
-  const socketPath = path.join(directory, 'host.sock'); const calls = []; const connections = new Set();
+test('real Unix chunk reads pin a prior file identity across fragmented frames', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-observed-chunks-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const requests = [];
+  const connections = new Set();
   const server = net.createServer((socket) => {
-    connections.add(socket); socket.on('close', () => connections.delete(socket)); const reader = new Reader();
+    connections.add(socket);
+    socket.on('close', () => connections.delete(socket));
+    const reader = new Reader();
     socket.on('data', (chunk) => {
       for (const frame of reader.take(chunk)) {
-        if (frame.kind !== KIND.request) continue; calls.push(frame.payload);
-        const ranges = frame.payload.with.ranges.map((range) => ({
-          path: range.path, identity: `id:${range.path}`, offset: range.offset,
-          total: 1, contents: [range.path.charCodeAt(0)], eof: true, truncated: false,
-        }));
-        socket.write(encode({ channel: frame.channel, kind: KIND.response, payload: { reply: 'file_ranges', with: ranges } }));
+        if (frame.kind !== KIND.request) continue;
+        requests.push(frame.payload.with);
+        const input = frame.payload.with;
+        const stale = input.path === 'src/stale.ts';
+        const reply = encode({
+          channel: frame.channel,
+          kind: KIND.response,
+          payload: {
+            reply: 'file_range',
+            with: {
+              path: input.path,
+              identity: stale ? 'changed-v2' : 'source-v1',
+              offset: input.offset,
+              total: 4,
+              contents: input.offset === 0 ? [65, 66] : [67, 68],
+              eof: input.offset === 2,
+              truncated: input.offset !== 2,
+            },
+          },
+        });
+        socket.write(reply.subarray(0, 7));
+        socket.write(reply.subarray(7));
       }
     });
-    socket.write(encode({ channel: CONTROL, kind: KIND.open, payload: {
-      protocol: 1, peer: 'range-batch', granted: ['filesystem:read'],
-    } }));
+    const greeting = encode({
+      channel: CONTROL,
+      kind: KIND.open,
+      payload: { protocol: 1, peer: 'observed-chunks', granted: ['filesystem:read'] },
+    });
+    socket.write(greeting.subarray(0, 3));
+    socket.write(greeting.subarray(3));
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    const files = workspace(session).files;
+    const contents = [];
+    for await (const range of files.readChunks('src/a.ts', {
+      chunkBytes: 2,
+      observed: 'source-v1',
+    })) {
+      contents.push(...range.contents);
+    }
+    assert.deepEqual(contents, [65, 66, 67, 68]);
+    assert.deepEqual(
+      requests.slice(0, 2).map(({ offset, observed }) => ({ offset, observed })),
+      [
+        { offset: 0, observed: 'source-v1' },
+        { offset: 2, observed: 'source-v1' },
+      ],
+    );
+    await assert.rejects(async () => {
+      for await (const _range of files.readChunks('src/stale.ts', {
+        chunkBytes: 2,
+        observed: 'source-v1',
+      })) {
+        // The mismatched first range must never be delivered.
+      }
+    }, /inconsistent filesystem file range/);
+    assert.equal(requests.at(-1).observed, 'source-v1');
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('real Unix range batch preserves ordered paths and one bounded frame', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-range-batch-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const calls = [];
+  const connections = new Set();
+  const server = net.createServer((socket) => {
+    connections.add(socket);
+    socket.on('close', () => connections.delete(socket));
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.kind !== KIND.request) continue;
+        calls.push(frame.payload);
+        const ranges = frame.payload.with.ranges.map((range) => ({
+          path: range.path,
+          identity: `id:${range.path}`,
+          offset: range.offset,
+          total: 1,
+          contents: [range.path.charCodeAt(0)],
+          eof: true,
+          truncated: false,
+        }));
+        socket.write(
+          encode({
+            channel: frame.channel,
+            kind: KIND.response,
+            payload: { reply: 'file_ranges', with: ranges },
+          }),
+        );
+      }
+    });
+    socket.write(
+      encode({
+        channel: CONTROL,
+        kind: KIND.open,
+        payload: {
+          protocol: 1,
+          peer: 'range-batch',
+          granted: ['filesystem:read'],
+        },
+      }),
+    );
   });
   await new Promise((resolve) => server.listen(socketPath, resolve));
   try {
     const session = await connect({ path: socketPath });
     const values = await workspace(session).files.readRanges([
-      { path: 'src/a.rs', limit: 1 }, { path: 'src/b.rs', limit: 1 },
+      { path: 'src/a.rs', limit: 1 },
+      { path: 'src/b.rs', limit: 1 },
     ]);
-    assert.deepEqual(values.map(({ path }) => path), ['src/a.rs', 'src/b.rs']);
+    assert.deepEqual(
+      values.map(({ path }) => path),
+      ['src/a.rs', 'src/b.rs'],
+    );
     assert.equal(calls.length, 1);
-    assert.deepEqual(calls[0], { call: 'filesystem_read_ranges', with: { ranges: [
-      { path: 'src/a.rs', offset: 0, limit: 1, observed: null },
-      { path: 'src/b.rs', offset: 0, limit: 1, observed: null },
-    ] } });
+    assert.deepEqual(calls[0], {
+      call: 'filesystem_read_ranges',
+      with: {
+        ranges: [
+          { path: 'src/a.rs', offset: 0, limit: 1, observed: null },
+          { path: 'src/b.rs', offset: 0, limit: 1, observed: null },
+        ],
+      },
+    });
     await session.close();
   } finally {
     for (const connection of connections) connection.destroy();
-    await new Promise((resolve) => server.close(resolve)); await rm(directory, { recursive: true, force: true });
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
   }
 });
 
@@ -136,8 +249,8 @@ test('real Unix credential calls reveal only the named value and preserve CAS fr
         calls.push(frame.payload);
         const reply =
           frame.payload.call === 'credential_read'
-          ? { reply: 'credential', with: { revision: 7, value: [0, 255, 10] } }
-          : { reply: 'revision', with: frame.payload.call === 'credential_set' ? 8 : 9 };
+            ? { reply: 'credential', with: { revision: 7, value: [0, 255, 10] } }
+            : { reply: 'revision', with: frame.payload.call === 'credential_set' ? 8 : 9 };
         socket.write(encode({ channel: frame.channel, kind: KIND.response, payload: reply }));
       }
     });
@@ -284,8 +397,8 @@ test('real Unix filesystem watcher publishes filtered cursor-only progress for r
     });
     const stop = await workspace(session).files.watchChanges(
       (value) => {
-      controller.abort();
-      delivered(value);
+        controller.abort();
+        delivered(value);
       },
       { after: 7, pageSize: 32, pollMs: 1_000, signal: controller.signal },
     );
@@ -344,9 +457,9 @@ test('real Unix text wait reconciles an unread revision without requiring a late
                   truncated: false,
                 },
               }
-          : frame.payload.call === 'terminal_read_pane'
-            ? { reply: 'text', with: snapshot }
-            : { reply: 'done' };
+            : frame.payload.call === 'terminal_read_pane'
+              ? { reply: 'text', with: snapshot }
+              : { reply: 'done' };
         socket.write(encode({ channel: frame.channel, kind: KIND.response, payload: reply }));
       }
     });
@@ -425,7 +538,7 @@ test('real Unix text wait aborts promptly, releases its subscription, and leaves
                   truncated: false,
                 },
               }
-          : frame.payload.call === 'terminal_read_pane'
+            : frame.payload.call === 'terminal_read_pane'
               ? {
                   reply: 'text',
                   with: {
@@ -440,7 +553,7 @@ test('real Unix text wait aborts promptly, releases its subscription, and leaves
                     truncated: false,
                   },
                 }
-            : { reply: 'done' };
+              : { reply: 'done' };
         socket.write(encode({ channel: frame.channel, kind: KIND.response, payload: reply }));
         if (frame.payload.call === 'terminal_read_pane') initialRead();
       }
@@ -557,7 +670,7 @@ test('real Unix private state preserves bytes and independent read/write authori
         requests.push(frame.payload);
         const payload =
           frame.payload.call === 'state_read'
-          ? { reply: 'state', with: { identity: 'absent', contents: [0, 17, 255] } }
+            ? { reply: 'state', with: { identity: 'absent', contents: [0, 17, 255] } }
             : { error: 'refused', capability: 'state:write' };
         socket.write(
           encode({
@@ -768,8 +881,8 @@ test('real Unix extension inventory preserves every effective permission dimensi
                   version: '2.0.0',
                   enabled: false,
                   pane_providers: [],
-                granted: ['containers:read', 'filesystem:write'],
-                containers: { selectors: [{ name: 'postgres' }], create: false },
+                  granted: ['containers:read', 'filesystem:write'],
+                  containers: { selectors: [{ name: 'postgres' }], create: false },
                   filesystem: {
                     read: [],
                     write: [{ exact: 'database.json' }],
@@ -1025,12 +1138,12 @@ test('real Unix streaming cancellation preserves inspection, cleanup, and sessio
     assert.deepEqual(
       requests.map(({ call }) => call),
       [
-      'container_exec',
-      'execution_output',
-      'execution_cancel',
-      'execution_inspect',
-      'execution_remove',
-      'container_list',
+        'container_exec',
+        'execution_output',
+        'execution_cancel',
+        'execution_inspect',
+        'execution_remove',
+        'container_list',
       ],
     );
     await session.close();

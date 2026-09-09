@@ -1285,16 +1285,16 @@ export function workspace(session, { signal } = {}) {
                     throw new TypeError('host returned an inconsistent filesystem range batch');
                 return values;
             },
-            readChunks: async function* (path, { offset = 0, chunkBytes = 65_536, signal, } = {}) {
+            readChunks: async function* (path, { offset = 0, chunkBytes = 65_536, observed = null, signal, } = {}) {
                 const [start, limit] = exactFileRange(offset, chunkBytes);
                 let cursor = start;
-                let observed = null;
+                let identity = observed;
                 for (;;) {
                     requireFilesystemActive(signal);
-                    const range = await api.files.readRange(path, cursor, limit, observed);
+                    const range = await api.files.readRange(path, cursor, limit, identity);
                     requireFilesystemActive(signal);
-                    observed ??= range.identity;
-                    if (range.identity !== observed) {
+                    identity ??= range.identity;
+                    if (range.identity !== identity) {
                         throw new TypeError('host changed filesystem file identity during iteration');
                     }
                     yield range;

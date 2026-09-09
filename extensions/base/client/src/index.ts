@@ -1702,18 +1702,24 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
         {
           offset = 0,
           chunkBytes = 65_536,
+          observed = null,
           signal,
-        }: { offset?: number; chunkBytes?: number; signal?: AbortSignal } = {},
+        }: {
+          offset?: number;
+          chunkBytes?: number;
+          observed?: string | null;
+          signal?: AbortSignal;
+        } = {},
       ) {
         const [start, limit] = exactFileRange(offset, chunkBytes);
         let cursor = start;
-        let observed: string | null = null;
+        let identity = observed;
         for (;;) {
           requireFilesystemActive(signal);
-          const range = await api.files.readRange(path, cursor, limit, observed);
+          const range = await api.files.readRange(path, cursor, limit, identity);
           requireFilesystemActive(signal);
-          observed ??= range.identity;
-          if (range.identity !== observed) {
+          identity ??= range.identity;
+          if (range.identity !== identity) {
             throw new TypeError('host changed filesystem file identity during iteration');
           }
           yield range;
