@@ -249,8 +249,6 @@ export function Containers({ api, resource, containerDetails, onOpenExecution }:
                     />
                   ) : null}
                 </Row>
-              </CardActions>
-              <CardContent gap={1} align="start" width="fill">
                 <ContainerActions
                   api={api}
                   item={item}
@@ -259,7 +257,7 @@ export function Containers({ api, resource, containerDetails, onOpenExecution }:
                   remove={remove}
                   reload={resource.reload}
                 />
-              </CardContent>
+              </CardActions>
               {selected === item.id ? (
                 <ContainerDetail
                   api={api}

@@ -467,7 +467,7 @@ export function Terminals({
               width="fill"
             />
             <CardContent gap={1}>
-              <Row gap={1} align="center" width="fill" wrap>
+              <Row gap={1} align="center" justify="start" width="fill" wrap>
                 <Text
                   label={
                     tab.panes.length === 0
@@ -506,7 +506,7 @@ export function Terminals({
               </Row>
               {tab.panes.map((pane, paneIndex) => (
                 <Row key={pane.slot} gap={1} align="center" width="fill" wrap justify="start">
-                  <Column gap={0} width={{ minimum: { chars: 18 }, maximum: { chars: 54 } }}>
+                  <Column gap={0} width={{ minimum: { chars: 10 }, maximum: { chars: 54 } }}>
                     <Heading label={`Pane ${paneIndex + 1}`} scale="caption" />
                     <Text
                       label={`${pane.occupant === 'terminal' ? 'Terminal' : 'Interface'}${pane.provider ? ` · ${pane.provider.extension}/${pane.provider.provider}` : ''}`}
