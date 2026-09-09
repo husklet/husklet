@@ -92,6 +92,7 @@ struct Host {
     network_aliases: RefCell<Vec<String>>,
     filesystem_pages: Cell<usize>,
     filesystem_ranges: Cell<usize>,
+    filesystem_file: RefCell<Option<(RelativePath, Vec<u8>, String)>>,
 }
 impl hl_extension::port::VolumeStore for Host {}
 impl hl_extension::port::NetworkStore for Host {
@@ -119,6 +120,7 @@ impl Host {
             network_aliases: RefCell::new(Vec::new()),
             filesystem_pages: Cell::new(0),
             filesystem_ranges: Cell::new(0),
+            filesystem_file: RefCell::new(None),
         }
     }
 }
@@ -271,6 +273,158 @@ impl WorkspaceFiles for Host {
     fn write(&self, _path: &RelativePath, _contents: &[u8]) -> Result<(), HostError> {
         Ok(())
     }
+
+    fn create_observed(&self, path: &RelativePath, contents: &[u8]) -> Result<String, HostError> {
+        let mut file = self.filesystem_file.borrow_mut();
+        if file.is_some() {
+            return Err(HostError::Conflict(format!("{path} already exists")));
+        }
+        let identity = "file-v1".to_owned();
+        *file = Some((path.clone(), contents.to_vec(), identity.clone()));
+        Ok(identity)
+    }
+
+    fn write_observed(&self, path: &RelativePath, observed: &str, contents: &[u8]) -> Result<String, HostError> {
+        let mut file = self.filesystem_file.borrow_mut();
+        let Some((held_path, held_contents, identity)) = file.as_mut() else {
+            return Err(HostError::Absent(path.to_string()));
+        };
+        if held_path != path || identity != observed {
+            return Err(HostError::Conflict(format!("{path} changed since it was observed")));
+        }
+        *held_contents = contents.to_vec();
+        *identity = "file-v2".to_owned();
+        Ok(identity.clone())
+    }
+
+    fn remove_observed(&self, path: &RelativePath, observed: &str) -> Result<(), HostError> {
+        let mut file = self.filesystem_file.borrow_mut();
+        let Some((held_path, _, identity)) = file.as_ref() else {
+            return Err(HostError::Absent(path.to_string()));
+        };
+        if held_path != path || identity != observed {
+            return Err(HostError::Conflict(format!("{path} changed since it was observed")));
+        }
+        *file = None;
+        Ok(())
+    }
+}
+
+#[test]
+fn observed_file_mutations_reject_a_stale_agent_and_keep_the_real_socket_usable() {
+    let (host_end, extension_end) = connected_pair();
+    let host = Host::new();
+    let mut session = Session::new(Authority::new(
+        ExtensionName::new("agent").expect("name"),
+        Grant::new([Capability::FilesystemWrite]),
+        Vec::new(),
+    ))
+    .with_filesystem(hl_extension::FilesystemGrant {
+        create: vec![hl_extension::FilesystemSelector::Exact {
+            exact: RelativePath::new("src/config.ts").expect("create root"),
+        }],
+        write: vec![hl_extension::FilesystemSelector::Exact {
+            exact: RelativePath::new("src/config.ts").expect("write root"),
+        }],
+        delete: vec![hl_extension::FilesystemSelector::Exact {
+            exact: RelativePath::new("src/config.ts").expect("delete root"),
+        }],
+        ..hl_extension::FilesystemGrant::default()
+    });
+    let mut extension = hl_extension::Wire::new(extension_end);
+    let mut server = hl_extension::Wire::new(host_end);
+
+    let exchange = |request: Request,
+                    session: &mut Session,
+                    extension: &mut hl_extension::Wire<Stream>,
+                    server: &mut hl_extension::Wire<Stream>|
+     -> Result<Reply, Failure> {
+        extension
+            .send(&codec::request(&request).expect("request frame"))
+            .expect("sent");
+        let decoded = codec::read_request(&server.receive().expect("request crossed socket")).expect("decoded");
+        match session.dispatch(&decoded, &services(&host)) {
+            Ok(reply) => {
+                server
+                    .send(&codec::reply(&reply).expect("reply frame"))
+                    .expect("reply sent");
+                codec::read_reply(&extension.receive().expect("reply crossed socket")).map_err(|error| {
+                    Failure::Failed {
+                        detail: error.to_string(),
+                    }
+                })
+            }
+            Err(failure) => {
+                server
+                    .send(&codec::failure(&failure).expect("failure frame"))
+                    .expect("failure sent");
+                Err(
+                    codec::read_failure(&extension.receive().expect("failure crossed socket"))
+                        .expect("failure decoded"),
+                )
+            }
+        }
+    };
+    let path = RelativePath::new("src/config.ts").expect("path");
+
+    let created = exchange(
+        Request::FilesystemCreateObserved {
+            path: path.clone(),
+            contents: b"export const port = 5432;".to_vec(),
+        },
+        &mut session,
+        &mut extension,
+        &mut server,
+    )
+    .expect("created");
+    assert_eq!(created, Reply::Identity("file-v1".into()));
+
+    let replaced = exchange(
+        Request::FilesystemWriteObserved {
+            path: path.clone(),
+            observed: "file-v1".into(),
+            contents: b"export const port = 5433;".to_vec(),
+        },
+        &mut session,
+        &mut extension,
+        &mut server,
+    )
+    .expect("replaced");
+    assert_eq!(replaced, Reply::Identity("file-v2".into()));
+
+    assert!(matches!(
+        exchange(
+            Request::FilesystemRemoveObserved {
+                path: path.clone(),
+                observed: "file-v1".into(),
+            },
+            &mut session,
+            &mut extension,
+            &mut server,
+        ),
+        Err(Failure::Conflict { .. })
+    ));
+    assert_eq!(
+        host.filesystem_file.borrow().as_ref().expect("file retained").1,
+        b"export const port = 5433;",
+        "a stale delete cannot destroy the newer edit"
+    );
+
+    assert_eq!(
+        exchange(
+            Request::FilesystemRemoveObserved {
+                path,
+                observed: "file-v2".into(),
+            },
+            &mut session,
+            &mut extension,
+            &mut server,
+        )
+        .expect("removed after conflict"),
+        Reply::Done,
+        "the same socket remains framed and usable after a conflict reply"
+    );
+    assert!(host.filesystem_file.borrow().is_none());
 }
 
 #[test]
