@@ -451,6 +451,20 @@ mod unix {
             let selected = receive_rerender(&mut wire, story);
             tree.apply(&selected, &mut surface)
                 .expect("selected row acknowledgement renders in GTK");
+            realized_window.set_size_request(600, 800);
+            realized_window.set_default_size(600, 800);
+            root.measure(gtk::Orientation::Horizontal, -1);
+            root.measure(gtk::Orientation::Vertical, 600);
+            root.allocate(600, 800, -1, None);
+            settle_toolkit();
+            capture_story(&realized_window, "DataTable narrow");
+            realized_window.set_size_request(1_200, 800);
+            realized_window.set_default_size(1_200, 800);
+            root.measure(gtk::Orientation::Horizontal, -1);
+            root.measure(gtk::Orientation::Vertical, 1_200);
+            root.allocate(1_200, 800, -1, None);
+            settle_toolkit();
+            capture_story(&realized_window, "DataTable");
         }
         assert!(readable_heading(&root), "{story} has no readable GTK heading");
         if story == "Bounded streaming log" {
