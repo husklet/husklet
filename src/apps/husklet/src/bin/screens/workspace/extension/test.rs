@@ -217,7 +217,8 @@ fn responsive_semantics_follow_the_branch_gtk_presented() {
         .prop(hl_gui::Prop::Breakpoint, hl_gui::PropValue::Integer(400))
         .prop(hl_gui::Prop::Grow, hl_gui::PropValue::Number(1.0))
         .child(Element::heading("Compact navigation"))
-        .child(Element::heading("Wide navigation"));
+        .child(Element::heading("Wide navigation"))
+        .child(Element::heading("Shared body"));
     fixture.describe(&description);
     fixture.page.tick();
     let root = fixture.page.surface().widget().clone().upcast::<gtk::Widget>();
@@ -228,8 +229,9 @@ fn responsive_semantics_follow_the_branch_gtk_presented() {
     root.allocate(320, 200, -1, None);
     let compact = fixture.page.semantics("").expect("compact semantic projection");
     let compact_labels = semantic_labels(&compact.root);
-    assert!(compact_labels.iter().all(|label| label != "Compact navigation"));
-    assert!(compact_labels.iter().any(|label| label == "Wide navigation"));
+    assert!(compact_labels.iter().any(|label| label == "Compact navigation"));
+    assert!(compact_labels.iter().all(|label| label != "Wide navigation"));
+    assert!(compact_labels.iter().any(|label| label == "Shared body"));
 
     root.measure(gtk::Orientation::Vertical, 600);
     root.allocate(600, 200, -1, None);
@@ -237,7 +239,8 @@ fn responsive_semantics_follow_the_branch_gtk_presented() {
     let wide = fixture.page.semantics("").expect("wide semantic projection");
     let wide_labels = semantic_labels(&wide.root);
     assert!(wide_labels.iter().any(|label| label == "Wide navigation"));
-    assert!(wide_labels.iter().any(|label| label == "Compact navigation"));
+    assert!(wide_labels.iter().all(|label| label != "Compact navigation"));
+    assert!(wide_labels.iter().any(|label| label == "Shared body"));
 }
 
 fn semantic_labels(node: &hl_extension::SemanticNode) -> Vec<String> {

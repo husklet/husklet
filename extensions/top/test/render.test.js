@@ -314,6 +314,43 @@ test('Top sidebar divider reports and bounds its retained position', () => {
   const splitter = stage.frames
     .flatMap((frame) => frame.patches)
     .find((patch) => patch.Create?.tag === 'Responsive').Create.id;
+  const responsiveChildren = stage.frames
+    .flatMap((frame) => frame.patches)
+    .filter((patch) => patch.Insert?.parent === splitter);
+  assert.equal(
+    responsiveChildren.length,
+    3,
+    'responsive Top owns compact navigation, wide navigation, and exactly one body',
+  );
+  const sectionChoice = stage.frames
+    .flatMap((frame) => frame.patches)
+    .filter((patch) => patch.SetProp?.prop === 'Choices')
+    .find((patch) => patch.SetProp.value?.Choices?.some((choice) => choice.value === 'containers'));
+  assert.deepEqual(
+    sectionChoice?.SetProp.value.Choices.map((choice) => choice.value),
+    [
+      'overview',
+      'workspace',
+      'extensions',
+      'containers',
+      'processes',
+      'executions',
+      'images',
+      'volumes',
+      'networks',
+      'terminals',
+    ],
+    'compact navigation reaches every Top section',
+  );
+  assert.ok(
+    stage.surface.dispatch({
+      trigger: 'Change',
+      node: sectionChoice.SetProp.id,
+      id: `${sectionChoice.SetProp.id}:Change`,
+      value: 'containers',
+    }),
+  );
+  assert.ok(labelled(stage, 'Containers'), 'compact navigation changes the single shared body');
   assert.deepEqual(
     stage.frames
       .flatMap((frame) => frame.patches)
@@ -337,14 +374,12 @@ test('Top sidebar divider reports and bounds its retained position', () => {
       .at(-1).SetProp.value,
     { Number: 240 },
   );
-  const sidebar = stage.frames
+  const sidebarWidth = stage.frames
     .flatMap((frame) => frame.patches)
-    .find((patch) => patch.Create?.tag === 'Row').Create.id;
+    .filter((patch) => patch.SetProp?.prop === 'Width')
+    .find((patch) => patch.SetProp.value?.Bounds?.minimum?.Chars === 18);
   assert.deepEqual(
-    stage.frames
-      .flatMap((frame) => frame.patches)
-      .filter((patch) => patch.SetProp?.id === sidebar && patch.SetProp.prop === 'Width')
-      .at(-1)?.SetProp.value,
+    sidebarWidth?.SetProp.value,
     { Bounds: { minimum: { Chars: 18 }, maximum: { Chars: 30 } } },
     'the navigation width follows the compact splitter range instead of colliding with it',
   );
@@ -1175,7 +1210,7 @@ test('extension inspection keeps invalid and failed references recoverable with 
   assert.ok(
     labelled(
       stage,
-      'Registry refused the image: requested access to the resource is denied. Check that the reference exists and is accessible.',
+      'Registry access denied. Sign in with credentials that can read this image, or verify that the image is public.',
     ),
   );
   assert.ok(labelled(stage, 'Retry inspection'));

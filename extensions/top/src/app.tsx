@@ -2,6 +2,8 @@ import React from 'react';
 import {
   Row,
   Responsive,
+  Select,
+  Text,
   type ContainerSummary,
   type ExecutionSummary,
   type ExtensionSummary,
@@ -285,12 +287,28 @@ export function Top({
         }
       }}
     >
+      <Row width="fill" pad={1} gap={1} align="center">
+        <Text label="Section" color="text-dim" />
+        <Select
+          width="fill"
+          value={section}
+          choices={SECTIONS.map((name) => ({ value: name, label: sectionTitle(name) }))}
+          onChange={(event) => {
+            const selected = String(event.value ?? '');
+            if (SECTIONS.includes(selected as Section)) setSection(selected as Section);
+          }}
+        />
+      </Row>
       <Row width={{ minimum: { chars: 18 }, maximum: { chars: 30 } }} height="fill">
         <Navigation section={section} onSelect={setSection} />
       </Row>
       {body}
     </Responsive>
   );
+}
+
+function sectionTitle(value: Section): string {
+  return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
 function useResource<T>(loader: () => Promise<T[]>, initial?: T[]): Resource<T> {

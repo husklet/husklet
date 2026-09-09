@@ -51,8 +51,8 @@ pub(crate) fn attach(parent: &gtk::Widget, child: &gtk::Widget, tag: Tag, index:
     if component::attach(parent, child, tag, index) {
         return true;
     }
-    if let Some(paned) = responsive::paned(parent) {
-        return layout::attach(paned.upcast_ref(), child, index);
+    if responsive::attach(parent, child, index) {
+        return true;
     }
     if let Some(container) = parent.downcast_ref::<gtk::Box>() {
         insert_into(container, child, index);

@@ -128,28 +128,40 @@ fn a_responsive_container_presents_only_its_allocated_branch() {
         .set(responsive, Prop::Breakpoint, PropValue::Integer(400));
     stage.producer.set(responsive, Prop::Grow, PropValue::Number(1.0));
     let compact = stage.producer.create(Tag::Text);
-    stage.producer.set(compact, Prop::Label, PropValue::text("compact"));
-    let wide = stage.producer.create(Tag::Row);
-    stage.producer.set(wide, Prop::Grow, PropValue::Number(1.0));
+    stage
+        .producer
+        .set(compact, Prop::Label, PropValue::text("compact navigation"));
+    let wide = stage.producer.create(Tag::Text);
+    stage
+        .producer
+        .set(wide, Prop::Label, PropValue::text("wide navigation"));
+    let body = stage.producer.create(Tag::Row);
+    stage.producer.set(body, Prop::Grow, PropValue::Number(1.0));
     let body_label = stage.producer.create(Tag::Text);
-    stage.producer.set(body_label, Prop::Label, PropValue::text("wide"));
-    stage.producer.append(wide, body_label);
+    stage
+        .producer
+        .set(body_label, Prop::Label, PropValue::text("shared body"));
+    stage.producer.append(body, body_label);
     stage.producer.append(responsive, compact);
     stage.producer.append(responsive, wide);
+    stage.producer.append(responsive, body);
     stage.producer.append(NodeId::ROOT, responsive);
     stage.draw();
 
     stage.allocate(320, 200);
     stage.allocate(320, 200);
-    assert!(!stage.surface.is_presented(compact));
-    assert!(stage.surface.is_presented(wide));
-    assert_eq!(stage.surface.allocated_size(wide).map(|size| size.0), Some(320));
+    assert!(stage.surface.is_presented(compact));
+    assert!(!stage.surface.is_presented(wide));
+    assert!(stage.surface.is_presented(body));
+    assert_eq!(stage.surface.allocated_size(body).map(|size| size.0), Some(320));
+    assert!(stage.surface.allocated_size(compact).is_some_and(|size| size.1 > 0));
 
     stage.allocate(600, 200);
     stage.allocate(600, 200);
-    assert!(stage.surface.is_presented(compact));
+    assert!(!stage.surface.is_presented(compact));
     assert!(stage.surface.is_presented(wide));
-    assert!(stage.surface.allocated_size(wide).is_some_and(|size| size.0 < 600));
+    assert!(stage.surface.is_presented(body));
+    assert!(stage.surface.allocated_size(body).is_some_and(|size| size.0 < 600));
 }
 
 fn a_character_width_applies_to_a_scrolling_container() {

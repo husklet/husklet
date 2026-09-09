@@ -11,6 +11,7 @@ use hl_gui::PropValue;
 pub(super) struct Pane {
     breakpoint: Cell<i32>,
     wide_position: Cell<i32>,
+    layout: OnceCell<gtk::Box>,
     paned: OnceCell<gtk::Paned>,
 }
 
@@ -19,6 +20,7 @@ impl Default for Pane {
         Self {
             breakpoint: Cell::new(640),
             wide_position: Cell::new(160),
+            layout: OnceCell::new(),
             paned: OnceCell::new(),
         }
     }
@@ -53,63 +55,63 @@ impl ObjectImpl for Pane {
 
     fn constructed(&self) {
         self.parent_constructed();
+        let layout = gtk::Box::new(gtk::Orientation::Vertical, 0);
         let paned = gtk::Paned::new(gtk::Orientation::Horizontal);
-        paned.set_parent(&*self.obj());
+        layout.append(&paned);
+        layout.set_parent(&*self.obj());
+        self.layout.set(layout).expect("responsive layout constructed once");
         self.paned.set(paned).expect("responsive pane constructed once");
     }
 
     fn dispose(&self) {
-        if let Some(paned) = self.paned.get() {
-            paned.unparent();
-        }
-        while let Some(child) = self.obj().first_child() {
-            child.unparent();
+        if let Some(layout) = self.layout.get() {
+            layout.unparent();
         }
     }
 }
 
 impl WidgetImpl for Pane {
     fn request_mode(&self) -> gtk::SizeRequestMode {
-        self.paned().request_mode()
+        self.layout().request_mode()
     }
 
     fn measure(&self, orientation: gtk::Orientation, for_size: i32) -> (i32, i32, i32, i32) {
-        self.paned().measure(orientation, for_size)
+        self.layout().measure(orientation, for_size)
     }
 
     fn size_allocate(&self, width: i32, height: i32, baseline: i32) {
+        let layout = self.layout();
         let paned = self.paned();
         let expanded = width >= self.breakpoint.get();
         paned.set_position(if expanded { self.wide_position.get() } else { 0 });
-        if let Some(navigation) = paned.start_child() {
-            let changed = navigation.is_visible() != expanded;
-            navigation.set_visible(expanded);
-            if changed {
-                paned.queue_allocate();
-            }
+        if let Some(compact) = layout.first_child().filter(|child| !child.eq(paned)) {
+            compact.set_visible(!expanded);
         }
         if expanded {
-            if let Some(body) = self.obj().last_child().filter(|child| !child.eq(paned)) {
-                body.unparent();
+            if let Some(body) = layout.last_child().filter(|child| !child.eq(paned)) {
+                layout.remove(&body);
                 paned.set_end_child(Some(&body));
-                paned.measure(gtk::Orientation::Horizontal, -1);
-                paned.measure(gtk::Orientation::Vertical, width);
             }
-            paned.allocate(width, height, baseline, None);
+            paned.set_visible(true);
         } else if let Some(body) = paned.end_child() {
             paned.set_end_child(gtk::Widget::NONE);
-            if let Some(navigation) = paned.start_child() {
-                navigation.set_visible(false);
-            }
-            body.set_parent(&*self.obj());
-            body.allocate(width, height, baseline, None);
-        } else if let Some(body) = self.obj().last_child().filter(|child| !child.eq(paned)) {
-            body.allocate(width, height, baseline, None);
+            layout.append(&body);
+            paned.set_visible(false);
         }
+        // Reparenting invalidates GTK's prior measurement cache. Re-measure
+        // the chosen branch before allocating it so narrow/wide transitions
+        // never rely on stale geometry.
+        layout.measure(gtk::Orientation::Horizontal, -1);
+        layout.measure(gtk::Orientation::Vertical, width);
+        layout.allocate(width, height, baseline, None);
     }
 }
 
 impl Pane {
+    fn layout(&self) -> &gtk::Box {
+        self.layout.get().expect("responsive layout is constructed")
+    }
+
     fn paned(&self) -> &gtk::Paned {
         self.paned.get().expect("responsive pane is constructed")
     }
@@ -129,6 +131,23 @@ pub(crate) fn paned(widget: &gtk::Widget) -> Option<gtk::Paned> {
     widget
         .downcast_ref::<ResponsivePane>()
         .map(|pane| pane.imp().paned().clone())
+}
+
+/// Places the compact navigation, wide navigation, and single shared body in
+/// their stable slots. Only the two lightweight navigation branches differ;
+/// the body is reparented at allocation time and is never duplicated.
+pub(crate) fn attach(widget: &gtk::Widget, child: &gtk::Widget, index: usize) -> bool {
+    let Some(pane) = widget.downcast_ref::<ResponsivePane>() else {
+        return false;
+    };
+    let imp = pane.imp();
+    match index {
+        0 => imp.layout().prepend(child),
+        1 => imp.paned().set_start_child(Some(child)),
+        2 => imp.paned().set_end_child(Some(child)),
+        _ => return false,
+    }
+    true
 }
 
 pub(crate) fn set(widget: &gtk::Widget, value: &PropValue) {
