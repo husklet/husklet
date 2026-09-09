@@ -189,9 +189,10 @@ mod unix {
         }
         if fixture == "error" && name == "settings" {
             assert!(
-                has_label(&root, "Workspace settings could not be loaded from the extension host."),
+                has_label(&root, "Workspace settings could not be completed."),
                 "the settings error fixture exposed an editable form instead of its load failure"
             );
+            assert!(has_label(&root, "Technical details"), "the settings failure hid its diagnostics disclosure");
             assert!(has_label(&root, "Retry"), "the settings load failure had no recovery action");
             assert!(!has_label(&root, "Up to date"), "untrusted settings were presented as current");
         }
