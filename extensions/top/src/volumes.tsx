@@ -9,7 +9,11 @@ import {
   ConfirmAction,
   EmptyState,
   Entry,
+  Expander,
+  FormControl,
+  FormLabel,
   Heading,
+  InlineMessage,
   ResourceState,
   RecoveryState,
   Row,
@@ -128,16 +132,19 @@ export function Volumes({
   return (
     <Page title="Volumes" subtitle="Bounded local volume inventory and safe, non-force lifecycle.">
       <Column gap={1} align="start">
-        <Entry
-          value={name}
-          placeholder="Volume name"
-          width={{ minimum: { chars: 10 }, maximum: { chars: 32 } }}
-          enabled={creation.state !== 'loading'}
-          onChange={(event) => {
-            setName(String(event.value ?? ''));
-            setCreation({ state: 'idle', name: '', error: null });
-          }}
-        />
+        <FormControl gap={1}>
+          <FormLabel label="Volume name" />
+          <Entry
+            value={name}
+            placeholder="Volume name"
+            width={{ minimum: { chars: 10 }, maximum: { chars: 32 } }}
+            enabled={creation.state !== 'loading'}
+            onChange={(event) => {
+              setName(String(event.value ?? ''));
+              setCreation({ state: 'idle', name: '', error: null });
+            }}
+          />
+        </FormControl>
         <Row gap={1} wrap>
           <Button
             variant="filled"
@@ -182,33 +189,59 @@ export function Volumes({
         retryLabel="Retry volumes"
         onRetry={resource.reload}
       >
-        {view.records.map((volume) => (
-          <Card
-            key={`${volume.name}:${volume.generation}`}
-            variant={inspection.name === volume.name ? 'filled' : 'outline'}
-          >
-            <CardHeader label={volume.name} detail={volume.driver} align="start" width="fill" />
-            <CardActions gap={1} justify="start">
-              <Button
-                label={
-                  inspection.name === volume.name && inspection.state === 'error'
-                    ? 'Retry inspect'
-                    : 'Inspect'
-                }
-                onInvoke={() => inspect(volume)}
-              />
-              <ConfirmAction
-                authorityKey={`volume:${volume.name}:${volume.generation}:remove`}
-                label="Remove"
-                confirmLabel="Confirm remove"
-                pendingLabel="Confirm remove"
-                question={`Remove volume ${volume.name} generation ${volume.generation}?`}
-                onConfirm={() => remove(volume)}
-              />
-            </CardActions>
-            {inspection.name === volume.name ? <VolumeDetail inspection={inspection} /> : null}
-          </Card>
-        ))}
+        {view.records.map((volume) => {
+          const inspectionNeedsAccess =
+            inspection.name === volume.name &&
+            inspection.state === 'error' &&
+            isAuthorityDenial(inspection.error);
+          return (
+            <Card
+              key={`${volume.name}:${volume.generation}`}
+              variant={inspection.name === volume.name ? 'filled' : 'outline'}
+            >
+              <CardHeader label={volume.name} detail={volume.driver} align="start" width="fill" />
+              <CardActions gap={1} justify="start">
+                <Button
+                  label={
+                    inspectionNeedsAccess
+                      ? 'Access required'
+                      : inspection.name === volume.name && inspection.state === 'error'
+                        ? 'Retry inspect'
+                        : 'Inspect'
+                  }
+                  variant="filled"
+                  tone="accent"
+                  enabled={!inspectionNeedsAccess}
+                  onInvoke={() => inspect(volume)}
+                />
+              </CardActions>
+              {!inspectionNeedsAccess ? (
+                <CardContent>
+                  <Expander label="Danger zone" width="fill" align="start">
+                    <Column gap={1}>
+                      <Text
+                        label="Removing this volume permanently deletes its stored data."
+                        color="text-dim"
+                        wrap
+                      />
+                      <Row>
+                        <ConfirmAction
+                          authorityKey={`volume:${volume.name}:${volume.generation}:remove`}
+                          label="Remove"
+                          confirmLabel="Confirm remove"
+                          pendingLabel="Confirm remove"
+                          question={`Remove volume ${volume.name} generation ${volume.generation}?`}
+                          onConfirm={() => remove(volume)}
+                        />
+                      </Row>
+                    </Column>
+                  </Expander>
+                </CardContent>
+              ) : null}
+              {inspection.name === volume.name ? <VolumeDetail inspection={inspection} /> : null}
+            </Card>
+          );
+        })}
         <Omitted count={view.omitted} />
       </ResourceState>
     </Page>
@@ -224,7 +257,14 @@ function VolumeDetail({ inspection }: { inspection: Inspection }) {
           <Text label="Reading volume details…" />
         </Row>
       ) : inspection.state === 'error' ? (
-        <Text label={boundedMessage(inspection.error)} color="danger" wrap />
+        isAuthorityDenial(inspection.error) ? (
+          <InlineMessage
+            label="This extension was not granted access to inspect this volume. Change its exact volume access from Extensions, then inspect again."
+            tone="warning"
+          />
+        ) : (
+          <Text label={boundedMessage(inspection.error)} color="danger" wrap />
+        )
       ) : inspection.count === 0 ? (
         <EmptyState label="No volume details" detail="The host returned no inspectable fields." />
       ) : (
@@ -236,6 +276,15 @@ function VolumeDetail({ inspection }: { inspection: Inspection }) {
         </Column>
       )}
     </CardContent>
+  );
+}
+
+function isAuthorityDenial(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const failure = error as { kind?: unknown; message?: unknown };
+  return (
+    failure.kind === 'denied' ||
+    (typeof failure.message === 'string' && failure.message.includes('consented resource scope'))
   );
 }
 

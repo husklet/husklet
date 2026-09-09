@@ -8,6 +8,7 @@ import {
   CardHeader,
   Column,
   ConfirmAction,
+  Expander,
   Heading,
   KeyValueTable,
   LogView,
@@ -110,10 +111,25 @@ export function Executions({
   }, [inspect, requestedExecution, selected]);
 
   const logs = async (id: string) => {
-    const revision = lifecycleRevision.current;
+    const revision = ++lifecycleRevision.current;
+    setSelected(id);
+    setInspection({ state: 'loading', count: 0, error: null });
+    setOutput(null);
     setBusy(`logs:${id}`);
     try {
-      const value = await api.containers.executionLogs(id, { stdout: true, stderr: true });
+      const detailRequest = api.containers.execution(id);
+      const outputRequest = api.containers.executionLogs(id, { stdout: true, stderr: true });
+      try {
+        const detail = await detailRequest;
+        if (revision !== lifecycleRevision.current) return;
+        const count = await detailsSource.replace(detail);
+        if (revision !== lifecycleRevision.current) return;
+        setInspection({ state: 'ready', count, error: null });
+      } catch (cause) {
+        if (revision !== lifecycleRevision.current) return;
+        setInspection({ state: 'error', count: 0, error: cause });
+      }
+      const value = await outputRequest;
       if (revision !== lifecycleRevision.current) return;
       setOutput((current) => ({
         revision: (current?.revision ?? 0) + 1,
@@ -258,6 +274,7 @@ export function Executions({
                 <ExecutionDetail
                   inspection={inspection}
                   output={output}
+                  outputLoading={busy === `logs:${item.id}`}
                   onRetry={() => inspect(item.id)}
                 />
               ) : null}
@@ -266,6 +283,8 @@ export function Executions({
               <Row gap={1} wrap justify="end">
                 <Button
                   label={selected === item.id ? 'Hide details' : 'Details'}
+                  variant="filled"
+                  tone="accent"
                   enabled={!busy}
                   onInvoke={() => (selected === item.id ? setSelected('') : void inspect(item.id))}
                 />
@@ -279,26 +298,43 @@ export function Executions({
                   enabled={!busy && item.running}
                   onInvoke={() => void wait(item.id)}
                 />
-                <ConfirmAction
-                  authorityKey={`execution:${item.id}:SIGTERM`}
-                  label="Terminate"
-                  confirmLabel="Confirm SIGTERM"
-                  pendingLabel="Confirm SIGTERM"
-                  question={`Send SIGTERM to execution ${item.id}?`}
-                  enabled={!busy && item.running}
-                  onConfirm={() => terminate(item)}
-                />
-                <ConfirmAction
-                  authorityKey={`execution:${item.id}:remove`}
-                  label="Remove record"
-                  confirmLabel="Confirm removal"
-                  pendingLabel="Confirm removal"
-                  question={`Remove execution record ${shortId(item.id)}?`}
-                  enabled={!busy && !item.running}
-                  onConfirm={() => remove(item)}
-                />
               </Row>
             </CardActions>
+            <CardContent>
+              <Expander label="More actions" width="fill" align="start">
+                <Column gap={1}>
+                  <Text
+                    label={
+                      item.running
+                        ? 'Terminate the running process.'
+                        : 'Remove this completed execution record and its captured output.'
+                    }
+                    color="text-dim"
+                    wrap
+                  />
+                  <Row gap={1} wrap>
+                    <ConfirmAction
+                      authorityKey={`execution:${item.id}:SIGTERM`}
+                      label="Terminate"
+                      confirmLabel="Confirm SIGTERM"
+                      pendingLabel="Confirm SIGTERM"
+                      question={`Send SIGTERM to execution ${item.id}?`}
+                      enabled={!busy && item.running}
+                      onConfirm={() => terminate(item)}
+                    />
+                    <ConfirmAction
+                      authorityKey={`execution:${item.id}:remove`}
+                      label="Remove record"
+                      confirmLabel="Confirm removal"
+                      pendingLabel="Confirm removal"
+                      question={`Remove execution record ${shortId(item.id)}?`}
+                      enabled={!busy && !item.running}
+                      onConfirm={() => remove(item)}
+                    />
+                  </Row>
+                </Column>
+              </Expander>
+            </CardContent>
           </Card>
         ))}
         <Omitted count={view.omitted} />
@@ -322,10 +358,12 @@ export function Executions({
 function ExecutionDetail({
   inspection,
   output,
+  outputLoading,
   onRetry,
 }: {
   inspection: Inspection;
   output: Output | null;
+  outputLoading: boolean;
   onRetry: () => void;
 }) {
   const detailState =
@@ -351,6 +389,12 @@ function ExecutionDetail({
           height={{ minimum: { step: 10 }, maximum: { step: 28 } }}
         />
       </ResourceState>
+      {outputLoading ? (
+        <Row gap={1} align="center">
+          <Spinner />
+          <Text label="Loading captured output…" />
+        </Row>
+      ) : null}
       {output ? (
         <Column gap={1}>
           <Heading label="Standard output" scale="caption" />

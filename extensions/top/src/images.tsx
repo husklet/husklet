@@ -7,6 +7,9 @@ import {
   CardHeader,
   Column,
   Entry,
+  Expander,
+  FormControl,
+  FormLabel,
   Heading,
   Meter,
   ResourceState,
@@ -217,12 +220,15 @@ export function Images({
   return (
     <Page title="Images" subtitle="Images available to this workspace.">
       <Column gap={1} align="start">
-        <Entry
-          value={reference}
-          placeholder="registry/image:tag"
-          width={{ minimum: { chars: 10 }, maximum: { chars: 32 } }}
-          onChange={(event) => setReference(String(event.value ?? ''))}
-        />
+        <FormControl gap={1}>
+          <FormLabel label="Image reference" />
+          <Entry
+            value={reference}
+            placeholder="registry/image:tag"
+            width={{ minimum: { chars: 10 }, maximum: { chars: 32 } }}
+            onChange={(event) => setReference(String(event.value ?? ''))}
+          />
+        </FormControl>
         <Row gap={1} wrap>
           <Button
             variant="filled"
@@ -250,40 +256,38 @@ export function Images({
         retryLabel="Retry images"
         onRetry={resource.reload}
       >
-        <Card variant="outline">
-          <CardContent gap={1}>
-            <Text label="Image maintenance" />
+        <Expander label="Image maintenance" width="fill" align="start">
+          <Column gap={1}>
             <Text
               label="Bulk action · removes every image not used by a container."
               color="text-dim"
               wrap
             />
-          </CardContent>
-          <CardActions gap={1}>
-            {busy ? <Spinner /> : null}
-            {confirm === 'prune' ? (
-              <>
-                <Text label="Remove every unused image?" color="warning" />
+            <Row gap={1} wrap>
+              {busy ? <Spinner /> : null}
+              {confirm === 'prune' ? (
+                <>
+                  <Text label="Remove every unused image?" color="warning" />
+                  <Button
+                    label="Confirm prune"
+                    enabled={!busy}
+                    tone="danger"
+                    destructive
+                    onInvoke={prune}
+                  />
+                  <Button label="Cancel" enabled={!busy} onInvoke={() => setConfirm('')} />
+                </>
+              ) : (
                 <Button
-                  label="Confirm prune"
+                  label="Prune unused images"
                   enabled={!busy}
-                  tone="danger"
-                  destructive
-                  onInvoke={prune}
+                  variant="outline"
+                  onInvoke={() => setConfirm('prune')}
                 />
-                <Button label="Cancel" enabled={!busy} onInvoke={() => setConfirm('')} />
-              </>
-            ) : (
-              <Button
-                label="Prune unused images"
-                enabled={!busy}
-                tone="danger"
-                variant="outline"
-                onInvoke={() => setConfirm('prune')}
-              />
-            )}
-          </CardActions>
-        </Card>
+              )}
+            </Row>
+          </Column>
+        </Expander>
         {view.records.map((item) => (
           <Card key={item.id} variant={detail?.id === item.id ? 'filled' : 'outline'}>
             <CardHeader
@@ -295,57 +299,80 @@ export function Images({
             <CardContent>
               <Text label={bytes(item.size)} color="text-dim" />
               {inspection.id === item.id ? (
-                <ResourceState
-                  state={
-                    inspection.state === 'idle'
-                      ? 'loading'
-                      : inspection.state === 'ready' && inspection.count === 0
-                        ? 'empty'
-                        : inspection.state
-                  }
-                  loadingLabel="Reading image details…"
-                  emptyLabel="No image details"
-                  emptyDetail="The host returned no inspectable fields."
-                  error={boundedMessage(inspection.error)}
-                  retryLabel="Retry inspect"
-                  onRetry={() => inspect(item)}
-                >
-                  <StructuredDetail value={detail} />
-                </ResourceState>
+                <>
+                  <ResourceState
+                    state={
+                      inspection.state === 'idle'
+                        ? 'loading'
+                        : inspection.state === 'ready' && inspection.count === 0
+                          ? 'empty'
+                          : inspection.state
+                    }
+                    loadingLabel="Reading image details…"
+                    emptyLabel="No image details"
+                    emptyDetail="The host returned no inspectable fields."
+                    error={boundedMessage(inspection.error)}
+                    retryLabel="Retry inspect"
+                    onRetry={() => inspect(item)}
+                  >
+                    <StructuredDetail value={detail} />
+                  </ResourceState>
+                  {inspection.state === 'error' ? (
+                    <Text
+                      label="Verify that the image still exists and that this extension has access to it, then retry inspection."
+                      color="warning"
+                      wrap
+                    />
+                  ) : null}
+                </>
               ) : null}
             </CardContent>
-            {confirm === item.id ? (
-              <CardContent>
-                <Text
-                  label={`Remove ${item.reference || '<untagged>'} (${shortId(item.id)})?`}
-                  color="warning"
-                  wrap
-                />
-              </CardContent>
-            ) : null}
             <CardActions gap={1} justify="start">
-              <Button label="Inspect" enabled={!busy} onInvoke={() => inspect(item)} />
-              {confirm === item.id ? (
-                <>
-                  <Button
-                    label="Confirm remove"
-                    enabled={!busy}
-                    tone="danger"
-                    destructive
-                    onInvoke={() => remove(item)}
-                  />
-                  <Button label="Cancel" enabled={!busy} onInvoke={() => setConfirm('')} />
-                </>
-              ) : (
-                <Button
-                  label="Remove"
-                  enabled={!busy}
-                  tone="danger"
-                  variant="outline"
-                  onInvoke={() => setConfirm(item.id)}
-                />
-              )}
+              <Button
+                label={
+                  inspection.id === item.id && inspection.state === 'error'
+                    ? 'Retry inspect'
+                    : 'Inspect'
+                }
+                variant="filled"
+                tone="accent"
+                enabled={!busy}
+                onInvoke={() => inspect(item)}
+              />
             </CardActions>
+            <CardContent>
+              <Expander label="Danger zone" width="fill" align="start">
+                <Column gap={1}>
+                  <Text label="Removing this image cannot be undone." color="text-dim" wrap />
+                  {confirm === item.id ? (
+                    <Row gap={1} wrap>
+                      <Text
+                        label={`Remove ${item.reference || '<untagged>'} (${shortId(item.id)})?`}
+                        color="warning"
+                        wrap
+                      />
+                      <Button
+                        label="Confirm remove"
+                        enabled={!busy}
+                        tone="danger"
+                        destructive
+                        onInvoke={() => remove(item)}
+                      />
+                      <Button label="Cancel" enabled={!busy} onInvoke={() => setConfirm('')} />
+                    </Row>
+                  ) : (
+                    <Row>
+                      <Button
+                        label="Remove"
+                        variant="outline"
+                        enabled={!busy}
+                        onInvoke={() => setConfirm(item.id)}
+                      />
+                    </Row>
+                  )}
+                </Column>
+              </Expander>
+            </CardContent>
           </Card>
         ))}
         <Omitted count={view.omitted} />
