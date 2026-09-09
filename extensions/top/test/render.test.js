@@ -1060,6 +1060,10 @@ test('an installed catalogue extension exposes its update review without retypin
 
 test('an up-to-date built-in remains discoverable as a catalogue card', async () => {
   const calls = [];
+  let releaseOpen;
+  const opening = new Promise((resolve) => {
+    releaseOpen = resolve;
+  });
   const stage = host();
   stage.render(
     h(Extensions, {
@@ -1080,6 +1084,7 @@ test('an up-to-date built-in remains discoverable as a catalogue card', async ()
         terminal: {
           openTabAndWait: async (...args) => {
             calls.push(['open', ...args]);
+            await opening;
             return {
               changed: true,
               tab: 'tab-storybook',
@@ -1093,6 +1098,7 @@ test('an up-to-date built-in remains discoverable as a catalogue card', async ()
               pane: { slot: 'pane-storybook', generation: 7, revision: 12 },
             };
           },
+          focus: async (...args) => calls.push(['focus', ...args]),
         },
         watchExtensions: async () => () => {},
       },
@@ -1115,6 +1121,15 @@ test('an up-to-date built-in remains discoverable as a catalogue card', async ()
   );
   invoke(stage, 'Open Component playground');
   await settled();
+  assert.ok(labelled(stage, 'Opening…'));
+  assert.equal(isEnabled(stage, 'Opening…'), false);
+  assert.ok(
+    stage.frames.flatMap((frame) => frame.patches).some((patch) => patch.Create?.tag === 'Spinner'),
+  );
+  invoke(stage, 'Opening…');
+  assert.deepEqual(calls, [['open', 'Component playground']]);
+  releaseOpen();
+  await settled();
   await settled();
   assert.deepEqual(calls, [
     ['open', 'Component playground'],
@@ -1125,6 +1140,7 @@ test('an up-to-date built-in remains discoverable as a catalogue card', async ()
       11,
       { kind: 'surface', extension: 'storybook', provider: 'playground' },
     ],
+    ['focus', 'pane-storybook'],
   ]);
   assert.ok(labelled(stage, 'Component playground opened in a new tab.'));
 });
@@ -1171,6 +1187,45 @@ test('opening an extension reports a retained tab when occupant switching fails'
       stage,
       'Tab tab-retained was created, but Component playground did not open: provider stopped before mounting',
     ),
+  );
+  assert.ok(labelled(stage, 'Retry opening'));
+});
+
+test('opening an extension restores its idle action after tab creation fails', async () => {
+  const stage = host();
+  stage.render(
+    h(Extensions, {
+      api: {
+        extensions: {
+          list: async () => [
+            {
+              name: 'storybook',
+              image_digest: `sha256:${'a'.repeat(64)}`,
+              version: '2.0.0',
+              enabled: true,
+              status: 'duty',
+              pane_providers: [{ id: 'playground', title: 'Component playground', icon: null }],
+            },
+          ],
+          catalogue: firstPartyCatalogue,
+        },
+        terminal: {
+          openTabAndWait: async () => {
+            throw new Error('terminal window is unavailable');
+          },
+        },
+        watchExtensions: async () => () => {},
+      },
+    }),
+  );
+  await settled();
+  await settled();
+  invoke(stage, 'Open Component playground');
+  await settled();
+  await settled();
+  assert.ok(labelled(stage, 'Open Component playground'));
+  assert.ok(
+    labelled(stage, 'Component playground could not be opened: terminal window is unavailable'),
   );
 });
 

@@ -47,6 +47,7 @@ import {
 type Change = { value?: unknown };
 type LifecycleAction = 'enable' | 'disable' | 'retry' | 'remove';
 type LifecycleState = { action: LifecycleAction; name: string };
+type ProviderFailure = { key: string; detail: string; retry: boolean };
 type ImageVerb = 'read' | 'use' | 'pull' | 'remove';
 const IMAGE_VERBS: { key: ImageVerb; label: string }[] = [
   { key: 'read', label: 'View image' },
@@ -352,12 +353,15 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
     (LifecycleState & { detail: string }) | null
   >(null);
   const [notice, setNotice] = React.useState<{ label: string; uncertain: boolean } | null>(null);
+  const [opening, setOpening] = React.useState('');
+  const [providerFailure, setProviderFailure] = React.useState<ProviderFailure | null>(null);
   const [permissionDetailsExpanded, setPermissionDetailsExpanded] = React.useState(false);
   const cancelling = React.useRef(false);
   const cancelledJob = React.useRef('');
   const candidateKey = React.useRef('');
   const inventoryEpoch = React.useRef(0);
   const lifecycleInFlight = React.useRef(false);
+  const openingInFlight = React.useRef('');
 
   const reload = React.useCallback(async () => {
     const epoch = ++inventoryEpoch.current;
@@ -618,12 +622,15 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
     }
   };
   const openProvider = async (extension: ExtensionSummary, provider: ExtensionPaneProvider) => {
-    if (busy) return;
     const operation = `open:${extension.name}:${provider.id}`;
-    setBusy(operation);
+    if (busy || openingInFlight.current === operation) return;
+    openingInFlight.current = operation;
+    setOpening(operation);
+    setProviderFailure((failure) => (failure?.key === operation ? null : failure));
     setError('');
     setNotice(null);
     let openedTab = '';
+    let mounted = false;
     try {
       const opened = await api.terminal.openTabAndWait(provider.title);
       openedTab = opened.tab;
@@ -639,19 +646,49 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
       if (!switched.changed) {
         throw new Error('the extension surface did not become the pane occupant');
       }
+      mounted = true;
+      await api.terminal.focus(switched.pane.slot);
       setNotice({
         label: `${provider.title} opened in a new tab.`,
         uncertain: false,
       });
     } catch (cause) {
-      setError(
-        openedTab
-          ? `Tab ${openedTab} was created, but ${provider.title} did not open: ${message(cause)}`
-          : `${provider.title} could not be opened: ${message(cause)}`,
-      );
+      setProviderFailure({
+        key: operation,
+        retry: Boolean(openedTab),
+        detail: mounted
+          ? `${provider.title} opened in tab ${openedTab}, but it could not be focused: ${message(cause)}`
+          : openedTab
+            ? `Tab ${openedTab} was created, but ${provider.title} did not open: ${message(cause)}`
+            : `${provider.title} could not be opened: ${message(cause)}`,
+      });
     } finally {
-      setBusy('');
+      if (openingInFlight.current === operation) openingInFlight.current = '';
+      setOpening((current) => (current === operation ? '' : current));
     }
+  };
+  const providerAction = (extension: ExtensionSummary, provider: ExtensionPaneProvider) => {
+    const key = `open:${extension.name}:${provider.id}`;
+    const active = opening === key;
+    const failure = providerFailure?.key === key ? providerFailure : null;
+    return (
+      <Column gap={1}>
+        <Row gap={1} align="center" wrap>
+          {active ? <Spinner /> : null}
+          <Button
+            label={
+              active ? 'Opening…' : failure?.retry ? 'Retry opening' : `Open ${provider.title}`
+            }
+            size="small"
+            variant="filled"
+            tone="accent"
+            enabled={!busy && !active}
+            onInvoke={() => openProvider(extension, provider)}
+          />
+        </Row>
+        {failure ? <InlineMessage label={failure.detail} tone="danger" /> : null}
+      </Column>
+    );
   };
   const requestedContainers = acquisition?.candidate?.requested_containers ?? {
     selectors: [],
@@ -887,14 +924,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                             </CardActions>
                           ) : provider ? (
                             <CardActions gap={1} align="start" justify="start" width="fill">
-                              <Button
-                                label={`Open ${provider.title}`}
-                                size="small"
-                                variant="filled"
-                                tone="accent"
-                                enabled={!busy}
-                                onInvoke={() => openProvider(installedExtension, provider)}
-                              />
+                              {providerAction(installedExtension, provider)}
                             </CardActions>
                           ) : null}
                         </Card>
@@ -1441,16 +1471,6 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                       />
                       <CardContent gap={1}>
                         <Row gap={1} wrap>
-                          {provider ? (
-                            <Button
-                              label={`Open ${provider.title}`}
-                              size="small"
-                              variant="filled"
-                              tone="accent"
-                              enabled={!busy}
-                              onInvoke={() => openProvider(extension, provider)}
-                            />
-                          ) : null}
                           <Badge
                             label={capitalize(extensionState(extension))}
                             tone={extension.status.startsWith('fault:') ? 'danger' : 'positive'}
@@ -1481,6 +1501,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                           failure={lifecycleFailure}
                         />
                         <Row gap={1} wrap>
+                          {provider ? providerAction(extension, provider) : null}
                           {update && (
                             <Button
                               key="review-update"
