@@ -9,9 +9,9 @@ import {
   CardContent,
   CardHeader,
   Column,
-  Heading,
   InlineMessage,
   Progress,
+  Row,
   Select,
   Spinner,
   Text,
@@ -84,8 +84,7 @@ export function AcquisitionProgressStory() {
   const [selected, setSelected] = useState(acquisitionStates[0].key);
   const state = acquisitionStates.find(({ key }) => key === selected) ?? acquisitionStates[0];
   return (
-    <Column gap={3} grow={true}>
-      <Heading key={'title'} label={'Extension acquisition states'} scale={'title'} wrap={true} />
+    <Column gap={3} width="fill">
       <Text
         key={'explanation'}
         label={
@@ -97,6 +96,7 @@ export function AcquisitionProgressStory() {
       <Select
         key={'state'}
         value={state.key}
+        width={{ maximum: { chars: 32 } }}
         choices={acquisitionStates.map(({ key, title }) => ({ value: key, label: title }))}
         onChange={({ value }) => setSelected(String(value ?? acquisitionStates[0].key))}
       />
@@ -124,18 +124,27 @@ function AcquisitionState({
       <Spinner key={'activity'} busy={true} tooltip={state.status} />
     ) : null;
   return (
-    <Card label={state.title} tone={state.tone ?? 'neutral'} variant={'outline'}>
+    <Card width="fill" label={state.title} tone={state.tone ?? 'neutral'} variant={'outline'}>
       <CardHeader key={'header'} label={state.title} detail={state.key} />
       <CardContent key={'content'} gap={2}>
-        {activity}
-        <InlineMessage key={'status'} label={state.status} tone={state.tone ?? 'neutral'} />
+        <Row gap={2} align="center" width="fill">
+          {activity}
+          <InlineMessage key={'status'} label={state.status} tone={state.tone ?? 'neutral'} />
+        </Row>
       </CardContent>
       <CardActions key={'actions'} gap={2}>
-        <Column gap={2}>
+        <Row gap={2} wrap>
           {state.actions.map((label) => (
-            <Button key={label} label={label} onInvoke={() => onAction(label)} />
+            <Button
+              key={label}
+              label={label}
+              size="small"
+              variant={label === 'Install' ? 'filled' : 'outline'}
+              tone={label === 'Retry' ? 'danger' : label === 'Install' ? 'accent' : 'neutral'}
+              onInvoke={() => onAction(label)}
+            />
           ))}
-        </Column>
+        </Row>
       </CardActions>
     </Card>
   );

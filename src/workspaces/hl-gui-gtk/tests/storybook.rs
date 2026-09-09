@@ -206,6 +206,22 @@ mod unix {
         realized_window.present();
         settle_toolkit();
         if story == "Button" {
+            let search = find::<gtk::Entry>(&root, |entry| {
+                entry.placeholder_text().as_deref() == Some("Search components")
+            });
+            let width = search.width();
+            search.set_text("Se");
+            root.allocate(1_200, 800, -1, None);
+            settle_toolkit();
+            assert!(width >= 200, "Storybook search started at only {width}px");
+            assert_eq!(
+                search.width(),
+                width,
+                "a short query collapsed the Storybook search field"
+            );
+            let _ = surface.reports().drain();
+        }
+        if story == "Button" {
             for (class, expected) in [("size-small", 28), ("size-medium", 36), ("size-large", 44)] {
                 let heights = descendants::<gtk::Button>(&root)
                     .into_iter()

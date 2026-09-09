@@ -218,6 +218,7 @@ export function Sidebar({
         />
         <Entry
           key={'search'}
+          width={'fill'}
           value={search}
           placeholder={'Search components'}
           onChange={(event) => setSearch(String(event.value ?? '').slice(0, 80))}
