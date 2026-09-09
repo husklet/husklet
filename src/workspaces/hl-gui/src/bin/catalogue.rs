@@ -271,6 +271,7 @@ fn family(tag: Tag) -> &'static str {
         | Tag::Scroll
         | Tag::Splitter
         | Tag::Stack
+        | Tag::Responsive
         | Tag::Overlay
         | Tag::Container
         | Tag::Spacer
@@ -694,6 +695,13 @@ const PROPS: &[Entry] = &[
         note: "the divider position of a splitter, in pixels",
     },
     Entry {
+        prop: Prop::Breakpoint,
+        group: "layout",
+        editor: "number",
+        values: &["Number", "Integer"],
+        note: "allocated width below which a Responsive splitter collapses its first child",
+    },
+    Entry {
         prop: Prop::Minimum,
         group: "range",
         editor: "number",
@@ -797,6 +805,7 @@ impl Entry {
             | Prop::RowSpan
             | Prop::Orientation
             | Prop::Position
+            | Prop::Breakpoint
             | Prop::Minimum
             | Prop::Maximum
             | Prop::Step
@@ -871,7 +880,7 @@ fn quoted(item: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{FAMILIES, PROPS, catalogue, escaped, family, text};
+    use super::{catalogue, escaped, family, text, FAMILIES, PROPS};
     use hl_gui::Tag;
 
     /// The document is JSON at all: quotes pair up outside of escapes and no

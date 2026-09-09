@@ -1,5 +1,5 @@
 // Generated from Rust hl-extension protocol/v1.json. Do not edit.
-// Protocol artifact fnv1a64:4e8eeb6860e9009a
+// Protocol artifact fnv1a64:e4f619af414b2a00
 export const PROTOCOL_SPECIFICATION_VERSION = 1;
 export const PROTOCOL_VERSION = 1;
 export const PROTOCOL_BOUNDS = Object.freeze({
@@ -4983,6 +4983,12 @@ const definitions = {
         }
       },
       {
+        "name": "Breakpoint",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
         "name": "Minimum",
         "payload": {
           "kind": "unit"
@@ -5733,6 +5739,12 @@ const definitions = {
       },
       {
         "name": "Stack",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
+        "name": "Responsive",
         "payload": {
           "kind": "unit"
         }

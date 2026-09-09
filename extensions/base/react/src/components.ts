@@ -20,6 +20,7 @@ type InternalComponentName =
   | 'ListItemButton'
   | 'ListSubheader'
   | 'Progress'
+  | 'Responsive'
   | 'Row'
   | 'Scroll'
   | 'Search'
@@ -45,6 +46,7 @@ export const {
   Scroll,
   Splitter,
   Stack,
+  Responsive,
   Overlay,
   Container,
   Spacer,

@@ -174,6 +174,7 @@ catalogue! {
     Scroll: children, props[], triggers[Scroll],
     Splitter: children, props[Orientation, Position], triggers[Change],
     Stack: children, props[], triggers[],
+    Responsive: children, props[Orientation, Position, Breakpoint], triggers[Change],
     Overlay: children, props[], triggers[],
     Container: children, props[Gap], triggers[Drag, Drop],
     Spacer: leaf, props[], triggers[],
@@ -362,7 +363,7 @@ catalogue! {
 
 #[cfg(test)]
 mod tests {
-    use super::{EVERY, Prop, Tag, Trigger};
+    use super::{Prop, Tag, Trigger, EVERY};
 
     #[test]
     fn catalogue_covers_every_tag_exactly_once() {

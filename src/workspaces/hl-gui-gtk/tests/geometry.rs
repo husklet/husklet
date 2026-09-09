@@ -117,12 +117,47 @@ fn geometry_is_what_the_description_asked_for() {
     a_character_width_applies_to_a_scrolling_container();
     a_list_button_ellipsizes_from_its_reading_edge();
     a_scrolled_pane_shares_narrow_and_wide_host_width();
+    a_responsive_container_presents_only_its_allocated_branch();
+}
+
+fn a_responsive_container_presents_only_its_allocated_branch() {
+    let mut stage = Stage::new();
+    let responsive = stage.producer.create(Tag::Responsive);
+    stage
+        .producer
+        .set(responsive, Prop::Breakpoint, PropValue::Integer(400));
+    stage.producer.set(responsive, Prop::Grow, PropValue::Number(1.0));
+    let compact = stage.producer.create(Tag::Text);
+    stage.producer.set(compact, Prop::Label, PropValue::text("compact"));
+    let wide = stage.producer.create(Tag::Row);
+    stage.producer.set(wide, Prop::Grow, PropValue::Number(1.0));
+    let body_label = stage.producer.create(Tag::Text);
+    stage.producer.set(body_label, Prop::Label, PropValue::text("wide"));
+    stage.producer.append(wide, body_label);
+    stage.producer.append(responsive, compact);
+    stage.producer.append(responsive, wide);
+    stage.producer.append(NodeId::ROOT, responsive);
+    stage.draw();
+
+    stage.allocate(320, 200);
+    stage.allocate(320, 200);
+    assert!(!stage.surface.is_presented(compact));
+    assert!(stage.surface.is_presented(wide));
+    assert_eq!(stage.surface.allocated_size(wide).map(|size| size.0), Some(320));
+
+    stage.allocate(600, 200);
+    stage.allocate(600, 200);
+    assert!(stage.surface.is_presented(compact));
+    assert!(stage.surface.is_presented(wide));
+    assert!(stage.surface.allocated_size(wide).is_some_and(|size| size.0 < 600));
 }
 
 fn a_character_width_applies_to_a_scrolling_container() {
     let mut stage = Stage::new();
     let list = stage.producer.create(Tag::List);
-    stage.producer.set(list, Prop::Width, PropValue::Length(Length::Chars(26)));
+    stage
+        .producer
+        .set(list, Prop::Width, PropValue::Length(Length::Chars(26)));
     stage.producer.append(NodeId::ROOT, list);
     stage.draw();
 
@@ -134,12 +169,22 @@ fn a_character_width_applies_to_a_scrolling_container() {
 fn a_list_button_ellipsizes_from_its_reading_edge() {
     let mut stage = Stage::new();
     let item = stage.producer.create(Tag::ListItemButton);
-    stage.producer.set(item, Prop::Label, PropValue::text("A deliberately long navigation destination"));
+    stage.producer.set(
+        item,
+        Prop::Label,
+        PropValue::text("A deliberately long navigation destination"),
+    );
     stage.producer.append(NodeId::ROOT, item);
     stage.draw();
 
-    let button = stage.tagged(Tag::ListItemButton).downcast::<gtk::Button>().expect("list item is a button");
-    let label = button.child().and_then(|child| child.downcast::<gtk::Label>().ok()).expect("list item owns its label");
+    let button = stage
+        .tagged(Tag::ListItemButton)
+        .downcast::<gtk::Button>()
+        .expect("list item is a button");
+    let label = button
+        .child()
+        .and_then(|child| child.downcast::<gtk::Label>().ok())
+        .expect("list item owns its label");
     assert_eq!(label.xalign(), 0.0);
     assert_eq!(label.ellipsize(), gtk::pango::EllipsizeMode::End);
 }

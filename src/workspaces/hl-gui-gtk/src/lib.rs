@@ -124,6 +124,33 @@ impl Surface {
         self.registry.len() <= 1
     }
 
+    /// Whether GTK currently presents this node through every ancestor.
+    ///
+    /// This includes allocation-driven choices such as [`hl_gui::Tag::Responsive`],
+    /// which deliberately are not producer-authored `Visible` properties.
+    #[must_use]
+    pub fn is_presented(&self, id: NodeId) -> bool {
+        let Some(mut widget) = self.registry.get(id).cloned() else {
+            return false;
+        };
+        loop {
+            if !widget.is_visible() || !widget.is_child_visible() {
+                return false;
+            }
+            let Some(parent) = widget.parent() else {
+                return true;
+            };
+            widget = parent;
+        }
+    }
+
+    #[must_use]
+    pub fn allocated_size(&self, id: NodeId) -> Option<(i32, i32)> {
+        self.registry
+            .get(id)
+            .map(|widget| (widget.allocated_width(), widget.allocated_height()))
+    }
+
     fn require(&self, id: NodeId) -> Result<&gtk::Widget, Failure> {
         self.registry.get(id).ok_or(Failure::Unmapped(id))
     }

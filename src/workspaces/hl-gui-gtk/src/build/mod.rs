@@ -6,6 +6,7 @@
 
 mod flow;
 pub(crate) mod layout;
+pub(crate) mod responsive;
 
 use gtk::prelude::*;
 use hl_gui::{Node, Tag};
@@ -24,6 +25,7 @@ pub(crate) fn widget(node: &Node) -> gtk::Widget {
         | Tag::Scroll
         | Tag::Splitter
         | Tag::Stack
+        | Tag::Responsive
         | Tag::Overlay
         | Tag::Spacer
         | Tag::Separator => layout::widget(node.tag),
@@ -48,6 +50,9 @@ pub(crate) fn class(tag: Tag) -> String {
 pub(crate) fn attach(parent: &gtk::Widget, child: &gtk::Widget, tag: Tag, index: usize) -> bool {
     if component::attach(parent, child, tag, index) {
         return true;
+    }
+    if let Some(paned) = responsive::paned(parent) {
+        return layout::attach(paned.upcast_ref(), child, index);
     }
     if let Some(container) = parent.downcast_ref::<gtk::Box>() {
         insert_into(container, child, index);

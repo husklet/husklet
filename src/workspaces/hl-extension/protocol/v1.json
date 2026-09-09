@@ -4658,6 +4658,12 @@
           }
         },
         {
+          "name": "Breakpoint",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
           "name": "Minimum",
           "payload": {
             "kind": "unit"
@@ -5408,6 +5414,12 @@
         },
         {
           "name": "Stack",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "Responsive",
           "payload": {
             "kind": "unit"
           }
@@ -13399,7 +13411,7 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:1f4673489b757d5b",
+  "source_fingerprint": "fnv1a64:cf71e668c22acb9b",
   "specification_version": 1,
   "topics": [
     {

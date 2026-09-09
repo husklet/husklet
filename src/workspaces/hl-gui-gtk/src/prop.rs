@@ -40,6 +40,7 @@ pub(crate) fn apply(widget: &gtk::Widget, node: &Node, prop: Prop, value: &PropV
         Prop::Span | Prop::RowSpan => build::layout::span(widget, prop, value),
         Prop::Orientation => orientation(widget, value),
         Prop::Position => position(widget, value),
+        Prop::Breakpoint => build::responsive::set(widget, value),
         Prop::Minimum | Prop::Maximum | Prop::Step => range(widget, prop, value),
         Prop::Fraction => fraction(widget, value),
         Prop::Choices => choices(widget, node, value, reports),
@@ -330,6 +331,10 @@ fn orientation(widget: &gtk::Widget, value: &PropValue) {
         container.set_orientation(axis);
         return;
     }
+    if let Some(paned) = build::responsive::paned(widget) {
+        paned.set_orientation(axis);
+        return;
+    }
     if let Some(paned) = widget.downcast_ref::<gtk::Paned>() {
         paned.set_orientation(axis);
         return;
@@ -340,8 +345,12 @@ fn orientation(widget: &gtk::Widget, value: &PropValue) {
 }
 
 fn position(widget: &gtk::Widget, value: &PropValue) {
+    let position = value.as_number().unwrap_or_default() as i32;
+    if build::responsive::set_position(widget, position) {
+        return;
+    }
     if let Some(paned) = widget.downcast_ref::<gtk::Paned>() {
-        paned.set_position(value.as_number().unwrap_or_default() as i32);
+        paned.set_position(position);
     }
 }
 

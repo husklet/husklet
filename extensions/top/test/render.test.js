@@ -313,7 +313,7 @@ test('Top sidebar divider reports and bounds its retained position', () => {
   );
   const splitter = stage.frames
     .flatMap((frame) => frame.patches)
-    .find((patch) => patch.Create?.tag === 'Splitter').Create.id;
+    .find((patch) => patch.Create?.tag === 'Responsive').Create.id;
   assert.deepEqual(
     stage.frames
       .flatMap((frame) => frame.patches)
@@ -385,7 +385,7 @@ test('a developer drag wins over a late stored sidebar width and is persisted', 
   await settled();
   const splitter = stage.frames
     .flatMap((frame) => frame.patches)
-    .find((patch) => patch.Create?.tag === 'Splitter').Create.id;
+    .find((patch) => patch.Create?.tag === 'Responsive').Create.id;
   assert.ok(
     stage.surface.dispatch({
       trigger: 'Change',

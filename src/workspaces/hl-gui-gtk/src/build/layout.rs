@@ -15,6 +15,7 @@ pub(super) fn widget(tag: Tag) -> gtk::Widget {
         Tag::Scroll => scroll().upcast(),
         Tag::Splitter => gtk::Paned::new(gtk::Orientation::Horizontal).upcast(),
         Tag::Stack => stack().upcast(),
+        Tag::Responsive => super::responsive::widget().upcast(),
         Tag::Overlay => gtk::Overlay::new().upcast(),
         Tag::Spacer => spacer().upcast(),
         // Separator is the last layout tag, and `build::widget` routes only

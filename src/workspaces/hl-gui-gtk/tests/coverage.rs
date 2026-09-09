@@ -795,6 +795,7 @@ fn numbered(prop: Prop) -> Vec<PropValue> {
     match prop {
         Prop::Columns | Prop::Span | Prop::RowSpan => vec![PropValue::Integer(2), PropValue::Integer(3)],
         Prop::Position => vec![PropValue::Number(120.0)],
+        Prop::Breakpoint => vec![PropValue::Integer(720)],
         Prop::Minimum => vec![PropValue::Number(5.0)],
         Prop::Maximum => vec![PropValue::Number(50.0)],
         Prop::Step => vec![PropValue::Number(2.0)],
@@ -1144,7 +1145,7 @@ fn timed(widget: &gtk::Widget) -> bool {
 fn principal(tag: Tag) -> Aspect {
     match tag {
         Tag::Column | Tag::Row | Tag::Grid | Tag::Container => Aspect::Gap,
-        Tag::Scroll | Tag::Splitter | Tag::Stack | Tag::Overlay | Tag::Spacer => Aspect::Grow,
+        Tag::Scroll | Tag::Splitter | Tag::Stack | Tag::Responsive | Tag::Overlay | Tag::Spacer => Aspect::Grow,
         Tag::Separator | Tag::StepConnector => Aspect::Orientation,
         Tag::Card | Tag::Paper | Tag::CardHeader | Tag::CardActionArea => Aspect::Label,
         Tag::CardContent | Tag::CardActions | Tag::Section | Tag::Toolbar | Tag::Sidebar => Aspect::Gap,

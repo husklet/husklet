@@ -370,7 +370,10 @@ fn controlled(widget: &gtk::Widget, trigger: Trigger) -> bool {
 
 /// The components whose interaction is a value changing.
 fn valued(widget: &gtk::Widget) {
-    if let Some(splitter) = widget.downcast_ref::<gtk::Paned>() {
+    let nested_splitter = widget
+        .first_child()
+        .and_then(|child| child.downcast::<gtk::Paned>().ok());
+    if let Some(splitter) = widget.downcast_ref::<gtk::Paned>().or(nested_splitter.as_ref()) {
         splitter.set_position(splitter.position().saturating_add(17));
         return;
     }

@@ -62,6 +62,8 @@ pub enum Prop {
     RowSpan,
     Orientation,
     Position,
+    /// Pixel width at which a responsive container selects its wide child.
+    Breakpoint,
     // Range
     Minimum,
     Maximum,

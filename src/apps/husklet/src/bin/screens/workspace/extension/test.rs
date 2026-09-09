@@ -8,7 +8,7 @@ use std::rc::Rc;
 use gtk::prelude::*;
 use hl_gui::{Element, Event, EventId, Reconciliation, Tag};
 
-use super::{DRAIN, Delivery, Interface, Post, Signal, channel};
+use super::{channel, Delivery, Interface, Post, Signal, DRAIN};
 
 /// Everything the sink was handed, in order.
 type Record = Rc<RefCell<Vec<Signal>>>;
@@ -137,11 +137,20 @@ fn sequence_gap_freezes_stale_widgets_and_ignores_the_old_socket_generation() {
         [Signal::Retry],
         "the frozen tree cannot emit an interaction after recovery begins"
     );
-    fixture.post.send(Delivery::Frame(skipped)).expect("late predecessor queued");
+    fixture
+        .post
+        .send(Delivery::Frame(skipped))
+        .expect("late predecessor queued");
     fixture.page.tick();
-    assert!(fixture.page.banner().is_visible(), "old-generation frames cannot self-heal the gap");
+    assert!(
+        fixture.page.banner().is_visible(),
+        "old-generation frames cannot self-heal the gap"
+    );
 
-    fixture.post.send(Delivery::Reset).expect("replacement generation announced");
+    fixture
+        .post
+        .send(Delivery::Reset)
+        .expect("replacement generation announced");
     fixture.reconciliation = Reconciliation::new();
     fixture.describe(&panel("Replacement generation"));
     fixture.page.tick();
@@ -195,28 +204,62 @@ fn an_extension_page_renders_what_is_queued_and_survives_the_extension() {
         network_waterfall_projects_exact_structured_semantics();
         semantic_actions_are_safe_by_default_and_preserve_authored_danger();
         disabled_and_hidden_controls_are_not_advertised_as_actions();
+        responsive_semantics_follow_the_branch_gtk_presented();
     });
     if !ran {
         eprintln!("skipped: no display connection, so the extension page cannot be rendered");
     }
 }
 
+fn responsive_semantics_follow_the_branch_gtk_presented() {
+    let mut fixture = Fixture::new();
+    let description = Element::new(Tag::Responsive)
+        .prop(hl_gui::Prop::Breakpoint, hl_gui::PropValue::Integer(400))
+        .prop(hl_gui::Prop::Grow, hl_gui::PropValue::Number(1.0))
+        .child(Element::heading("Compact navigation"))
+        .child(Element::heading("Wide navigation"));
+    fixture.describe(&description);
+    fixture.page.tick();
+    let root = fixture.page.surface().widget().clone().upcast::<gtk::Widget>();
+
+    root.measure(gtk::Orientation::Horizontal, -1);
+    root.measure(gtk::Orientation::Vertical, 320);
+    root.allocate(320, 200, -1, None);
+    root.allocate(320, 200, -1, None);
+    let compact = fixture.page.semantics("").expect("compact semantic projection");
+    let compact_labels = semantic_labels(&compact.root);
+    assert!(compact_labels.iter().all(|label| label != "Compact navigation"));
+    assert!(compact_labels.iter().any(|label| label == "Wide navigation"));
+
+    root.measure(gtk::Orientation::Vertical, 600);
+    root.allocate(600, 200, -1, None);
+    root.allocate(600, 200, -1, None);
+    let wide = fixture.page.semantics("").expect("wide semantic projection");
+    let wide_labels = semantic_labels(&wide.root);
+    assert!(wide_labels.iter().any(|label| label == "Wide navigation"));
+    assert!(wide_labels.iter().any(|label| label == "Compact navigation"));
+}
+
+fn semantic_labels(node: &hl_extension::SemanticNode) -> Vec<String> {
+    let mut labels = node.label.iter().cloned().collect::<Vec<_>>();
+    for child in &node.children {
+        labels.extend(semantic_labels(child));
+    }
+    labels
+}
+
 fn startup_is_visible_until_the_first_valid_frame() {
     let mut fixture = Fixture::new();
-    assert!(
-        visible_labels(&fixture)
-            .iter()
-            .any(|label| label == "Starting extension…")
-    );
+    assert!(visible_labels(&fixture)
+        .iter()
+        .any(|label| label == "Starting extension…"));
 
     fixture.describe(&panel("Ready"));
     fixture.page.tick();
 
-    assert!(
-        !visible_labels(&fixture)
-            .iter()
-            .any(|label| label == "Starting extension…")
-    );
+    assert!(!visible_labels(&fixture)
+        .iter()
+        .any(|label| label == "Starting extension…"));
 }
 
 fn a_new_generation_restarts_at_frame_one_without_a_sequence_fault() {
@@ -1018,12 +1061,10 @@ fn a_stopped_extension_keeps_its_widgets_and_says_so() {
         .iter()
         .find(|node| node.label.as_deref() == Some("Extension unavailable"))
         .expect("the visible fault has a semantic projection");
-    assert!(
-        fault
-            .value
-            .as_deref()
-            .is_some_and(|value| value.contains("socket closed"))
-    );
+    assert!(fault
+        .value
+        .as_deref()
+        .is_some_and(|value| value.contains("socket closed")));
     assert_eq!(fault.actions, vec![hl_extension::SemanticActionKind::Invoke]);
     fixture
         .page

@@ -60,6 +60,7 @@ const KIND = {
   RowSpan: 'integer',
   Orientation: 'orientation',
   Position: 'number',
+  Breakpoint: 'number',
   // Range
   Minimum: 'number',
   Maximum: 'number',

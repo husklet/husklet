@@ -1,7 +1,7 @@
 import React from 'react';
 import {
   Row,
-  Splitter,
+  Responsive,
   type ContainerSummary,
   type ExecutionSummary,
   type ExtensionSummary,
@@ -272,10 +272,11 @@ export function Top({
       <Terminals api={api} resource={terminals} />
     );
   return (
-    <Splitter
+    <Responsive
       grow
       orientation="horizontal"
       position={sidebarWidth}
+      breakpoint={640}
       onChange={(event) => {
         const position = boundedSidebarWidth(Number(event.value));
         if (position !== null) {
@@ -288,7 +289,7 @@ export function Top({
         <Navigation section={section} onSelect={setSection} />
       </Row>
       {body}
-    </Splitter>
+    </Responsive>
   );
 }
 

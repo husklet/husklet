@@ -174,7 +174,8 @@ impl Interface {
     fn semantics_from(&self, tree: &Tree, slot: &str) -> Result<PaneSemanticTree, HostError> {
         let mut count = 0;
         let mut truncated = false;
-        let mut root = Self::semantic_node(tree, hl_gui::NodeId::ROOT, 0, &mut count, &mut truncated)?;
+        let surface = self.panes.get(slot).map_or(&self.surface, |pane| &pane.surface);
+        let mut root = Self::semantic_node(tree, surface, hl_gui::NodeId::ROOT, 0, &mut count, &mut truncated)?;
         if self.banner.is_visible() {
             if count >= hl_extension::port::SEMANTIC_NODE_LIMIT {
                 root.children.pop();
@@ -211,6 +212,7 @@ impl Interface {
 
     fn semantic_node(
         tree: &Tree,
+        surface: &Surface,
         id: hl_gui::NodeId,
         depth: usize,
         count: &mut usize,
@@ -248,7 +250,7 @@ impl Interface {
             .collect();
         let mut children = Vec::new();
         for child in &node.children {
-            if tree.node(*child).is_some_and(|node| !node.is_visible()) {
+            if tree.node(*child).is_some_and(|node| !node.is_visible()) || !surface.is_presented(*child) {
                 continue;
             }
             if depth + 1 >= hl_extension::port::SEMANTIC_DEPTH_LIMIT
@@ -257,7 +259,7 @@ impl Interface {
                 *truncated = true;
                 break;
             }
-            children.push(Self::semantic_node(tree, *child, depth + 1, count, truncated)?);
+            children.push(Self::semantic_node(tree, surface, *child, depth + 1, count, truncated)?);
         }
         Ok(SemanticNode {
             id: id.raw(),
