@@ -40,6 +40,14 @@ test('a component offers what it declares and nothing else', () => {
   assert.match(shape('DataTable'), /schema\?: readonly ColumnSpec\[\];/);
 });
 
+test('RadioGroup exposes authored children rather than inert generated choices', () => {
+  const group = shape('RadioGroup');
+  assert.match(group, /children\?: ReactNode;/);
+  assert.doesNotMatch(group, /choices\?:/, 'group-level choices cannot carry Radio state or handlers');
+  assert.match(shape('Radio'), /checked\?: boolean;/);
+  assert.match(shape('Radio'), /onToggle\?:/);
+});
+
 test('a handler is offered only where the component reports that interaction', () => {
   for (const tag of catalogue.tags) {
     const written = shape(tag.name);

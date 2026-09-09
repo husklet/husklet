@@ -24,6 +24,7 @@ mod unix {
         "ToggleButton",
         "Checkbox",
         "Radio",
+        "RadioGroup",
         "Extension acquisition",
         "Validated settings form",
         "Keyboard and semantic actions",
@@ -209,7 +210,7 @@ mod unix {
         let realized_window = gtk::Window::new();
         let narrow_story = matches!(
             story,
-            "Button" | "Entry" | "Select" | "Checkbox" | "Radio" | "DataTable"
+            "Button" | "Entry" | "Select" | "Checkbox" | "Radio" | "RadioGroup" | "DataTable"
         );
         realized_window.set_default_size(if narrow_story { 600 } else { 1_200 }, 800);
         realized_window.set_child(Some(&root));
@@ -545,6 +546,20 @@ mod unix {
             assert!(bash.grab_focus(), "controlled Radio restores native focus");
             assert!(bash.has_focus(), "controlled Radio exposes focus-visible state");
             capture_story(&realized_window, "Radio focused bash");
+        }
+        if story == "RadioGroup" {
+            settle_toolkit();
+            let nightly = find::<gtk::CheckButton>(&root, |button| button.label().as_deref() == Some("Nightly"));
+            assert!(
+                nightly.is_active(),
+                "controlled RadioGroup did not retain native selection"
+            );
+            assert!(
+                nightly.grab_focus(),
+                "controlled RadioGroup restores its roving focus target"
+            );
+            assert!(nightly.has_focus(), "controlled RadioGroup exposes focus-visible state");
+            capture_story(&realized_window, "RadioGroup focused nightly");
         }
         if story == "Extension acquisition" {
             assert!(
@@ -899,6 +914,26 @@ mod unix {
                 assert!(!zsh.is_active(), "native group preserves exactly one selection");
                 assert!(!fish.is_active(), "native group leaves every other Radio unselected");
             }
+            "RadioGroup" => {
+                let stable = find::<gtk::CheckButton>(root, |button| button.label().as_deref() == Some("Stable"));
+                let preview = find::<gtk::CheckButton>(root, |button| button.label().as_deref() == Some("Preview"));
+                let nightly = find::<gtk::CheckButton>(root, |button| button.label().as_deref() == Some("Nightly"));
+                assert!(stable.is_active());
+                assert!(!preview.is_sensitive(), "disabled Radio child remains unavailable");
+                assert!(stable.grab_focus(), "RadioGroup has one selected tab stop");
+                assert!(
+                    root.child_focus(gtk::DirectionType::Down),
+                    "RadioGroup accepts directional movement"
+                );
+                assert!(!preview.has_focus(), "directional movement skips the disabled Radio");
+                assert!(
+                    nightly.has_focus(),
+                    "directional movement reaches the next enabled Radio"
+                );
+                nightly.activate();
+                assert!(nightly.is_active(), "directional target becomes selected");
+                assert!(!stable.is_active(), "RadioGroup retains exactly one native selection");
+            }
             "DataTable" => {
                 let entry = find::<gtk::Entry>(root, |entry| entry.text().starts_with("record-"));
                 let authoritative = entry.text();
@@ -971,7 +1006,7 @@ mod unix {
             (1..=2).contains(&reports.len()),
             "{story} emitted {reports:?} instead of a bounded event"
         );
-        let event = if story == "Radio" {
+        let event = if matches!(story, "Radio" | "RadioGroup") {
             reports
                 .into_iter()
                 .find(|event| {

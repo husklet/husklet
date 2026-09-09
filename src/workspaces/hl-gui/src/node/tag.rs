@@ -259,7 +259,7 @@ catalogue! {
     Switch: leaf, props[Checked, Selected, Enabled], triggers[Toggle],
     Checkbox: leaf, props[Label, Checked, Selected, Enabled], triggers[Toggle],
     Radio: leaf, props[Label, Checked, Selected, Enabled], triggers[Toggle],
-    RadioGroup: children, props[Choices, Gap, Orientation], triggers[],
+    RadioGroup: children, props[Gap, Orientation], triggers[],
     Select: leaf, props[Value, Choices, Enabled], triggers[Change, Select, Key, Focus],
 
     // Lists: rows composed from parts.
@@ -363,7 +363,7 @@ catalogue! {
 
 #[cfg(test)]
 mod tests {
-    use super::{Prop, Tag, Trigger, EVERY};
+    use super::{EVERY, Prop, Tag, Trigger};
 
     #[test]
     fn catalogue_covers_every_tag_exactly_once() {

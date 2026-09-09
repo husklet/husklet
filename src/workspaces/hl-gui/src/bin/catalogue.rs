@@ -861,7 +861,7 @@ const PROPS: &[Entry] = &[
         group: "collection",
         editor: "choices",
         values: &["Choices"],
-        note: "options of a select or a radio group, each a value and a label",
+        note: "ordered options of a model-backed choice control, each with a stable value and visible label",
     },
 ];
 

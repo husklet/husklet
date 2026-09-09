@@ -416,9 +416,7 @@ fn choices(widget: &gtk::Widget, node: &Node, value: &PropValue, reports: &crate
     }
     if let Some(drop) = widget.downcast_ref::<gtk::DropDown>() {
         drop.set_model(Some(&gtk::StringList::new(&labels)));
-        return;
     }
-    radios(widget, &labels);
 }
 
 /// Selects the option whose stable producer value matches `value`.
@@ -438,24 +436,4 @@ fn select_value(widget: &gtk::Widget, node: &Node) {
         .and_then(|index| u32::try_from(index).ok())
         .unwrap_or(gtk::INVALID_LIST_POSITION);
     choice::set_selected(widget, (selected != gtk::INVALID_LIST_POSITION).then_some(selected));
-}
-
-fn radios(widget: &gtk::Widget, labels: &[&str]) {
-    let Some(container) = widget.downcast_ref::<gtk::Box>() else {
-        return;
-    };
-    while let Some(child) = container.first_child() {
-        container.remove(&child);
-    }
-    let mut group: Option<gtk::CheckButton> = None;
-    for label in labels {
-        let button = gtk::CheckButton::with_label(label);
-        if let Some(first) = group.as_ref() {
-            button.set_group(Some(first));
-        } else {
-            button.set_active(true);
-            group = Some(button.clone());
-        }
-        container.append(&button);
-    }
 }
