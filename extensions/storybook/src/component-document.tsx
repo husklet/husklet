@@ -9,7 +9,6 @@ import {
   Grid,
   Heading,
   Section,
-  Scroll,
   Table,
   TableBody,
   TableCell,
@@ -95,30 +94,31 @@ export function SpecimenGrid({ children }: { children: React.ReactNode }) {
 export function ApiReference({ example, rows }: { example?: string; rows: ControlRow[] }) {
   const inheritedLayout = rows.filter((row) => INHERITED_LAYOUT.has(row.name));
   const inheritedBehavior = rows.filter((row) => INHERITED_BEHAVIOR.has(row.name));
+  const compatibility = rows.filter((row) => row.compatibility);
   const own = rows.filter(
-    (row) => !INHERITED_LAYOUT.has(row.name) && !INHERITED_BEHAVIOR.has(row.name),
+    (row) =>
+      !INHERITED_LAYOUT.has(row.name) && !INHERITED_BEHAVIOR.has(row.name) && !row.compatibility,
   );
   return (
     <Column gap={3} width="fill">
       {example ? <Code value={example} wrap /> : null}
-      <Scroll width="fill">
-        <ApiTable rows={own} />
-      </Scroll>
+      <ApiTable rows={own} />
+      {compatibility.length > 0 ? (
+        <Expander label={`Compatibility props · ${compatibility.length}`} width="fill">
+          <ApiTable rows={compatibility} />
+        </Expander>
+      ) : null}
       {inheritedBehavior.length > 0 ? (
         <Expander
           label={`Inherited behavior and visibility props · ${inheritedBehavior.length}`}
           width="fill"
         >
-          <Scroll width="fill">
-            <ApiTable rows={inheritedBehavior} />
-          </Scroll>
+          <ApiTable rows={inheritedBehavior} />
         </Expander>
       ) : null}
       {inheritedLayout.length > 0 ? (
         <Expander label={`Inherited layout props · ${inheritedLayout.length}`} width="fill">
-          <Scroll width="fill">
-            <ApiTable rows={inheritedLayout} />
-          </Scroll>
+          <ApiTable rows={inheritedLayout} />
         </Expander>
       ) : null}
     </Column>
@@ -151,6 +151,7 @@ function ApiTable({ rows }: { rows: ControlRow[] }) {
 }
 
 function publicType(row: ControlRow): string {
+  if (row.type) return row.type;
   if (row.members?.length) return row.members.map(({ value }) => `'${value}'`).join(' | ');
   const names = row.values.map((value) => {
     if (value === 'Text') return 'string';

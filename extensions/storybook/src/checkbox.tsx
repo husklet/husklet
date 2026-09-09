@@ -7,7 +7,7 @@ import {
   FieldSpecimen,
   SpecimenGrid,
 } from './component-document.js';
-import { rows } from './editors.js';
+import { apiRows } from './editors.js';
 
 const OPTIONS = ['Logs', 'Metrics', 'Traces'];
 
@@ -103,7 +103,7 @@ export function CheckboxWorkbench() {
         />
       </DocumentationSection>
       <DocumentationSection title="API">
-        <ApiReference rows={rows('Checkbox')} />
+        <ApiReference rows={apiRows('Checkbox')} />
       </DocumentationSection>
     </ComponentDocument>
   );

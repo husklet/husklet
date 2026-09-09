@@ -149,7 +149,15 @@ fn prop_notes(tag: Tag) -> String {
             ),
         ],
         Tag::Checkbox => &[
+            (
+                "Label",
+                "Visible Checkbox caption and native click target; keep it specific to the choice.",
+            ),
             ("Checked", "Controlled submitted boolean state."),
+            (
+                "Selected",
+                "Legacy state alias read only when Checked is absent; prefer Checked for new code.",
+            ),
             (
                 "Indeterminate",
                 "Partial-selection presentation. The producer resolves the next Toggle report to checked or unchecked.",

@@ -12,6 +12,7 @@ import {
   editable,
   enums,
   maximumStep,
+  props,
   style,
   vocabularyOf,
   type Property,
@@ -29,11 +30,27 @@ export type ControlRow = {
   editable: boolean;
   values: readonly string[];
   default: string | null;
+  type?: string;
+  compatibility?: boolean;
   vocabulary?: Vocabulary | null;
   members?: Choice[];
   modes?: Choice[];
   maximum?: number;
 };
+
+function handler(componentName: string, trigger: string): ControlRow {
+  return {
+    prop: trigger,
+    name: `on${trigger}`,
+    group: 'interaction',
+    editor: 'handler',
+    note: `${trigger} reports the ${componentName}'s resolved value after native interaction.`,
+    editable: false,
+    values: [],
+    default: null,
+    type: '(report: Report) => void',
+  };
+}
 
 /** Where the catalogue's hint and the JavaScript binding disagree. */
 export const BINDING: Partial<Record<string, string>> = {};
@@ -46,15 +63,17 @@ export function editorOf(prop: Property): string {
 /** A property, described as the editor needs it: one row of the right pane. */
 export function control(prop: Property, note = prop.note): ControlRow {
   const editor = editorOf(prop);
+  const description = typeof note === 'string' ? note : prop.note;
   const row: ControlRow = {
     prop: prop.name,
     name: camel(prop.name),
     group: prop.group,
     editor,
-    note,
+    note: description,
     editable: CONTROLLABLE.has(editor),
     values: prop.values,
     default: prop.default,
+    compatibility: description.startsWith('Legacy state alias'),
   };
   if (editor === 'enum') {
     const vocabulary = vocabularyOf(prop);
@@ -71,12 +90,27 @@ export function control(prop: Property, note = prop.note): ControlRow {
   return row;
 }
 
-/** Every property as a row, in catalogue order, editable ones first. */
+/** Every property as an editable playground row, editable ones first. */
 export function rows(name: string): ControlRow[] {
   const tag = component(name);
   const notes = tag.propNotes as Record<string, string>;
   const all = editable(name).map((prop) => control(prop, notes[prop.name] ?? prop.note));
   return [...all.filter((row) => row.editable), ...all.filter((row) => !row.editable)];
+}
+
+/** The generated public API, preserving each component's declared property and trigger order. */
+export function apiRows(name: string): ControlRow[] {
+  const tag = component(name);
+  const notes = tag.propNotes as Record<string, string>;
+  const byName = new Map(props.map((prop) => [prop.name, prop]));
+  return [
+    ...tag.props.map((propertyName) => {
+      const prop = byName.get(propertyName);
+      if (!prop) throw new Error(`<${name}> declares unknown property ${propertyName}`);
+      return control(prop, notes[prop.name] ?? prop.note);
+    }),
+    ...tag.triggers.map((trigger) => handler(name, trigger)),
+  ];
 }
 
 /** How a length is written: steps, characters, or one of the named sizes. */

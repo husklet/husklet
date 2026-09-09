@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement as h } from 'react';
 import { CheckboxWorkbench } from '../dist/checkbox.js';
+import { apiRows } from '../dist/editors.js';
 import { host } from './host.js';
 
 function labels(patches) {
@@ -71,4 +72,39 @@ test('Checkbox documents enabled and disabled unchecked, checked, and mixed stat
     ),
   );
   assert(text.indexOf('State matrix') < text.indexOf('API'));
+});
+
+test('Checkbox API owns each generated prop and Toggle handler exactly once', () => {
+  const api = apiRows('Checkbox');
+  const owned = api.filter((row) =>
+    ['label', 'checked', 'indeterminate', 'enabled', 'onToggle'].includes(row.name),
+  );
+  assert.deepEqual(
+    owned.map((row) => row.name),
+    ['label', 'checked', 'indeterminate', 'enabled', 'onToggle'],
+  );
+  for (const name of owned.map((row) => row.name)) {
+    assert.equal(api.filter((row) => row.name === name).length, 1, `${name} is duplicated`);
+  }
+  assert.equal(owned.find((row) => row.name === 'onToggle').type, '(report: Report) => void');
+  assert.match(
+    owned.find((row) => row.name === 'indeterminate').note,
+    /presentation.*resolves the next Toggle report/i,
+  );
+  assert(
+    api.find((row) => row.name === 'selected'),
+    'legacy selected remains generated',
+  );
+});
+
+test('Checkbox rendered API places owned rows directly after its header', () => {
+  const text = labels(host().render(h(CheckboxWorkbench)).patches);
+  const header = text.indexOf('Property');
+  const owned = ['label', 'checked', 'indeterminate', 'enabled', 'onToggle'];
+  assert(header >= 0);
+  assert.deepEqual(
+    text.slice(header + 4, header + 4 + owned.length * 4).filter((_, index) => index % 4 === 0),
+    owned,
+  );
+  assert(text.indexOf('Compatibility props · 1') > text.indexOf('onToggle'));
 });

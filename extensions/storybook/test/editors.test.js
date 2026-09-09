@@ -2,7 +2,15 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { component, editable, props, tags } from '../dist/catalogue.js';
-import { amountOf, control, lengthValue, memberOf, modeOf, rows } from '../dist/editors.js';
+import {
+  apiRows,
+  amountOf,
+  control,
+  lengthValue,
+  memberOf,
+  modeOf,
+  rows,
+} from '../dist/editors.js';
 import { value } from './host.js';
 
 const byName = new Map(props.map((prop) => [prop.name, prop]));
@@ -11,6 +19,12 @@ test('every declared property gets a control, and no other property does', () =>
   for (const tag of tags) {
     const all = rows(tag.name);
     assert.deepEqual(all.map((row) => row.prop).sort(), component(tag.name).props.slice().sort());
+    assert.deepEqual(
+      apiRows(tag.name)
+        .filter((row) => row.editor === 'handler')
+        .map((row) => row.prop),
+      component(tag.name).triggers,
+    );
     for (const row of all) {
       assert.ok(row.name && row.editor && row.group);
       if (row.editor === 'enum')

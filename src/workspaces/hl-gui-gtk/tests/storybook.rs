@@ -10,9 +10,9 @@ mod unix {
 
     use gtk::prelude::*;
     use hl_extension::{
-        codec, Capability, ChannelId, ExtensionName, Frame, Grant, Hello, Kind, Reply, Request, Welcome, Wire, PROTOCOL,
+        Capability, ChannelId, ExtensionName, Frame, Grant, Hello, Kind, PROTOCOL, Reply, Request, Welcome, Wire, codec,
     };
-    use hl_gui::{Renderer as _, SourceMutation, Theme, Tree, LOG_VIEW_CHARACTER_LIMIT};
+    use hl_gui::{LOG_VIEW_CHARACTER_LIMIT, Renderer as _, SourceMutation, Theme, Tree};
     use hl_gui_gtk::Surface;
 
     const STORIES: &[&str] = &[
@@ -389,6 +389,42 @@ mod unix {
             None
         };
         capture_story(&realized_window, story);
+        if story == "Checkbox" {
+            let property = find::<gtk::Label>(&root, |label| label.text() == "Property");
+            let owned = ["label", "checked", "indeterminate", "enabled", "onToggle"]
+                .map(|name| find::<gtk::Label>(&root, |label| label.text() == name));
+            assert!(
+                owned.iter().all(|label| label.height() > 0),
+                "Checkbox API owned rows receive real GTK allocations"
+            );
+            let table = property
+                .ancestor(gtk::ScrolledWindow::static_type())
+                .and_then(|widget| widget.downcast::<gtk::ScrolledWindow>().ok())
+                .expect("Checkbox API header belongs to its native table scroller");
+            assert!(
+                table.parent().is_none_or(|parent| !parent.is::<gtk::ScrolledWindow>()),
+                "Checkbox API table must not be collapsed inside a second scroller"
+            );
+            let document = descendants::<gtk::ScrolledWindow>(&root)
+                .into_iter()
+                .max_by(|left, right| left.vadjustment().upper().total_cmp(&right.vadjustment().upper()))
+                .expect("Checkbox document owns a scrolling viewport");
+            let adjustment = document.vadjustment();
+            adjustment.set_value(adjustment.upper() - adjustment.page_size());
+            settle_toolkit();
+            capture_story(&realized_window, "Checkbox API wide");
+            realized_window.set_size_request(600, 800);
+            realized_window.set_default_size(600, 800);
+            root.allocate(600, 800, -1, None);
+            settle_toolkit();
+            assert_contained(&root, "Checkbox API narrow");
+            capture_story(&realized_window, "Checkbox API narrow");
+            realized_window.set_size_request(1_200, 800);
+            realized_window.set_default_size(1_200, 800);
+            root.allocate(1_200, 800, -1, None);
+            adjustment.set_value(0.0);
+            settle_toolkit();
+        }
         let responsive = matches!(story, "Button" | "IconButton").then(|| {
             let paned = descendants::<gtk::Paned>(&root)
                 .into_iter()
@@ -435,8 +471,8 @@ mod unix {
                     .collect::<Vec<_>>();
                 assert_eq!(
                     panes.len(),
-                    3,
-                    "Storybook keeps navigation, document, and bounded API panes",
+                    2,
+                    "Storybook keeps navigation and document panes without nesting API table scrollers",
                 );
                 assert!(
                     panes.iter().all(|pane| pane.width() >= 150),
