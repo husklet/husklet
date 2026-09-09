@@ -307,6 +307,7 @@ function RequestedPermissionSummary({ groups }: { groups: { label: string; count
 
 export function Extensions({ api }: { api: WorkspaceApi }) {
   const [installed, setInstalled] = React.useState<ExtensionSummary[]>([]);
+  const [visibleInstalledDetails, setVisibleInstalledDetails] = React.useState<string | null>(null);
   const [catalogue, setCatalogue] = React.useState<ExtensionCatalogue | null>(null);
   const [catalogueState, setCatalogueState] = React.useState<'loading' | 'ready' | 'error'>(
     'loading',
@@ -708,7 +709,15 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
               <Row gap={1} width="fill" align="center" justify="start" wrap>
                 <Heading label="Discover" scale="caption" grow={false} align="start" />
                 {catalogueState === 'ready' && catalogueEntries.length > 0 ? (
-                  <Badge label={countLabel(catalogueEntries.length, 'catalogue extension')} />
+                  <Badge
+                    label={`${countLabel(catalogueEntries.length, 'extension')}${
+                      catalogueEntries.every((entry) =>
+                        installed.some((extension) => extension.name === entry.id),
+                      )
+                        ? ' · all installed'
+                        : ''
+                    }`}
+                  />
                 ) : null}
               </Row>
             )}
@@ -755,35 +764,33 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                           />
                           <CardContent gap={1}>
                             <Text label={entry.description} color="text-dim" wrap />
-                            <Row gap={1} wrap>
-                              {installedExtension ? (
-                                <Badge label="Installed" tone="positive" />
-                              ) : (
-                                <Badge label="Available" tone="accent" />
-                              )}
-                              {installedExtension ? (
-                                <Badge
-                                  label={updateAvailable ? 'Update available' : 'Up to date'}
-                                  tone={updateAvailable ? 'accent' : 'neutral'}
-                                />
-                              ) : null}
-                              <Badge label={trust.label} tone={trust.tone} />
+                            <Row gap={1} wrap align="center">
                               <Badge
                                 label={
-                                  compatibility.compatible === true
-                                    ? 'Workspace compatible'
-                                    : compatibility.compatible === false
+                                  installedExtension
+                                    ? `Installed · ${updateAvailable ? 'update available' : 'up to date'}`
+                                    : 'Available'
+                                }
+                                tone={updateAvailable || !installedExtension ? 'accent' : 'positive'}
+                              />
+                              <Text
+                                label={
+                                  trust.label === 'Husklet first-party'
+                                    ? 'Verified publisher · Husklet'
+                                    : trust.label
+                                }
+                                color="text-dim"
+                              />
+                              {compatibility.compatible !== true ? (
+                                <Badge
+                                  label={
+                                    compatibility.compatible === false
                                       ? 'Incompatible'
                                       : 'Compatibility undeclared'
-                                }
-                                tone={
-                                  compatibility.compatible === true
-                                    ? 'positive'
-                                    : compatibility.compatible === false
-                                      ? 'danger'
-                                      : 'warning'
-                                }
-                              />
+                                  }
+                                  tone={compatibility.compatible === false ? 'danger' : 'warning'}
+                                />
+                              ) : null}
                             </Row>
                             {compatibility.compatible !== true ? (
                               <Text
@@ -817,6 +824,17 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                                 />
                               </Column>
                             </Expander>
+                            {installedExtension && visibleInstalledDetails === entry.id ? (
+                              <InlineMessage
+                                label={`${capitalize(extensionState(installedExtension))} · Version ${installedExtension.version || 'unavailable'} · Image ${compactDigest(installedExtension.image_digest)}`}
+                                tone={
+                                  installedExtension.status.startsWith('fault:')
+                                    ? 'warning'
+                                    : 'neutral'
+                                }
+                                width="fill"
+                              />
+                            ) : null}
                           </CardContent>
                           {!installedExtension ? (
                             <CardActions gap={1} align="start" justify="start" width="fill">
@@ -829,7 +847,24 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                                 onInvoke={() => inspect(entry.reference)}
                               />
                             </CardActions>
-                          ) : null}
+                          ) : (
+                            <CardActions gap={1} align="start" justify="start" width="fill">
+                              <Button
+                                label={
+                                  visibleInstalledDetails === entry.id
+                                    ? 'Hide installed details'
+                                    : 'View installed details'
+                                }
+                                variant="outline"
+                                enabled={!busy}
+                                onInvoke={() =>
+                                  setVisibleInstalledDetails((visible) =>
+                                    visible === entry.id ? null : entry.id,
+                                  )
+                                }
+                              />
+                            </CardActions>
+                          )}
                         </Card>
                       );
                     })}

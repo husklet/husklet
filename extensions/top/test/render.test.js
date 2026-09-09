@@ -583,7 +583,7 @@ test('Top owns workspace settings and extension management in the same tab', asy
   await settled();
   await settled();
   assert.ok(labelled(stage, 'Discover'));
-  assert.ok(labelled(stage, '1 catalogue extension'));
+  assert.ok(labelled(stage, '1 extension'));
   assert.ok(labelled(stage, 'Component playground'));
   assert.ok(
     labelled(stage, 'Image · ghcr.io/husklet/husklet/extension-storybook:latest'),
@@ -615,7 +615,7 @@ test('Top owns workspace settings and extension management in the same tab', asy
   );
   assert.equal(labelled(stage, 'Version 2.0.0'), undefined, 'the header version is not repeated');
   assert.ok(labelled(stage, 'Trust & compatibility'));
-  assert.ok(labelled(stage, 'Husklet first-party'));
+  assert.ok(labelled(stage, 'Verified publisher · Husklet'));
   assert.ok(labelled(stage, 'Compatibility undeclared'));
   assert.equal(labelled(stage, 'Review requested access before anything is installed.'), undefined);
   assert.deepEqual(ancestorTags(stage, 'Review access').slice(0, 4), [
@@ -950,8 +950,7 @@ test('an installed catalogue extension exposes its update review without retypin
     undefined,
     'installed catalogue entries do not also appear as new installations',
   );
-  assert.ok(labelled(stage, 'Installed'));
-  assert.ok(labelled(stage, 'Update available'));
+  assert.ok(labelled(stage, 'Installed · update available'));
   assert.equal(
     labelled(
       stage,
@@ -997,8 +996,15 @@ test('an up-to-date built-in remains discoverable as a catalogue card', async ()
   await settled();
   await settled();
   assert.ok(labelled(stage, 'Component playground'));
-  assert.ok(labelled(stage, 'Installed'));
-  assert.ok(labelled(stage, 'Up to date'));
+  assert.ok(labelled(stage, 'Installed · up to date'));
+  assert.ok(labelled(stage, '1 extension · all installed'));
+  assert.ok(labelled(stage, 'View installed details'));
+  invoke(stage, 'View installed details');
+  await settled();
+  assert.ok(
+    labelled(stage, `Enabled · Version 2.0.0 · Image sha256:${'a'.repeat(12)}…${'a'.repeat(8)}`),
+  );
+  assert.ok(labelled(stage, 'Hide installed details'));
   assert.equal(labelled(stage, 'Review access'), undefined);
   assert.equal(labelled(stage, 'Review update'), undefined);
 });
