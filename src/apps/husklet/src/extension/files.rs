@@ -1470,6 +1470,34 @@ mod tests {
     }
 
     #[test]
+    fn separate_observed_writes_cannot_claim_transactional_multi_file_rollback() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let root = temporary.path().join("workspace");
+        let files = WorkspaceDirectory::new(&root).expect("root");
+        let first = path("first.txt");
+        let second = path("second.txt");
+        let first_identity = files.create_observed(&first, b"one").expect("first");
+        let stale_second = files.create_observed(&second, b"two").expect("second");
+        let current_second = files
+            .write_observed(&second, &stale_second, b"changed elsewhere")
+            .expect("concurrent second write");
+
+        files
+            .write_observed(&first, &first_identity, b"applied")
+            .expect("first patch member");
+        assert!(matches!(
+            files.write_observed(&second, &stale_second, b"would apply"),
+            Err(HostError::Conflict(_))
+        ));
+        assert_eq!(files.read(&first).expect("first contents"), b"applied");
+        assert_eq!(files.read(&second).expect("second contents"), b"changed elsewhere");
+        assert_eq!(
+            files.stat(&second).expect("second stat").identity.as_deref(),
+            Some(current_second.as_str())
+        );
+    }
+
+    #[test]
     fn inventory_recurses_only_declared_roots_and_reports_its_bound() {
         let temporary = tempfile::tempdir().expect("temporary directory");
         let root = temporary.path().join("workspace");
