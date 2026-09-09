@@ -2326,22 +2326,15 @@ test('terminal management exposes exact pin state and acts through immutable tab
     placeholderProperty(stage, 'New tab title', 'Width'),
     'tab creation stays compact instead of consuming the page height',
   );
-  assert.ok(labelled(stage, '1 pane'));
   assert.ok(labelled(stage, 'Pane 1'));
   assert.equal(
-    ancestorProperty(stage, 'Focus tab', 'Row', 'Wrap')?.Flag,
-    true,
-    'terminal actions reflow instead of leaving the narrow pane',
+    stage.frames
+      .flatMap((frame) => frame.patches)
+      .filter((patch) => patch.Create?.tag === 'ListRow').length,
+    2,
+    'one compact row represents the tab and one represents its pane',
   );
-  assert.equal(
-    ancestorProperty(stage, 'Pane 1', 'Row', 'Wrap')?.Flag,
-    true,
-    'pane identity and its one view action reflow together',
-  );
-  assert.ok(
-    ancestorProperty(stage, 'Pane 1', 'Row', 'Width'),
-    'terminal pane rows share the available page width',
-  );
+  assert.equal(labelled(stage, 'Tab 1'), undefined, 'tab metadata is not a second billboard');
   invoke(stage, 'Pin tab');
   await settled();
   await settled();
@@ -2447,7 +2440,6 @@ test('terminal management reads every pane as text and writes against the inspec
   };
   const stage = host();
   stage.render(h(Terminals, { api: { terminal }, resource }));
-  invoke(stage, 'View pane 1');
   await settled();
   await settled();
   assert.deepEqual(calls, [['read', 'pane-1']]);
@@ -2745,11 +2737,10 @@ test('terminal management opens tabs and spawns exact argv through observed oper
   };
   const stage = host();
   stage.render(h(Terminals, { api: { terminal }, resource }));
+  await settled();
+  await settled();
   change(stage, 'New tab title', ' Tests ');
   invoke(stage, 'Create terminal tab');
-  await settled();
-  await settled();
-  invoke(stage, 'View pane 1');
   await settled();
   await settled();
   change(stage, 'Program and arguments, e.g. make test', 'make test');

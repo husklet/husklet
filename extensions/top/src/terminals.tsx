@@ -1,14 +1,16 @@
 import React from 'react';
 import {
   Button,
-  Card,
-  CardContent,
-  CardHeader,
   Column,
   ConfirmAction,
   Entry,
   Expander,
   Heading,
+  ListItemAction,
+  ListItemButton,
+  ListItemSecondaryAction,
+  ListItemText,
+  ListRow,
   LogView,
   ResourceState,
   Row,
@@ -58,6 +60,7 @@ export function Terminals({
   const [semanticAction, setSemanticAction] = React.useState<SemanticActionKind>('invoke');
   const [semanticValue, setSemanticValue] = React.useState('');
   const paneRevision = React.useRef(0);
+  const automaticallyInspected = React.useRef('');
   const view = bounded(resource.data ?? []);
   const state: 'loading' | 'error' | 'empty' | 'ready' = resource.loading
     ? 'loading'
@@ -110,36 +113,39 @@ export function Terminals({
       setBusy('');
     }
   };
-  const inspect = async (slot: string) => {
-    const requested = ++paneRevision.current;
-    setBusy(`read:${slot}`);
-    setError(null);
-    try {
-      const next = await api.terminal.toText(slot, { lines: 200 });
-      if (requested !== paneRevision.current) return;
-      setReadable(next);
-      setSelected(slot);
-      const summary = (resource.data ?? [])
-        .flatMap((tab) => tab.panes)
-        .find((pane) => pane.slot === slot);
-      setProvider(
-        summary?.provider
-          ? `${summary.provider.extension}/${summary.provider.provider}`
-          : 'terminal',
-      );
-      if (next.kind === 'terminal') {
-        setColumns(next.snapshot.columns == null ? '' : String(next.snapshot.columns));
-        setRows(next.snapshot.rows == null ? '' : String(next.snapshot.rows));
-      } else {
-        setColumns('');
-        setRows('');
+  const inspect = React.useCallback(
+    async (slot: string) => {
+      const requested = ++paneRevision.current;
+      setBusy(`read:${slot}`);
+      setError(null);
+      try {
+        const next = await api.terminal.toText(slot, { lines: 200 });
+        if (requested !== paneRevision.current) return;
+        setReadable(next);
+        setSelected(slot);
+        const summary = (resource.data ?? [])
+          .flatMap((tab) => tab.panes)
+          .find((pane) => pane.slot === slot);
+        setProvider(
+          summary?.provider
+            ? `${summary.provider.extension}/${summary.provider.provider}`
+            : 'terminal',
+        );
+        if (next.kind === 'terminal') {
+          setColumns(next.snapshot.columns == null ? '' : String(next.snapshot.columns));
+          setRows(next.snapshot.rows == null ? '' : String(next.snapshot.rows));
+        } else {
+          setColumns('');
+          setRows('');
+        }
+      } catch (cause) {
+        if (requested === paneRevision.current) setError(paneInspectionError(cause));
+      } finally {
+        if (requested === paneRevision.current) setBusy('');
       }
-    } catch (cause) {
-      if (requested === paneRevision.current) setError(paneInspectionError(cause));
-    } finally {
-      if (requested === paneRevision.current) setBusy('');
-    }
-  };
+    },
+    [api.terminal, resource.data],
+  );
   const cursor = readable ? paneCursor(readable.snapshot) : null;
   const sendLine = async () => {
     if (!cursor || readable?.kind !== 'terminal' || selected === '' || input === '') return;
@@ -399,6 +405,13 @@ export function Terminals({
     }
   };
   React.useEffect(() => {
+    if (selected || resource.loading || resource.error) return;
+    const first = (resource.data ?? []).flatMap((tab) => tab.panes)[0];
+    if (!first || automaticallyInspected.current === first.slot) return;
+    automaticallyInspected.current = first.slot;
+    void inspect(first.slot);
+  }, [inspect, resource.data, resource.error, resource.loading, selected]);
+  React.useEffect(() => {
     if (!selected) return;
     const present = (resource.data ?? []).some((tab) =>
       tab.panes.some((pane) => pane.slot === selected),
@@ -460,344 +473,325 @@ export function Terminals({
         onRetry={resource.reload}
       >
         {view.records.map((tab, tabIndex) => (
-          <Card key={tab.id} width="fill" variant={tab.pinned ? 'filled' : 'outline'}>
-            <CardHeader
-              label={tab.title}
-              detail={`Tab ${tabIndex + 1}`}
-              align="start"
-              width="fill"
-            />
-            <CardContent gap={1}>
-              <Row gap={1} align="center" justify="start" width="fill" wrap>
-                <Text
-                  label={
+          <Column key={tab.id} gap={1} width="fill">
+            <Column gap={0} width="fill">
+              <ListRow>
+                <ListItemText
+                  label={`${tab.title}${tab.pinned ? ' · Pinned' : ''}`}
+                  detail={
                     tab.panes.length === 0
-                      ? `${tab.pinned ? 'Pinned · ' : ''}Overview or extension tab · no terminal panes`
-                      : `${tab.pinned ? 'Pinned · ' : ''}${tab.panes.length} pane${tab.panes.length === 1 ? '' : 's'}`
+                      ? `Tab ${tabIndex + 1} · Overview or extension`
+                      : `${tab.panes.length} pane${tab.panes.length === 1 ? '' : 's'}`
                   }
-                  color="text-dim"
-                  wrap
                 />
-                {busy === tab.id ? <Spinner /> : null}
-              </Row>
-              <Row gap={1} wrap justify="start">
-                <Button
-                  label="Focus tab"
-                  enabled={busy === '' && Boolean(tab.panes[0])}
-                  variant="filled"
-                  tone="accent"
-                  onInvoke={() => {
-                    void focus(tab);
-                  }}
-                />
-                <Button
-                  label={
-                    tab.pinned
-                      ? 'Unpin tab'
-                      : tab.panes.length === 0
-                        ? 'Pin overview tab'
-                        : 'Pin tab'
-                  }
-                  enabled={busy === ''}
-                  variant="outline"
-                  onInvoke={() => {
-                    void pin(tab);
-                  }}
-                />
-              </Row>
-              {tab.panes.map((pane, paneIndex) => (
-                <Row key={pane.slot} gap={1} align="center" width="fill" wrap justify="start">
-                  <Column gap={0} width={{ minimum: { chars: 10 }, maximum: { chars: 54 } }}>
-                    <Heading label={`Pane ${paneIndex + 1}`} scale="caption" />
-                    <Text
-                      label={`${pane.occupant === 'terminal' ? 'Terminal' : 'Interface'}${pane.provider ? ` · ${pane.provider.extension}/${pane.provider.provider}` : ''}`}
-                      color="text-dim"
-                      wrap
-                    />
-                  </Column>
+                <ListItemSecondaryAction>
+                  {busy === tab.id ? <Spinner /> : null}
                   <Button
-                    label={`${selected === pane.slot ? 'Refresh' : 'View'} pane ${paneIndex + 1}`}
+                    label={tab.pinned ? 'Unpin tab' : 'Pin tab'}
                     enabled={busy === ''}
-                    variant="outline"
+                    variant="plain"
                     onInvoke={() => {
-                      void inspect(pane.slot);
+                      void pin(tab);
                     }}
                   />
-                </Row>
-              ))}
-              {selected && tab.panes.some((pane) => pane.slot === selected) && readable ? (
-                <Column gap={1} width="fill">
-                  <Separator orientation="horizontal" />
-                  <Heading
-                    label={readable.kind === 'terminal' ? 'Live terminal' : 'Interface controls'}
-                    scale="caption"
+                </ListItemSecondaryAction>
+                <ListItemAction>
+                  <Button
+                    label="Focus tab"
+                    enabled={busy === '' && Boolean(tab.panes[0])}
+                    variant="plain"
+                    tone="accent"
+                    onInvoke={() => {
+                      void focus(tab);
+                    }}
                   />
-                  {readable.kind === 'terminal' ? (
-                    <LogView
-                      grow={false}
-                      value={
-                        readable.text.slice(-LOG_VIEW_CHARACTER_LIMIT) ||
-                        'This terminal has no visible output.'
-                      }
+                </ListItemAction>
+              </ListRow>
+              {tab.panes.map((pane, paneIndex) => (
+                <ListRow key={pane.slot}>
+                  <ListItemText
+                    label={`Pane ${paneIndex + 1}`}
+                    detail={`${pane.occupant === 'terminal' ? 'Terminal' : 'Interface'}${pane.provider ? ` · ${pane.provider.extension}/${pane.provider.provider}` : ''}`}
+                  />
+                  <ListItemAction>
+                    <ListItemButton
+                      label={`${selected === pane.slot ? 'Refresh' : 'View'} pane ${paneIndex + 1}`}
+                      variant={selected === pane.slot ? 'filled' : 'plain'}
+                      enabled={busy === ''}
+                      onInvoke={() => {
+                        void inspect(pane.slot);
+                      }}
                     />
-                  ) : (
-                    <Text
-                      label="This pane contains an interactive interface. Open Advanced to inspect its accessible structure or trigger an advertised action."
-                      color="text-dim"
-                      wrap
-                    />
-                  )}
-                  <Expander label="Input" expanded={false}>
-                    <Column gap={1}>
-                      {readable.kind === 'terminal' && !cursor ? (
+                  </ListItemAction>
+                </ListRow>
+              ))}
+            </Column>
+            {selected && tab.panes.some((pane) => pane.slot === selected) && readable ? (
+              <Column gap={1} width="fill">
+                <Separator orientation="horizontal" />
+                <Heading
+                  label={readable.kind === 'terminal' ? 'Live terminal' : 'Interface controls'}
+                  scale="caption"
+                />
+                {readable.kind === 'terminal' ? (
+                  <LogView
+                    grow={false}
+                    value={
+                      readable.text.slice(-LOG_VIEW_CHARACTER_LIMIT) ||
+                      'This terminal has no visible output.'
+                    }
+                  />
+                ) : (
+                  <Text
+                    label="This pane contains an interactive interface. Open Advanced to inspect its accessible structure or trigger an advertised action."
+                    color="text-dim"
+                    wrap
+                  />
+                )}
+                <Expander label="Input" expanded={false}>
+                  <Column gap={1}>
+                    {readable.kind === 'terminal' && !cursor ? (
+                      <Text
+                        label="Input is unavailable until this pane provides a writable revision. Refresh the pane to try again."
+                        color="warning"
+                        wrap
+                      />
+                    ) : null}
+                    {readable.kind === 'terminal' ? (
+                      <Column gap={1}>
+                        <Heading label="Send text to terminal" scale="caption" />
                         <Text
-                          label="Input is unavailable until this pane provides a writable revision. Refresh the pane to try again."
-                          color="warning"
+                          label="Writes these characters to the interactive terminal and adds Enter."
+                          color="text-dim"
                           wrap
                         />
-                      ) : null}
-                      {readable.kind === 'terminal' ? (
-                        <Column gap={1}>
-                          <Heading label="Send text to terminal" scale="caption" />
-                          <Text
-                            label="Writes these characters to the interactive terminal and adds Enter."
-                            color="text-dim"
-                            wrap
-                          />
-                          <Row gap={1} wrap>
-                            <Entry
-                              value={input}
-                              placeholder="Text to send"
-                              width="fill"
-                              enabled={Boolean(cursor)}
-                              onChange={(event) => setInput(String(event.value ?? ''))}
-                              onSubmit={() => {
-                                void sendLine();
-                              }}
-                            />
-                            <Button
-                              label="Send text"
-                              variant="filled"
-                              tone="accent"
-                              enabled={busy === '' && input.length > 0 && Boolean(cursor)}
-                              onInvoke={() => {
-                                void sendLine();
-                              }}
-                            />
-                          </Row>
-                        </Column>
-                      ) : (
-                        <Text
-                          label="Interface actions are available in Advanced."
-                          color="text-dim"
-                        />
-                      )}
-                      {readable.kind === 'terminal' ? (
-                        <Column gap={1}>
-                          <Heading label="Execute argv" scale="caption" />
-                          <Text
-                            label="Starts a separate process. Arguments support quotes and backslashes; shell operators are not interpreted."
-                            color="text-dim"
-                            wrap
-                          />
-                          <Row gap={1} wrap>
-                            <Entry
-                              value={command}
-                              placeholder="Program and arguments, e.g. make test"
-                              width="fill"
-                              enabled={busy === '' && Boolean(cursor)}
-                              onChange={(event) => setCommand(String(event.value ?? ''))}
-                              onSubmit={() => {
-                                void spawnCommand();
-                              }}
-                            />
-                            <Button
-                              label="Execute"
-                              enabled={busy === '' && Boolean(cursor) && command.trim().length > 0}
-                              onInvoke={() => {
-                                void spawnCommand();
-                              }}
-                            />
-                          </Row>
-                        </Column>
-                      ) : null}
-                    </Column>
-                  </Expander>
-                  <Expander label="Layout" expanded={false}>
-                    <Column gap={1}>
-                      <Row gap={1} wrap>
-                        <Button
-                          label="Split right"
-                          enabled={busy === '' && Boolean(cursor)}
-                          onInvoke={() => {
-                            void mutatePane('split-beside');
-                          }}
-                        />
-                        <Button
-                          label="Split down"
-                          enabled={busy === '' && Boolean(cursor)}
-                          onInvoke={() => {
-                            void mutatePane('split-below');
-                          }}
-                        />
-                      </Row>
-                      <Row gap={1} wrap>
-                        <Entry
-                          value={ratio}
-                          placeholder="Size % (5–95)"
-                          enabled={busy === '' && Boolean(cursor)}
-                          onChange={(event) => setRatio(String(event.value ?? ''))}
-                        />
-                        <Button
-                          label="Apply size"
-                          enabled={busy === '' && Boolean(cursor) && ratio.length > 0}
-                          onInvoke={() => {
-                            void resizeSplit();
-                          }}
-                        />
-                      </Row>
-                    </Column>
-                  </Expander>
-                  <Expander label="Advanced" expanded={false}>
-                    <Column gap={1}>
-                      {readable.kind === 'ui' ? (
-                        <Column gap={1}>
-                          <Text label="Accessible interface structure" color="text-dim" />
-                          <LogView
-                            grow={false}
-                            value={
-                              readable.text.slice(-LOG_VIEW_CHARACTER_LIMIT) ||
-                              'No accessible structure was reported.'
-                            }
-                          />
-                          <Text
-                            label="Choose a node and one of its advertised actions. Husklet verifies the pane again before sending it."
-                            color="text-dim"
-                            wrap
-                          />
-                          <Row gap={1} wrap>
-                            <Entry
-                              value={semanticNodeId}
-                              placeholder="Node number"
-                              enabled={busy === ''}
-                              onChange={(event) => setSemanticNodeId(String(event.value ?? ''))}
-                            />
-                            <Select
-                              value={semanticAction}
-                              choices={SEMANTIC_ACTIONS.map((value) => ({ value, label: value }))}
-                              enabled={busy === ''}
-                              onChange={(event) =>
-                                setSemanticAction(
-                                  String(event.value ?? 'invoke') as SemanticActionKind,
-                                )
-                              }
-                            />
-                            <Entry
-                              value={semanticValue}
-                              placeholder="Value (optional)"
-                              width="fill"
-                              enabled={busy === ''}
-                              onChange={(event) => setSemanticValue(String(event.value ?? ''))}
-                            />
-                            {semanticTarget(readable.snapshot.root, semanticNodeId)?.destructive ? (
-                              <ConfirmAction
-                                authorityKey={`semantic:${selected}:${readable.snapshot.generation}:${readable.snapshot.revision}:${semanticNodeId}:${semanticAction}:${semanticValue}`}
-                                label="Run action"
-                                confirmLabel="Confirm action"
-                                pendingLabel="Confirm action"
-                                question={`Run destructive ${semanticAction} on node ${semanticNodeId}?`}
-                                enabled={busy === '' && semanticNodeId.length > 0}
-                                onConfirm={actSemantic}
-                              />
-                            ) : (
-                              <Button
-                                label="Run action"
-                                enabled={busy === '' && semanticNodeId.length > 0}
-                                onInvoke={() => {
-                                  void actSemantic();
-                                }}
-                              />
-                            )}
-                          </Row>
-                        </Column>
-                      ) : null}
-                      {readable.kind === 'terminal' ? (
                         <Row gap={1} wrap>
                           <Entry
-                            value={columns}
-                            placeholder="Columns"
-                            enabled={busy === '' && Boolean(cursor)}
-                            onChange={(event) => setColumns(String(event.value ?? ''))}
-                          />
-                          <Entry
-                            value={rows}
-                            placeholder="Rows"
-                            enabled={busy === '' && Boolean(cursor)}
-                            onChange={(event) => setRows(String(event.value ?? ''))}
+                            value={input}
+                            placeholder="Text to send"
+                            width="fill"
+                            enabled={Boolean(cursor)}
+                            onChange={(event) => setInput(String(event.value ?? ''))}
+                            onSubmit={() => {
+                              void sendLine();
+                            }}
                           />
                           <Button
-                            label="Resize grid"
-                            enabled={
-                              busy === '' &&
-                              Boolean(cursor) &&
-                              columns.length > 0 &&
-                              rows.length > 0
-                            }
+                            label="Send text"
+                            variant="filled"
+                            tone="accent"
+                            enabled={busy === '' && input.length > 0 && Boolean(cursor)}
                             onInvoke={() => {
-                              void resizeGrid();
+                              void sendLine();
                             }}
                           />
                         </Row>
-                      ) : null}
-                      <Row gap={1} wrap>
-                        <Select
-                          value={provider}
-                          choices={providerChoices(providers, provider)}
-                          enabled={busy === '' && Boolean(cursor)}
-                          onChange={(event) => setProvider(String(event.value ?? 'terminal'))}
+                      </Column>
+                    ) : (
+                      <Text label="Interface actions are available in Advanced." color="text-dim" />
+                    )}
+                    {readable.kind === 'terminal' ? (
+                      <Column gap={1}>
+                        <Heading label="Execute argv" scale="caption" />
+                        <Text
+                          label="Starts a separate process. Arguments support quotes and backslashes; shell operators are not interpreted."
+                          color="text-dim"
+                          wrap
                         />
-                        <Button
-                          label="Change content"
-                          enabled={busy === '' && Boolean(cursor)}
-                          onInvoke={() => {
-                            void switchOccupant();
-                          }}
+                        <Row gap={1} wrap>
+                          <Entry
+                            value={command}
+                            placeholder="Program and arguments, e.g. make test"
+                            width="fill"
+                            enabled={busy === '' && Boolean(cursor)}
+                            onChange={(event) => setCommand(String(event.value ?? ''))}
+                            onSubmit={() => {
+                              void spawnCommand();
+                            }}
+                          />
+                          <Button
+                            label="Execute"
+                            enabled={busy === '' && Boolean(cursor) && command.trim().length > 0}
+                            onInvoke={() => {
+                              void spawnCommand();
+                            }}
+                          />
+                        </Row>
+                      </Column>
+                    ) : null}
+                  </Column>
+                </Expander>
+                <Expander label="Layout" expanded={false}>
+                  <Column gap={1}>
+                    <Row gap={1} wrap>
+                      <Button
+                        label="Split right"
+                        enabled={busy === '' && Boolean(cursor)}
+                        onInvoke={() => {
+                          void mutatePane('split-beside');
+                        }}
+                      />
+                      <Button
+                        label="Split down"
+                        enabled={busy === '' && Boolean(cursor)}
+                        onInvoke={() => {
+                          void mutatePane('split-below');
+                        }}
+                      />
+                    </Row>
+                    <Row gap={1} wrap>
+                      <Entry
+                        value={ratio}
+                        placeholder="Size % (5–95)"
+                        enabled={busy === '' && Boolean(cursor)}
+                        onChange={(event) => setRatio(String(event.value ?? ''))}
+                      />
+                      <Button
+                        label="Apply size"
+                        enabled={busy === '' && Boolean(cursor) && ratio.length > 0}
+                        onInvoke={() => {
+                          void resizeSplit();
+                        }}
+                      />
+                    </Row>
+                  </Column>
+                </Expander>
+                <Expander label="Advanced" expanded={false}>
+                  <Column gap={1}>
+                    {readable.kind === 'ui' ? (
+                      <Column gap={1}>
+                        <Text label="Accessible interface structure" color="text-dim" />
+                        <LogView
+                          grow={false}
+                          value={
+                            readable.text.slice(-LOG_VIEW_CHARACTER_LIMIT) ||
+                            'No accessible structure was reported.'
+                          }
                         />
-                      </Row>
+                        <Text
+                          label="Choose a node and one of its advertised actions. Husklet verifies the pane again before sending it."
+                          color="text-dim"
+                          wrap
+                        />
+                        <Row gap={1} wrap>
+                          <Entry
+                            value={semanticNodeId}
+                            placeholder="Node number"
+                            enabled={busy === ''}
+                            onChange={(event) => setSemanticNodeId(String(event.value ?? ''))}
+                          />
+                          <Select
+                            value={semanticAction}
+                            choices={SEMANTIC_ACTIONS.map((value) => ({ value, label: value }))}
+                            enabled={busy === ''}
+                            onChange={(event) =>
+                              setSemanticAction(
+                                String(event.value ?? 'invoke') as SemanticActionKind,
+                              )
+                            }
+                          />
+                          <Entry
+                            value={semanticValue}
+                            placeholder="Value (optional)"
+                            width="fill"
+                            enabled={busy === ''}
+                            onChange={(event) => setSemanticValue(String(event.value ?? ''))}
+                          />
+                          {semanticTarget(readable.snapshot.root, semanticNodeId)?.destructive ? (
+                            <ConfirmAction
+                              authorityKey={`semantic:${selected}:${readable.snapshot.generation}:${readable.snapshot.revision}:${semanticNodeId}:${semanticAction}:${semanticValue}`}
+                              label="Run action"
+                              confirmLabel="Confirm action"
+                              pendingLabel="Confirm action"
+                              question={`Run destructive ${semanticAction} on node ${semanticNodeId}?`}
+                              enabled={busy === '' && semanticNodeId.length > 0}
+                              onConfirm={actSemantic}
+                            />
+                          ) : (
+                            <Button
+                              label="Run action"
+                              enabled={busy === '' && semanticNodeId.length > 0}
+                              onInvoke={() => {
+                                void actSemantic();
+                              }}
+                            />
+                          )}
+                        </Row>
+                      </Column>
+                    ) : null}
+                    {readable.kind === 'terminal' ? (
                       <Row gap={1} wrap>
                         <Entry
-                          value={title}
-                          placeholder="Pane title"
-                          width="fill"
+                          value={columns}
+                          placeholder="Columns"
                           enabled={busy === '' && Boolean(cursor)}
-                          onChange={(event) => setTitle(String(event.value ?? ''))}
-                          onSubmit={() => {
-                            void mutatePane('retitle');
-                          }}
+                          onChange={(event) => setColumns(String(event.value ?? ''))}
+                        />
+                        <Entry
+                          value={rows}
+                          placeholder="Rows"
+                          enabled={busy === '' && Boolean(cursor)}
+                          onChange={(event) => setRows(String(event.value ?? ''))}
                         />
                         <Button
-                          label="Rename"
-                          enabled={busy === '' && Boolean(cursor) && title.trim().length > 0}
+                          label="Resize grid"
+                          enabled={
+                            busy === '' && Boolean(cursor) && columns.length > 0 && rows.length > 0
+                          }
                           onInvoke={() => {
-                            void mutatePane('retitle');
+                            void resizeGrid();
                           }}
                         />
                       </Row>
-                      <ConfirmAction
-                        authorityKey={`pane:${selected}:${cursor?.generation ?? 'unknown'}:close`}
-                        label="Close pane"
-                        confirmLabel="Confirm close"
-                        pendingLabel="Confirm close"
-                        question="Close this pane?"
+                    ) : null}
+                    <Row gap={1} wrap>
+                      <Select
+                        value={provider}
+                        choices={providerChoices(providers, provider)}
                         enabled={busy === '' && Boolean(cursor)}
-                        onConfirm={() => mutatePane('close')}
+                        onChange={(event) => setProvider(String(event.value ?? 'terminal'))}
                       />
-                    </Column>
-                  </Expander>
-                </Column>
-              ) : null}
-            </CardContent>
-          </Card>
+                      <Button
+                        label="Change content"
+                        enabled={busy === '' && Boolean(cursor)}
+                        onInvoke={() => {
+                          void switchOccupant();
+                        }}
+                      />
+                    </Row>
+                    <Row gap={1} wrap>
+                      <Entry
+                        value={title}
+                        placeholder="Pane title"
+                        width="fill"
+                        enabled={busy === '' && Boolean(cursor)}
+                        onChange={(event) => setTitle(String(event.value ?? ''))}
+                        onSubmit={() => {
+                          void mutatePane('retitle');
+                        }}
+                      />
+                      <Button
+                        label="Rename"
+                        enabled={busy === '' && Boolean(cursor) && title.trim().length > 0}
+                        onInvoke={() => {
+                          void mutatePane('retitle');
+                        }}
+                      />
+                    </Row>
+                    <ConfirmAction
+                      authorityKey={`pane:${selected}:${cursor?.generation ?? 'unknown'}:close`}
+                      label="Close pane"
+                      confirmLabel="Confirm close"
+                      pendingLabel="Confirm close"
+                      question="Close this pane?"
+                      enabled={busy === '' && Boolean(cursor)}
+                      onConfirm={() => mutatePane('close')}
+                    />
+                  </Column>
+                </Expander>
+              </Column>
+            ) : null}
+          </Column>
         ))}
         <Omitted count={view.omitted} />
       </ResourceState>
