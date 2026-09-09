@@ -49,7 +49,8 @@ type Change = { value?: unknown };
 type LifecycleAction = 'enable' | 'disable' | 'retry' | 'remove';
 type LifecycleState = { action: LifecycleAction; name: string };
 type ProviderFailure = { key: string; detail: string; retry: boolean };
-export type CatalogueFilter = 'all' | 'available' | 'installed' | 'updates' | 'incompatible';
+export type CatalogueFilter =
+  'discover' | 'all' | 'available' | 'installed' | 'updates' | 'incompatible';
 export type InstalledFilter = 'all' | 'running' | 'faulted' | 'updates' | 'disabled';
 type ImageVerb = 'read' | 'use' | 'pull' | 'remove';
 const IMAGE_VERBS: { key: ImageVerb; label: string }[] = [
@@ -156,6 +157,7 @@ function catalogueEntryMatches(
   );
   const incompatible = catalogueCompatibility(entry, architecture).compatible === false;
   const statusMatches =
+    (filter === 'discover' && (!installedExtension || updateAvailable)) ||
     filter === 'all' ||
     (filter === 'available' && !installedExtension) ||
     (filter === 'installed' && Boolean(installedExtension)) ||
@@ -460,7 +462,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
   const [opening, setOpening] = React.useState('');
   const [providerFailure, setProviderFailure] = React.useState<ProviderFailure | null>(null);
   const [catalogueQuery, setCatalogueQuery] = React.useState('');
-  const [catalogueFilter, setCatalogueFilter] = React.useState<CatalogueFilter>('all');
+  const [catalogueFilter, setCatalogueFilter] = React.useState<CatalogueFilter>('discover');
   const [catalogueLimit, setCatalogueLimit] = React.useState(CATALOGUE_PAGE_SIZE);
   const [installedQuery, setInstalledQuery] = React.useState('');
   const [installedFilter, setInstalledFilter] = React.useState<InstalledFilter>('all');
@@ -947,6 +949,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                       tooltip="Filter extension catalogue by status"
                       width={{ minimum: { chars: 16 }, maximum: { chars: 22 } }}
                       choices={[
+                        { value: 'discover', label: 'Available & updates' },
                         { value: 'all', label: 'All extensions' },
                         { value: 'available', label: 'Available' },
                         { value: 'installed', label: 'Installed' },
@@ -956,9 +959,14 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                       onChange={(event: Change) => {
                         const selected = String(event.value ?? '');
                         if (
-                          ['all', 'available', 'installed', 'updates', 'incompatible'].includes(
-                            selected,
-                          )
+                          [
+                            'discover',
+                            'all',
+                            'available',
+                            'installed',
+                            'updates',
+                            'incompatible',
+                          ].includes(selected)
                         ) {
                           setCatalogueFilter(selected as CatalogueFilter);
                           setCatalogueLimit(CATALOGUE_PAGE_SIZE);
@@ -995,7 +1003,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                       size="small"
                       onInvoke={() => {
                         setCatalogueQuery('');
-                        setCatalogueFilter('all');
+                        setCatalogueFilter('discover');
                         setCatalogueLimit(CATALOGUE_PAGE_SIZE);
                       }}
                     />

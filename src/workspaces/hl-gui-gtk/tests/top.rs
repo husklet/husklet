@@ -224,8 +224,16 @@ mod unix {
                 "the scalable catalogue omitted its search control"
             );
             assert!(
-                has_label(&root, "20 of 20 extensions"),
+                has_label(&root, "19 of 20 extensions"),
                 "the scalable catalogue omitted its bounded result count"
+            );
+            assert!(
+                !has_label(&root, "Storybook"),
+                "default discovery duplicated an installed up-to-date extension"
+            );
+            assert!(
+                has_label(&root, "Developer Tool 01"),
+                "default discovery hid an installed extension with an available update"
             );
         }
         if fixture == "populated" && name == "extensions" {
