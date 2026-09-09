@@ -998,13 +998,8 @@ test('an up-to-date built-in remains discoverable as a catalogue card', async ()
   assert.ok(labelled(stage, 'Component playground'));
   assert.ok(labelled(stage, 'Installed · up to date'));
   assert.ok(labelled(stage, '1 extension · all installed'));
-  assert.ok(labelled(stage, 'View installed details'));
-  invoke(stage, 'View installed details');
-  await settled();
-  assert.ok(
-    labelled(stage, `Enabled · Version 2.0.0 · Image sha256:${'a'.repeat(12)}…${'a'.repeat(8)}`),
-  );
-  assert.ok(labelled(stage, 'Hide installed details'));
+  assert.ok(labelled(stage, 'Installed image'));
+  assert.equal(labelled(stage, 'View installed details'), undefined);
   assert.equal(labelled(stage, 'Review access'), undefined);
   assert.equal(labelled(stage, 'Review update'), undefined);
 });

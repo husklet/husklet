@@ -307,7 +307,6 @@ function RequestedPermissionSummary({ groups }: { groups: { label: string; count
 
 export function Extensions({ api }: { api: WorkspaceApi }) {
   const [installed, setInstalled] = React.useState<ExtensionSummary[]>([]);
-  const [visibleInstalledDetails, setVisibleInstalledDetails] = React.useState<string | null>(null);
   const [catalogue, setCatalogue] = React.useState<ExtensionCatalogue | null>(null);
   const [catalogueState, setCatalogueState] = React.useState<'loading' | 'ready' | 'error'>(
     'loading',
@@ -764,7 +763,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                           />
                           <CardContent gap={1}>
                             <Text label={entry.description} color="text-dim" wrap />
-                            <Row gap={1} wrap align="center">
+                            <Row gap={1} width="fill" wrap align="center" justify="start">
                               <Badge
                                 label={
                                   installedExtension
@@ -824,16 +823,15 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                                 />
                               </Column>
                             </Expander>
-                            {installedExtension && visibleInstalledDetails === entry.id ? (
-                              <InlineMessage
-                                label={`${capitalize(extensionState(installedExtension))} · Version ${installedExtension.version || 'unavailable'} · Image ${compactDigest(installedExtension.image_digest)}`}
-                                tone={
-                                  installedExtension.status.startsWith('fault:')
-                                    ? 'warning'
-                                    : 'neutral'
-                                }
-                                width="fill"
-                              />
+                            {installedExtension ? (
+                              <Expander label="Installed image" expanded={false}>
+                                <Text
+                                  label={`${capitalize(extensionState(installedExtension))} · ${compactDigest(installedExtension.image_digest)}`}
+                                  color="text-dim"
+                                  tooltip={installedExtension.image_digest}
+                                  wrap
+                                />
+                              </Expander>
                             ) : null}
                           </CardContent>
                           {!installedExtension ? (
@@ -847,24 +845,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                                 onInvoke={() => inspect(entry.reference)}
                               />
                             </CardActions>
-                          ) : (
-                            <CardActions gap={1} align="start" justify="start" width="fill">
-                              <Button
-                                label={
-                                  visibleInstalledDetails === entry.id
-                                    ? 'Hide installed details'
-                                    : 'View installed details'
-                                }
-                                variant="outline"
-                                enabled={!busy}
-                                onInvoke={() =>
-                                  setVisibleInstalledDetails((visible) =>
-                                    visible === entry.id ? null : entry.id,
-                                  )
-                                }
-                              />
-                            </CardActions>
-                          )}
+                          ) : null}
                         </Card>
                       );
                     })}
