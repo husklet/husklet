@@ -209,7 +209,11 @@ function InstalledPermissionSummary({ extension }: { extension: ExtensionSummary
     filesystemCount +
     environmentCount;
   const summary = [
-    capabilities.length ? countLabel(capabilities.length, 'permission') : '',
+    capabilities.length === 1
+      ? capabilityLabel(capabilities[0])
+      : capabilities.length
+        ? countLabel(capabilities.length, 'API scope')
+        : '',
     containerCount ? countLabel(containerCount, 'container rule') : '',
     networkCount ? countLabel(networkCount, 'network rule') : '',
     volumeCount ? countLabel(volumeCount, 'volume rule') : '',

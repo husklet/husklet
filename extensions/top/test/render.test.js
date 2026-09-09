@@ -1980,9 +1980,10 @@ test('installed extensions distinguish durable exact-file and subtree authority'
   assert.ok(
     labelled(
       stage,
-      'Granted access · 1 permission · 3 container rules · 2 file rules · 2 environment rules',
+      'Granted access · View containers and processes · 3 container rules · 2 file rules · 2 environment rules',
     ),
   );
+  assert.equal(labelled(stage, 'Granted access · 1 permission'), undefined);
   assert.ok(labelled(stage, 'Effective for this installed image digest'));
   assert.ok(labelled(stage, 'View containers and processes'));
   assert.equal(labelled(stage, 'View containers and processes · containers:read'), undefined);
