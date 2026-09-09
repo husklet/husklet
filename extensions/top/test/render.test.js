@@ -25,6 +25,7 @@ import {
   parsePorts,
   acquisitionFailure,
   acquisitionLabel,
+  filterCatalogueEntries,
 } from '../dist/app.js';
 import {
   ContainerDetailsSource,
@@ -145,6 +146,70 @@ const firstPartyCatalogue = async () => ({
   ],
   complete: true,
 });
+
+const largeCatalogueEntries = [
+  {
+    id: 'database',
+    title: 'Database Studio',
+    description: 'Inspect Postgres schemas, queries, and plans.',
+    version: '2.0.0',
+    reference: 'registry/database:2',
+    publisher: 'Acme Data',
+    source: 'community/database',
+    protocol: 1,
+    architectures: ['amd64'],
+  },
+  {
+    id: 'storybook',
+    title: 'Component playground',
+    description: 'Inspect interface components.',
+    version: '2.0.0',
+    reference: 'registry/storybook:2',
+    publisher: 'Husklet',
+    source: 'husklet:first-party/storybook',
+    protocol: 1,
+    architectures: ['amd64'],
+  },
+  {
+    id: 'future',
+    title: 'Future debugger',
+    description: 'Debug applications with a future protocol.',
+    version: '1.0.0',
+    reference: 'registry/future:1',
+    publisher: 'Future Tools',
+    source: 'community/future',
+    protocol: 999,
+    architectures: ['amd64'],
+  },
+  ...Array.from({ length: 17 }, (_, index) => ({
+    id: `tool-${String(index + 1).padStart(2, '0')}`,
+    title: `Developer Tool ${String(index + 1).padStart(2, '0')}`,
+    description: `Daily developer workflow ${index + 1}.`,
+    version: '1.0.0',
+    reference: `registry/tool-${index + 1}:1`,
+    publisher: index === 8 ? 'Searchable Labs' : 'Community',
+    source: `community/tool-${index + 1}`,
+    protocol: 1,
+    architectures: ['amd64'],
+  })),
+];
+
+const largeCatalogueInstalled = [
+  {
+    name: 'database',
+    version: '1.0.0',
+    image_digest: `sha256:${'d'.repeat(64)}`,
+    enabled: true,
+    status: 'running',
+  },
+  {
+    name: 'storybook',
+    version: '2.0.0',
+    image_digest: `sha256:${'s'.repeat(64)}`,
+    enabled: true,
+    status: 'running',
+  },
+];
 
 test('Top presents workspace, extensions, and every resource navigation choice', () => {
   const frame = host().render(
@@ -934,6 +999,97 @@ test('extension discovery reviews the first-party Storybook without requiring a 
   );
 });
 
+test('large extension catalogues search and filter deterministic lifecycle projections', () => {
+  assert.deepEqual(
+    filterCatalogueEntries(
+      largeCatalogueEntries,
+      largeCatalogueInstalled,
+      'amd64',
+      '',
+      'updates',
+    ).map((entry) => entry.id),
+    ['database'],
+  );
+  assert.deepEqual(
+    filterCatalogueEntries(
+      largeCatalogueEntries,
+      largeCatalogueInstalled,
+      'amd64',
+      '',
+      'installed',
+    ).map((entry) => entry.id),
+    ['storybook', 'database'],
+    'installed entries are ordered by visible title rather than catalogue input',
+  );
+  assert.deepEqual(
+    filterCatalogueEntries(
+      largeCatalogueEntries,
+      largeCatalogueInstalled,
+      'amd64',
+      'searchable labs',
+      'available',
+    ).map((entry) => entry.id),
+    ['tool-09'],
+    'publisher search composes with lifecycle status',
+  );
+  assert.deepEqual(
+    filterCatalogueEntries(
+      largeCatalogueEntries,
+      largeCatalogueInstalled,
+      'amd64',
+      '',
+      'incompatible',
+    ).map((entry) => entry.id),
+    ['future'],
+  );
+});
+
+test('extension discovery searches, filters, reports result counts, and clears a no-match state', async () => {
+  const stage = host();
+  stage.render(
+    h(Extensions, {
+      api: {
+        info: async () => ({ name: 'daily', architecture: 'amd64', image: 'alpine' }),
+        extensions: {
+          list: async () => largeCatalogueInstalled,
+          catalogue: async () => ({ entries: largeCatalogueEntries, complete: true }),
+        },
+        watchExtensions: async () => () => {},
+      },
+    }),
+  );
+  await settled();
+  await settled();
+  assert.ok(labelled(stage, '20 of 20 extensions'));
+  assert.deepEqual(placeholderProperty(stage, 'Search extensions', 'Width'), {
+    Bounds: { minimum: { Chars: 18 }, maximum: { Chars: 36 } },
+  });
+
+  change(stage, 'Search extensions', 'postgres');
+  await settled();
+  assert.ok(labelled(stage, '1 of 20 extensions'));
+  assert.ok(labelled(stage, 'Database Studio'));
+
+  changeByTooltip(stage, 'Filter extension catalogue by status', 'updates');
+  await settled();
+  assert.ok(labelled(stage, '1 of 20 extensions'));
+
+  change(stage, 'Search extensions', 'nothing matches this');
+  await settled();
+  assert.ok(labelled(stage, '0 of 20 extensions'));
+  assert.ok(labelled(stage, 'No extensions match this search and status filter.'));
+  assert.ok(labelled(stage, 'Clear filters'));
+  invoke(stage, 'Clear filters');
+  await settled();
+  assert.ok(labelled(stage, '20 of 20 extensions'));
+  assert.equal(fieldValue(stage, 'Search extensions'), '');
+
+  changeByTooltip(stage, 'Filter extension catalogue by status', 'incompatible');
+  await settled();
+  assert.ok(labelled(stage, '1 of 20 extensions'));
+  assert.ok(labelled(stage, 'Future debugger'));
+});
+
 test('extension discovery keeps unknown compatibility reviewable and blocks known mismatches', async () => {
   const stage = host();
   stage.render(
@@ -981,7 +1137,11 @@ test('extension discovery keeps unknown compatibility reviewable and blocks know
   await settled();
   await settled();
   assert.ok(labelled(stage, 'Compatibility not declared'));
-  assert.deepEqual(enabledStates(stage, 'Review access'), [true, false, false]);
+  assert.deepEqual(
+    enabledStates(stage, 'Review access'),
+    [false, false, true],
+    'deterministic title ordering preserves compatibility authority per card',
+  );
   assert.ok(labelled(stage, 'Incompatible · supports arm64; workspace is amd64'));
   assert.ok(labelled(stage, 'Incompatible · requires protocol 999; this client uses 1'));
 });

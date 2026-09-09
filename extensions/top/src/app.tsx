@@ -50,7 +50,12 @@ export {
 export { ContainerDetail } from './container-detail.js';
 export { Containers } from './containers.js';
 export { Workspace } from './workspace.js';
-export { Extensions, acquisitionFailure, acquisitionLabel } from './extensions.js';
+export {
+  Extensions,
+  acquisitionFailure,
+  acquisitionLabel,
+  filterCatalogueEntries,
+} from './extensions.js';
 
 const { useCallback, useEffect, useRef, useState } = React;
 export const SIDEBAR_WIDTH_KEY = 'sidebar.width';

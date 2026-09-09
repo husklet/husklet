@@ -20,6 +20,7 @@ import {
   ResourceState,
   Row,
   Scroll,
+  Select,
   Separator,
   Spinner,
   Switch,
@@ -48,6 +49,7 @@ type Change = { value?: unknown };
 type LifecycleAction = 'enable' | 'disable' | 'retry' | 'remove';
 type LifecycleState = { action: LifecycleAction; name: string };
 type ProviderFailure = { key: string; detail: string; retry: boolean };
+export type CatalogueFilter = 'all' | 'available' | 'installed' | 'updates' | 'incompatible';
 type ImageVerb = 'read' | 'use' | 'pull' | 'remove';
 const IMAGE_VERBS: { key: ImageVerb; label: string }[] = [
   { key: 'read', label: 'View image' },
@@ -130,6 +132,50 @@ function catalogueTrust(entry: ExtensionCatalogueEntry) {
   return firstParty
     ? { label: 'Husklet first-party', tone: 'accent' as const }
     : { label: `Publisher · ${entry.publisher}`, tone: 'neutral' as const };
+}
+
+function compareCatalogueEntries(left: ExtensionCatalogueEntry, right: ExtensionCatalogueEntry) {
+  const leftKey = `${left.title.toLowerCase()}\0${left.id.toLowerCase()}`;
+  const rightKey = `${right.title.toLowerCase()}\0${right.id.toLowerCase()}`;
+  return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
+}
+
+function catalogueEntryMatches(
+  entry: ExtensionCatalogueEntry,
+  installed: ExtensionSummary[],
+  architecture: string,
+  query: string,
+  filter: CatalogueFilter,
+) {
+  const installedExtension = installed.find((extension) => extension.name === entry.id);
+  const updateAvailable = Boolean(
+    installedExtension && newerVersion(entry.version, installedExtension.version),
+  );
+  const incompatible = catalogueCompatibility(entry, architecture).compatible === false;
+  const statusMatches =
+    filter === 'all' ||
+    (filter === 'available' && !installedExtension) ||
+    (filter === 'installed' && Boolean(installedExtension)) ||
+    (filter === 'updates' && updateAvailable) ||
+    (filter === 'incompatible' && incompatible);
+  if (!statusMatches) return false;
+  const needle = query.trim().toLocaleLowerCase();
+  if (!needle) return true;
+  return [entry.title, entry.id, entry.publisher, entry.description].some((value) =>
+    value.toLocaleLowerCase().includes(needle),
+  );
+}
+
+export function filterCatalogueEntries(
+  entries: ExtensionCatalogueEntry[],
+  installed: ExtensionSummary[],
+  architecture: string,
+  query: string,
+  filter: CatalogueFilter,
+) {
+  return entries
+    .filter((entry) => catalogueEntryMatches(entry, installed, architecture, query, filter))
+    .sort(compareCatalogueEntries);
 }
 
 function FilesystemConsent({
@@ -355,6 +401,8 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
   const [notice, setNotice] = React.useState<{ label: string; uncertain: boolean } | null>(null);
   const [opening, setOpening] = React.useState('');
   const [providerFailure, setProviderFailure] = React.useState<ProviderFailure | null>(null);
+  const [catalogueQuery, setCatalogueQuery] = React.useState('');
+  const [catalogueFilter, setCatalogueFilter] = React.useState<CatalogueFilter>('all');
   const [permissionDetailsExpanded, setPermissionDetailsExpanded] = React.useState(false);
   const cancelling = React.useRef(false);
   const cancelledJob = React.useRef('');
@@ -712,7 +760,18 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
   const requestedFilesystem = acquisition?.candidate?.requested_filesystem ?? {
     ...emptyFilesystemGrant(),
   };
-  const catalogueEntries = catalogue?.entries ?? [];
+  const catalogueEntries = React.useMemo(() => catalogue?.entries ?? [], [catalogue]);
+  const visibleCatalogueEntries = React.useMemo(
+    () =>
+      filterCatalogueEntries(
+        catalogueEntries,
+        installed,
+        workspaceArchitecture,
+        catalogueQuery,
+        catalogueFilter,
+      ),
+    [catalogueEntries, catalogueFilter, catalogueQuery, installed, workspaceArchitecture],
+  );
   const requestedWorkspaceEnvironment = acquisition?.candidate?.requested_workspace_environment ?? {
     read: [],
     write: [],
@@ -802,6 +861,46 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                   width={COPY_WIDTH}
                   wrap
                 />
+                {catalogueState === 'ready' && catalogueEntries.length > 0 ? (
+                  <Row gap={1} width="fill" wrap align="center" justify="start">
+                    <Entry
+                      grow
+                      value={catalogueQuery}
+                      placeholder="Search extensions"
+                      tooltip="Search by name, identifier, publisher, or description"
+                      width={{ minimum: { chars: 18 }, maximum: { chars: 36 } }}
+                      onChange={(event: Change) =>
+                        setCatalogueQuery(String(event.value ?? '').slice(0, 128))
+                      }
+                    />
+                    <Select
+                      value={catalogueFilter}
+                      tooltip="Filter extension catalogue by status"
+                      width={{ minimum: { chars: 16 }, maximum: { chars: 22 } }}
+                      choices={[
+                        { value: 'all', label: 'All extensions' },
+                        { value: 'available', label: 'Available' },
+                        { value: 'installed', label: 'Installed' },
+                        { value: 'updates', label: 'Updates' },
+                        { value: 'incompatible', label: 'Incompatible' },
+                      ]}
+                      onChange={(event: Change) => {
+                        const selected = String(event.value ?? '');
+                        if (
+                          ['all', 'available', 'installed', 'updates', 'incompatible'].includes(
+                            selected,
+                          )
+                        ) {
+                          setCatalogueFilter(selected as CatalogueFilter);
+                        }
+                      }}
+                    />
+                    <Text
+                      label={`${visibleCatalogueEntries.length} of ${countLabel(catalogueEntries.length, 'extension')}`}
+                      color="text-dim"
+                    />
+                  </Row>
+                ) : null}
                 {catalogueState === 'loading' && (
                   <Row gap={1} align="center">
                     <Spinner />
@@ -815,9 +914,25 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                     tone="neutral"
                   />
                 )}
-                {catalogueEntries.length > 0 && (
+                {catalogueEntries.length > 0 && visibleCatalogueEntries.length === 0 ? (
+                  <Column gap={1} align="start">
+                    <InlineMessage
+                      label="No extensions match this search and status filter."
+                      tone="neutral"
+                    />
+                    <Button
+                      label="Clear filters"
+                      size="small"
+                      onInvoke={() => {
+                        setCatalogueQuery('');
+                        setCatalogueFilter('all');
+                      }}
+                    />
+                  </Column>
+                ) : null}
+                {visibleCatalogueEntries.length > 0 && (
                   <Row gap={1} width="fill" wrap>
-                    {catalogueEntries.map((entry) => {
+                    {visibleCatalogueEntries.map((entry) => {
                       const compatibility = catalogueCompatibility(entry, workspaceArchitecture);
                       const trust = catalogueTrust(entry);
                       const installedExtension = installed.find(

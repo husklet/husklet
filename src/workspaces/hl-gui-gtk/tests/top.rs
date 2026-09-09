@@ -206,6 +206,16 @@ mod unix {
                 "untrusted settings were presented as current"
             );
         }
+        if fixture == "populated" && name == "extensions" {
+            assert!(
+                has_placeholder(&root, "Search extensions"),
+                "the scalable catalogue omitted its search control"
+            );
+            assert!(
+                has_label(&root, "20 of 20 extensions"),
+                "the scalable catalogue omitted its bounded result count"
+            );
+        }
         let window = gtk::Window::new();
         window.set_child(Some(&root));
         for (width_name, width) in [("narrow", 600), ("wide", 1_200)] {
@@ -285,18 +295,30 @@ mod unix {
     }
 
     fn catalogue() -> ExtensionCatalogue {
+        let mut entries = vec![ExtensionCatalogueEntry {
+            id: "storybook".into(),
+            title: "Storybook".into(),
+            description: "Inspect the Husklet interface component library.".into(),
+            version: "0.4.0".into(),
+            reference: "ghcr.io/husklet/storybook:0.4.0".into(),
+            publisher: "Husklet".into(),
+            source: "Built in".into(),
+            protocol: PROTOCOL,
+            architectures: vec!["amd64".into(), "arm64".into()],
+        }];
+        entries.extend((1..20).map(|index| ExtensionCatalogueEntry {
+            id: format!("developer-tool-{index:02}"),
+            title: format!("Developer Tool {index:02}"),
+            description: format!("A bounded daily developer workflow for task {index:02}."),
+            version: "1.0.0".into(),
+            reference: format!("ghcr.io/example/developer-tool-{index:02}:1.0.0"),
+            publisher: if index % 2 == 0 { "Acme" } else { "Community" }.into(),
+            source: format!("community/developer-tool-{index:02}"),
+            protocol: if index == 19 { PROTOCOL + 1 } else { PROTOCOL },
+            architectures: vec!["amd64".into(), "arm64".into()],
+        }));
         ExtensionCatalogue {
-            entries: vec![ExtensionCatalogueEntry {
-                id: "storybook".into(),
-                title: "Storybook".into(),
-                description: "Inspect the Husklet interface component library.".into(),
-                version: "0.4.0".into(),
-                reference: "ghcr.io/husklet/storybook:0.4.0".into(),
-                publisher: "Husklet".into(),
-                source: "Built in".into(),
-                protocol: PROTOCOL,
-                architectures: vec!["amd64".into(), "arm64".into()],
-            }],
+            entries,
             complete: true,
         }
     }
@@ -343,6 +365,24 @@ mod unix {
         while let Some(current) = child {
             child = current.next_sibling();
             if has_label(&current, wanted) {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn has_placeholder(root: &gtk::Widget, wanted: &str) -> bool {
+        if root
+            .downcast_ref::<gtk::Entry>()
+            .and_then(gtk::Entry::placeholder_text)
+            .is_some_and(|placeholder| placeholder == wanted)
+        {
+            return true;
+        }
+        let mut child = root.first_child();
+        while let Some(current) = child {
+            child = current.next_sibling();
+            if has_placeholder(&current, wanted) {
                 return true;
             }
         }
