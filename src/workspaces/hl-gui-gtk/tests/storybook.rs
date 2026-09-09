@@ -23,6 +23,7 @@ mod unix {
         "Switch",
         "ToggleButton",
         "Checkbox",
+        "Radio",
         "Extension acquisition",
         "Validated settings form",
         "Keyboard and semantic actions",
@@ -206,7 +207,10 @@ mod unix {
         // native root. Manually allocating it while unrooted exercises no valid
         // GTK lifecycle and leaves its factories measuring stale children.
         let realized_window = gtk::Window::new();
-        let narrow_story = matches!(story, "Button" | "Entry" | "Select" | "Checkbox" | "DataTable");
+        let narrow_story = matches!(
+            story,
+            "Button" | "Entry" | "Select" | "Checkbox" | "Radio" | "DataTable"
+        );
         realized_window.set_default_size(if narrow_story { 600 } else { 1_200 }, 800);
         realized_window.set_child(Some(&root));
         realized_window.present();
@@ -533,6 +537,14 @@ mod unix {
             );
             assert!(checkbox.grab_focus(), "controlled Checkbox restores native focus");
             capture_story(&realized_window, "Checkbox focused unchecked");
+        }
+        if story == "Radio" {
+            settle_toolkit();
+            let bash = find::<gtk::CheckButton>(&root, |button| button.label().as_deref() == Some("Bash"));
+            assert!(bash.is_active(), "controlled Radio did not retain native selection");
+            assert!(bash.grab_focus(), "controlled Radio restores native focus");
+            assert!(bash.has_focus(), "controlled Radio exposes focus-visible state");
+            capture_story(&realized_window, "Radio focused bash");
         }
         if story == "Extension acquisition" {
             assert!(
@@ -870,6 +882,23 @@ mod unix {
                 checkbox.activate();
                 assert_ne!(checkbox.is_active(), before, "Space activation toggles Checkbox state");
             }
+            "Radio" => {
+                let zsh = find::<gtk::CheckButton>(root, |button| button.label().as_deref() == Some("Z shell"));
+                let bash = find::<gtk::CheckButton>(root, |button| button.label().as_deref() == Some("Bash"));
+                let fish = find::<gtk::CheckButton>(root, |button| button.label().as_deref() == Some("Fish"));
+                assert!(zsh.is_active());
+                assert!(zsh.grab_focus(), "Radio group accepts native keyboard focus");
+                assert!(zsh.has_focus(), "focused Radio exposes focus-visible state");
+                assert!(
+                    root.child_focus(gtk::DirectionType::Down),
+                    "Radio group accepts directional key movement"
+                );
+                assert!(bash.has_focus(), "directional movement focuses the next Radio");
+                bash.activate();
+                assert!(bash.is_active(), "native group movement selects the next Radio");
+                assert!(!zsh.is_active(), "native group preserves exactly one selection");
+                assert!(!fish.is_active(), "native group leaves every other Radio unselected");
+            }
             "DataTable" => {
                 let entry = find::<gtk::Entry>(root, |entry| entry.text().starts_with("record-"));
                 let authoritative = entry.text();
@@ -942,7 +971,22 @@ mod unix {
             (1..=2).contains(&reports.len()),
             "{story} emitted {reports:?} instead of a bounded event"
         );
-        let event = reports.into_iter().next().expect("one report");
+        let event = if story == "Radio" {
+            reports
+                .into_iter()
+                .find(|event| {
+                    matches!(
+                        event,
+                        hl_gui::Event::Toggle {
+                            value: hl_gui::PropValue::Flag(true),
+                            ..
+                        }
+                    )
+                })
+                .expect("Radio reports its newly selected option")
+        } else {
+            reports.into_iter().next().expect("one report")
+        };
         if story == "Extension acquisition" {
             let hl_gui::Event::Invoke { node, id } = &event else {
                 panic!("native cancellation did not emit its typed Invoke interaction: {event:?}")
