@@ -10,6 +10,7 @@ import {
   connect,
   ExecutionOperationError,
   ExecutionOutputGapError,
+  ExecutionOutputProtocolError,
   Session,
   TerminalOperationError,
   workspace,
@@ -1497,6 +1498,68 @@ test('real Unix output pages apply backpressure, cancel locally, and fail closed
       return true;
     });
     assert.equal((await host.info()).name, 'demo', 'a retention gap does not corrupt correlation');
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('real Unix output iteration rejects a stalled continuation without looping or poisoning the session', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-output-stall-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const executionId = 'd'.repeat(32);
+  const connections = new Set();
+  let outputCalls = 0;
+  const server = net.createServer((socket) => {
+    connections.add(socket);
+    socket.on('close', () => connections.delete(socket));
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.kind !== KIND.request || frame.channel !== 2) continue;
+        const payload =
+          frame.payload.call === 'execution_output'
+            ? (() => {
+                outputCalls += 1;
+                return {
+                  reply: 'execution_output',
+                  with: { entries: [], next: 0, more: true, eof: false, gap: false },
+                };
+              })()
+            : {
+                reply: 'workspace',
+                with: { name: 'database', image: 'postgres:17', architecture: 'amd64' },
+              };
+        socket.write(encode({ channel: 2, kind: KIND.response, payload }));
+      }
+    });
+    socket.write(
+      encode({
+        channel: CONTROL,
+        kind: KIND.open,
+        payload: {
+          protocol: 1,
+          peer: 'fixture',
+          granted: ['containers:read', 'workspaces:read'],
+        },
+      }),
+    );
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    const host = workspace(session);
+    const pages = host.containers.executionOutputPages(executionId, { pollIntervalMs: 10 });
+    await assert.rejects(pages.next(), (error) => {
+      assert(error instanceof ExecutionOutputProtocolError);
+      assert.deepEqual([error.executionId, error.after, error.next], [executionId, 0, 0]);
+      assert.match(error.message, /continued page did not advance/);
+      return true;
+    });
+    assert.equal(outputCalls, 1, 'an invalid continuation cannot drive another output request');
+    assert.equal((await host.info()).name, 'database', 'the ordered session remains usable');
     await session.close();
   } finally {
     for (const connection of connections) connection.destroy();

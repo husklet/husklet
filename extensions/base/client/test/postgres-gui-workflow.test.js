@@ -81,7 +81,7 @@ test('Postgres GUI uses bounded observation, opaque credentials, pane text, and 
                 ? {
                     entries: [
                       {
-                        sequence: 0,
+                        sequence: 1,
                         timestamp_ms: 50,
                         stream: 'stdout',
                         bytes: [...Buffer.from('{"database":"app"}\n')],

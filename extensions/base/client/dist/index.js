@@ -31,6 +31,19 @@ export class ExecutionOutputGapError extends Error {
         this.next = next;
     }
 }
+/** The host returned an internally inconsistent output page, so iteration cannot continue safely. */
+export class ExecutionOutputProtocolError extends Error {
+    executionId;
+    after;
+    next;
+    constructor(executionId, after, next, detail) {
+        super(`execution ${executionId} returned invalid output after sequence ${after}: ${detail}`);
+        this.name = 'ExecutionOutputProtocolError';
+        this.executionId = executionId;
+        this.after = after;
+        this.next = next;
+    }
+}
 /** Catalogue discovery was bounded before it became a complete searchable set. */
 export class IncompleteCatalogueError extends Error {
     received;
@@ -682,6 +695,22 @@ export function workspace(session, { signal } = {}) {
                     requireOutputActive(signal);
                     if (page.gap)
                         throw new ExecutionOutputGapError(executionId, cursor, page.next);
+                    const sequences = page.entries.map((entry) => entry.sequence);
+                    const ordered = sequences.every((sequence, index) => sequence > cursor && (index === 0 || sequence > sequences[index - 1]));
+                    const last = sequences.at(-1);
+                    let invalid;
+                    if (page.next < cursor)
+                        invalid = 'cursor moved backwards';
+                    else if (page.eof && page.more)
+                        invalid = 'page is both final and continued';
+                    else if (sequences.length === 0 && page.next !== cursor)
+                        invalid = 'empty page advanced its cursor';
+                    else if (sequences.length > 0 && (!ordered || last !== page.next))
+                        invalid = 'entry sequence does not match its continuation cursor';
+                    else if (page.more && page.next === cursor)
+                        invalid = 'continued page did not advance its cursor';
+                    if (invalid)
+                        throw new ExecutionOutputProtocolError(executionId, cursor, page.next, invalid);
                     yield page;
                     cursor = page.next;
                     if (page.eof)

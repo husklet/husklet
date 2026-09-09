@@ -686,6 +686,12 @@ export declare class ExecutionOutputGapError extends Error {
     readonly after: number;
     readonly next: number;
 }
+/** The host returned an inconsistent page that cannot be resumed without looping or duplication. */
+export declare class ExecutionOutputProtocolError extends Error {
+    readonly executionId: string;
+    readonly after: number;
+    readonly next: number;
+}
 export declare class TerminalOperationError extends Error {
     readonly operation: 'open-tab';
     readonly result: Readonly<{

@@ -56,7 +56,7 @@ test('Postgres browser streams credential-backed rows over real Unix framing', a
                 ? {
                     entries: [
                       {
-                        sequence: 0,
+                        sequence: 1,
                         timestamp_ms: 1,
                         stream: 'stdout',
                         bytes: [...Buffer.from('{"id":1')],
@@ -70,7 +70,7 @@ test('Postgres browser streams credential-backed rows over real Unix framing', a
                 : {
                     entries: [
                       {
-                        sequence: 1,
+                        sequence: 2,
                         timestamp_ms: 2,
                         stream: 'stdout',
                         bytes: [...Buffer.from('}\n{"id":2}\n')],

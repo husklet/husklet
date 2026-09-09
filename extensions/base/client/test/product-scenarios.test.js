@@ -501,7 +501,7 @@ test('embeddings workbench resumes, indexes changed ranges with an opaque creden
               value.after === 0
                 ? [
                     {
-                      sequence: 0,
+                      sequence: 1,
                       timestamp_ms: 7,
                       stream: 'stdout',
                       bytes: [...Buffer.from('[0.2]\n')],
@@ -623,7 +623,7 @@ test('Git review resumes bounded inspection and applies one identity-observed fi
               value.after === 0
                 ? [
                     {
-                      sequence: 0,
+                      sequence: 1,
                       timestamp_ms: 1,
                       stream: 'stdout',
                       bytes: [...Buffer.from(output)],

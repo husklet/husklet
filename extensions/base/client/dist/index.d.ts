@@ -17,6 +17,13 @@ export declare class ExecutionOutputGapError extends Error {
     readonly next: any;
     constructor(executionId: any, after: any, next: any);
 }
+/** The host returned an internally inconsistent output page, so iteration cannot continue safely. */
+export declare class ExecutionOutputProtocolError extends Error {
+    readonly executionId: any;
+    readonly after: any;
+    readonly next: any;
+    constructor(executionId: any, after: any, next: any, detail: any);
+}
 /** Catalogue discovery was bounded before it became a complete searchable set. */
 export declare class IncompleteCatalogueError extends Error {
     readonly received: any;
