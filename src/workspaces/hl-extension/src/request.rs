@@ -827,6 +827,7 @@ pub enum Reply {
 #[serde(tag = "error", rename_all = "snake_case")]
 pub enum Failure {
     Denied { capability: String, detail: String },
+    Unavailable { detail: String },
     Absent { detail: String },
     Conflict { detail: String },
     Failed { detail: String },
@@ -836,6 +837,7 @@ pub enum Failure {
 impl From<HostError> for Failure {
     fn from(error: HostError) -> Self {
         match error {
+            HostError::Unavailable(detail) => Self::Unavailable { detail },
             HostError::Absent(detail) => Self::Absent { detail },
             HostError::Conflict(detail) => Self::Conflict { detail },
             HostError::Failed(detail) => Self::Failed { detail },

@@ -175,6 +175,12 @@ impl std::fmt::Debug for Bridge {
 /// a breakage, because the caller distinguishes "there is no such thing" from
 /// "the host is broken", and only the second is worth reporting as a fault.
 pub(super) fn failure(error: &hl_client::Error) -> HostError {
+    if matches!(
+        error,
+        hl_client::Error::Timeout | hl_client::Error::Transport(_) | hl_client::Error::Connection(_)
+    ) {
+        return HostError::Unavailable(error.to_string());
+    }
     let hl_client::Error::Docker { status, message } = error else {
         return HostError::Failed(error.to_string());
     };
@@ -301,7 +307,34 @@ mod tests {
     }
 
     #[test]
-    fn a_transport_failure_carries_no_absence() {
-        assert!(matches!(failure(&hl_client::Error::Timeout), HostError::Failed(_)));
+    fn unavailable_transport_is_distinct_from_broken_protocol() {
+        assert!(matches!(
+            failure(&hl_client::Error::Timeout),
+            HostError::Unavailable(_)
+        ));
+        assert!(matches!(
+            failure(&hl_client::Error::Connection("driver stopped".into())),
+            HostError::Unavailable(_)
+        ));
+        assert!(matches!(
+            failure(&hl_client::Error::Transport(std::io::Error::new(
+                std::io::ErrorKind::ConnectionRefused,
+                "refused",
+            ))),
+            HostError::Unavailable(_)
+        ));
+        assert!(matches!(
+            failure(&hl_client::Error::Protocol("invalid frame".into())),
+            HostError::Failed(_)
+        ));
+        assert!(matches!(
+            failure(&hl_client::Error::ResponseTooLarge { limit: 128 }),
+            HostError::Failed(_)
+        ));
+        let decode = serde_json::from_str::<serde_json::Value>("{").expect_err("invalid JSON");
+        assert!(matches!(
+            failure(&hl_client::Error::Decode(decode)),
+            HostError::Failed(_)
+        ));
     }
 }

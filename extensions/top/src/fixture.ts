@@ -90,7 +90,9 @@ export function fixtureApi(api: WorkspaceApi, mode = 'populated'): WorkspaceApi 
       ? {
           ...api.networks,
           list: async () => {
-            throw new Error('Network inventory is temporarily unavailable.');
+            throw Object.assign(new Error('workspace daemon socket refused the connection'), {
+              kind: 'unavailable',
+            });
           },
         }
       : api.networks,

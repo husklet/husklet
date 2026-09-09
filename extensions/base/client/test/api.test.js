@@ -297,8 +297,10 @@ test('ordered replies correlate concurrent typed calls and failures reject', asy
   const api = workspace(stage.session);
   const info = api.info();
   const list = api.containers.list();
+  const networks = api.networks.list();
   assert.equal((await next()).payload.call, 'workspace_info');
   assert.equal((await next()).payload.call, 'container_list');
+  assert.equal((await next()).payload.call, 'network_list');
   stage.host.write(
     encode({
       channel: 2,
@@ -317,8 +319,23 @@ test('ordered replies correlate concurrent typed calls and failures reject', asy
       payload: { error: 'denied', capability: 'containers:read', detail: 'not granted' },
     }),
   );
+  stage.host.write(
+    encode({
+      channel: 2,
+      kind: KIND.response,
+      flags: 3,
+      payload: { error: 'unavailable', detail: 'socket refused' },
+    }),
+  );
   assert.equal((await info).name, 'dev');
   await assert.rejects(list, (error) => error instanceof ExtensionError && error.kind === 'denied');
+  await assert.rejects(
+    networks,
+    (error) =>
+      error instanceof ExtensionError &&
+      error.kind === 'unavailable' &&
+      error.message === 'socket refused',
+  );
   stage.session.close();
   stage.host.destroy();
   stage.server.close();

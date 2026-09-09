@@ -4458,6 +4458,119 @@ test('network inspection exposes loading, retry, empty and domain-specific detai
   assert.ok(labelled(empty, 'No network details'));
 });
 
+test('network inventory failures use typed causes and one honest recovery action', () => {
+  const failure = (kind, detail) => Object.assign(new Error(detail), { kind });
+  const cases = [
+    [
+      'unavailable',
+      'socket refused',
+      'Network inventory is unavailable. Check that the workspace is running, then retry.',
+      'Retry networks',
+    ],
+    [
+      'absent',
+      'catalogue disappeared',
+      'Network inventory changed or is no longer available. Refresh to load current records.',
+      'Refresh networks',
+    ],
+    [
+      'conflict',
+      'generation changed',
+      'Network inventory changed or is no longer available. Refresh to load current records.',
+      'Refresh networks',
+    ],
+    [
+      'failed',
+      'invalid response',
+      'Network inventory could not be loaded. Retry, then inspect technical details if it continues.',
+      'Retry networks',
+    ],
+  ];
+  for (const [kind, detail, summary, action] of cases) {
+    let retries = 0;
+    const stage = host();
+    stage.render(
+      h(Networks, {
+        api,
+        containers: containerResource(),
+        resource: {
+          data: [],
+          loading: false,
+          error: failure(kind, detail),
+          reload: () => {
+            retries += 1;
+          },
+        },
+        onOpenExtensions: () => {},
+      }),
+    );
+    assert.ok(labelled(stage, summary), `${kind} has resource-specific recovery`);
+    assert.ok(labelled(stage, action), `${kind} has one primary action`);
+    assert.ok(labelled(stage, 'Technical details'));
+    assert.ok(labelled(stage, detail), 'the exact diagnostic remains disclosed');
+    assert.equal(labelled(stage, 'This view could not be completed.'), undefined);
+    invoke(stage, action);
+    assert.equal(retries, 1);
+  }
+
+  let opened = 0;
+  const denied = host();
+  denied.render(
+    h(Networks, {
+      api,
+      containers: containerResource(),
+      resource: {
+        data: [],
+        loading: false,
+        error: failure('denied', 'networks:read refused'),
+        reload: () => assert.fail('authority denial must not offer futile retry'),
+      },
+      onOpenExtensions: () => {
+        opened += 1;
+      },
+    }),
+  );
+  assert.ok(
+    labelled(
+      denied,
+      'Top does not have permission to list networks. Review its network access in Extensions.',
+    ),
+  );
+  assert.equal(labelled(denied, 'Retry networks'), undefined);
+  invoke(denied, 'Open Extensions');
+  assert.equal(opened, 1);
+});
+
+test('network inventory retry stays visible and disabled until a recovered snapshot replaces it', () => {
+  const error = Object.assign(new Error('socket refused'), { kind: 'unavailable' });
+  const stage = host();
+  const common = { api, containers: containerResource(), onOpenExtensions: () => {} };
+  stage.render(
+    h(Networks, {
+      ...common,
+      resource: { data: [], loading: true, error, reload: () => {} },
+    }),
+  );
+  assert.ok(labelled(stage, 'Retrying networks…'));
+  assert.equal(isEnabled(stage, 'Retrying networks…'), false);
+  assert.ok(labelled(stage, 'Technical details'));
+
+  stage.render(
+    h(Networks, {
+      ...common,
+      resource: {
+        data: [],
+        loading: false,
+        error: null,
+        reload: () => {},
+      },
+    }),
+  );
+  assert.ok(labelled(stage, 'No networks'));
+  assert.equal(orderedLabels(stage).includes('Retrying networks…'), false);
+  assert.equal(orderedLabels(stage).includes('socket refused'), false);
+});
+
 test('volume inspection exposes loading, retry, empty and bounded typed details', async () => {
   let attempts = 0;
   const controlled = {

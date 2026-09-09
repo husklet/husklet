@@ -8969,6 +8969,21 @@
           }
         },
         {
+          "name": "unavailable",
+          "payload": {
+            "fields": [
+              {
+                "name": "detail",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
           "name": "absent",
           "payload": {
             "fields": [
@@ -13647,7 +13662,7 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:c7afeefce0478b6b",
+  "source_fingerprint": "fnv1a64:55e185443440c11b",
   "specification_version": 1,
   "topics": [
     {

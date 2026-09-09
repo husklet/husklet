@@ -259,7 +259,9 @@ export function Networks({
     setDisconnectRequest(null);
   }, [container, containerChoices, containers]);
   const inventoryState: 'loading' | 'error' | 'empty' | 'ready' = resource.loading
-    ? 'loading'
+    ? resource.error
+      ? 'error'
+      : 'loading'
     : resource.error
       ? 'error'
       : view.records.length === 0
@@ -326,6 +328,13 @@ export function Networks({
               wrap
             />
           </Column>
+        ) : inventoryState === 'error' ? (
+          <NetworkInventoryFailure
+            error={resource.error}
+            retrying={resource.loading}
+            onRetry={resource.reload}
+            onOpenExtensions={onOpenExtensions}
+          />
         ) : (
           <ResourceState
             state={inventoryState}
@@ -523,6 +532,72 @@ export function Networks({
         )}
       </Column>
     </Page>
+  );
+}
+
+type FailureKind = 'denied' | 'unavailable' | 'absent' | 'conflict' | 'unsupported' | 'failed';
+
+function failureKind(error: unknown): FailureKind {
+  if (!error || typeof error !== 'object') return 'failed';
+  const kind = (error as { kind?: unknown }).kind;
+  return ['denied', 'unavailable', 'absent', 'conflict', 'unsupported', 'failed'].includes(
+    String(kind),
+  )
+    ? (kind as FailureKind)
+    : 'failed';
+}
+
+function NetworkInventoryFailure({
+  error,
+  retrying,
+  onRetry,
+  onOpenExtensions,
+}: {
+  error: unknown;
+  retrying: boolean;
+  onRetry: () => void;
+  onOpenExtensions: () => void;
+}) {
+  const kind = failureKind(error);
+  const diagnostic = boundedMessage(error);
+  const denied = kind === 'denied';
+  const changed = kind === 'absent' || kind === 'conflict';
+  const unsupported = kind === 'unsupported';
+  const label = denied
+    ? 'Top does not have permission to list networks. Review its network access in Extensions.'
+    : kind === 'unavailable'
+      ? 'Network inventory is unavailable. Check that the workspace is running, then retry.'
+      : changed
+        ? 'Network inventory changed or is no longer available. Refresh to load current records.'
+        : unsupported
+          ? 'Network inventory is not supported by this workspace.'
+          : 'Network inventory could not be loaded. Retry, then inspect technical details if it continues.';
+  return (
+    <Column gap={1} align="start" width="fill">
+      <InlineMessage label={label} tone={denied || unsupported ? 'warning' : 'danger'} />
+      {!unsupported ? (
+        <Button
+          label={
+            denied
+              ? 'Open Extensions'
+              : retrying
+                ? 'Retrying networks…'
+                : changed
+                  ? 'Refresh networks'
+                  : 'Retry networks'
+          }
+          variant={denied ? 'filled' : 'outline'}
+          tone="accent"
+          enabled={!retrying}
+          onInvoke={denied ? onOpenExtensions : onRetry}
+        />
+      ) : null}
+      {diagnostic ? (
+        <Expander label="Technical details">
+          <Text label={diagnostic} wrap />
+        </Expander>
+      ) : null}
+    </Column>
   );
 }
 

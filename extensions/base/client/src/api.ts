@@ -664,7 +664,7 @@ export declare function validateRowRequest(value: unknown): RowRequest;
 export declare function validateUiEvent(value: unknown): PaneSelection | InterfaceEvent;
 
 export declare class ExtensionError extends Error {
-  readonly kind: 'denied' | 'absent' | 'conflict' | 'failed' | 'unsupported';
+  readonly kind: 'denied' | 'unavailable' | 'absent' | 'conflict' | 'failed' | 'unsupported';
   readonly capability?: string;
 }
 

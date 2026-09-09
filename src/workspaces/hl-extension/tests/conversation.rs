@@ -1392,4 +1392,15 @@ fn a_frame_of_the_wrong_kind_is_not_read_as_a_message() {
         codec::read_failure(&failure).expect("decoded"),
         Failure::Absent { detail: "gone".into() }
     );
+
+    let unavailable = codec::failure(&Failure::Unavailable {
+        detail: "socket refused".into(),
+    })
+    .expect("unavailable encoded");
+    assert_eq!(
+        codec::read_failure(&unavailable).expect("unavailable decoded"),
+        Failure::Unavailable {
+            detail: "socket refused".into()
+        }
+    );
 }

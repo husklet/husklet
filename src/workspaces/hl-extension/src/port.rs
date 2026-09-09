@@ -10,6 +10,8 @@ use hl_rpc::RelativePath;
 /// caller can tell "you may not" from "it did not work".
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum HostError {
+    /// The host service could not be reached; retry may succeed once it is running.
+    Unavailable(String),
     /// The named thing does not exist.
     Absent(String),
     /// The request was well formed but cannot apply in this state.
@@ -23,6 +25,7 @@ pub enum HostError {
 impl std::fmt::Display for HostError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Unavailable(detail) => write!(formatter, "unavailable: {detail}"),
             Self::Absent(detail) => write!(formatter, "not found: {detail}"),
             Self::Conflict(detail) => write!(formatter, "conflict: {detail}"),
             Self::Failed(detail) => write!(formatter, "failed: {detail}"),

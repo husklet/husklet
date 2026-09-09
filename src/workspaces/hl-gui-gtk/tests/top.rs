@@ -222,6 +222,16 @@ mod unix {
                 "untrusted settings were presented as current"
             );
         }
+        if fixture == "error" && name == "networks" {
+            assert!(has_label(
+                &root,
+                "Network inventory is unavailable. Check that the workspace is running, then retry."
+            ));
+            assert!(has_label(&root, "Retry networks"));
+            assert!(has_label(&root, "Technical details"));
+            assert!(!has_label(&root, "This view could not be completed."));
+            assert!(!find_expander(&root, "Technical details").is_expanded());
+        }
         if fixture == "populated" && name == "extensions" && !catalogue_empty {
             assert!(
                 has_placeholder(&root, "Search extensions"),
@@ -266,7 +276,24 @@ mod unix {
             root.allocate(width, 1_600, -1, None);
             assert_eq!(root.width(), width, "{fixture}/{name} rejected {width}px");
             assert_contained(&root, &format!("{fixture}/{name}/{width_name}"));
+            if fixture == "error" && name == "networks" {
+                for label in [
+                    "Network inventory is unavailable. Check that the workspace is running, then retry.",
+                    "Retry networks",
+                    "Technical details",
+                ] {
+                    assert!(
+                        vertical_end(&root, &find_labelled(&root, label)) <= 320,
+                        "{width_name} network recovery {label:?} fell below the first 320px"
+                    );
+                }
+            }
             capture(&window, &format!("{capture_fixture}-{name}-{width_name}"), width, 800);
+        }
+        if fixture == "error" && name == "networks" {
+            find_expander(&root, "Technical details").set_expanded(true);
+            settle_toolkit();
+            assert!(has_label(&root, "workspace daemon socket refused the connection"));
         }
         if fixture == "populated" && name == "networks" {
             let network_id = "c".repeat(32);
@@ -638,6 +665,33 @@ mod unix {
             }
         }
         false
+    }
+
+    fn find_labelled(root: &gtk::Widget, wanted: &str) -> gtk::Widget {
+        if root
+            .downcast_ref::<gtk::Label>()
+            .is_some_and(|label| label.text() == wanted)
+        {
+            return root.clone();
+        }
+        let mut child = root.first_child();
+        while let Some(current) = child {
+            child = current.next_sibling();
+            if has_label(&current, wanted) {
+                return find_labelled(&current, wanted);
+            }
+        }
+        panic!("label {wanted:?} was not found")
+    }
+
+    fn vertical_end(root: &gtk::Widget, widget: &gtk::Widget) -> i32 {
+        let mut current = widget.clone();
+        let mut bottom = current.height();
+        while current != *root {
+            bottom += current.allocation().y();
+            current = current.parent().expect("label remains below the captured root");
+        }
+        bottom
     }
 
     fn assert_label_order(root: &gtk::Widget, wanted: &[&str]) {

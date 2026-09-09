@@ -94,6 +94,17 @@ test('generated declarations correlate every authoritative request with its exac
   );
 });
 
+test('generated failure validation preserves unavailable as a typed wire category', () => {
+  assert.deepEqual(validateFailure({ error: 'unavailable', detail: 'socket refused' }), {
+    error: 'unavailable',
+    detail: 'socket refused',
+  });
+  assert.throws(
+    () => validateFailure({ error: 'unavailable' }),
+    /detail must be present/,
+  );
+});
+
 test('integer widths and the cross-language lossless boundary are enforced before framing', () => {
   const safe = Number.MAX_SAFE_INTEGER;
   assert.deepEqual(
