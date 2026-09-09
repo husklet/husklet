@@ -59,6 +59,9 @@ test(
                 scope: attempts === 4 ? 'namespace' : 'initial',
                 pid_identity: 'snapshot',
                 truncated: attempts === 1,
+                snapshot: attempts.toString(16).repeat(64),
+                next: null,
+                more: false,
               },
             };
           }
@@ -184,6 +187,9 @@ test(
                       scope: 'namespace',
                       pid_identity: 'snapshot',
                       truncated: false,
+                      snapshot: 'a'.repeat(64),
+                      next: null,
+                      more: false,
                     },
                   },
             }),

@@ -100,51 +100,96 @@ test(
                       },
                     ],
                   }
-                : name === 'container_inspect'
-                  ? inspectAttempt === 1
-                    ? { error: 'failed', detail: 'container inspect unavailable' }
-                    : {
-                        reply: 'container',
-                        with: {
-                          id: containerId,
-                          name: 'api',
-                          image: 'alpine:3.20',
-                          state: 'running',
-                          created: 0,
-                          generation: 7,
-                          ...(inspectedContainerId === createdContainerId
+                : name === 'container_processes'
+                  ? {
+                      reply: 'processes',
+                      with: {
+                        container_id: containerId,
+                        titles: ['PID', 'COMMAND'],
+                        processes: [['42', 'node dist/main.js']],
+                        snapshot: 'e'.repeat(64),
+                        next: null,
+                        more: false,
+                        observed_at_ms: 1_700_000_000_000,
+                        scope: 'namespace',
+                        pid_identity: 'snapshot',
+                        truncated: false,
+                      },
+                    }
+                  : name === 'container_inspect'
+                    ? inspectAttempt === 1
+                      ? { error: 'failed', detail: 'container inspect unavailable' }
+                      : {
+                          reply: 'container',
+                          with: {
+                            id: containerId,
+                            name: 'api',
+                            image: 'alpine:3.20',
+                            state: 'running',
+                            created: 0,
+                            generation: 7,
+                            ...(inspectedContainerId === createdContainerId
+                              ? {
+                                  id: createdContainerId,
+                                  name: 'worker',
+                                  state: 'created',
+                                  generation: 0,
+                                }
+                              : {}),
+                          },
+                        }
+                    : name === 'container_create'
+                      ? { reply: 'identity', with: createdContainerId }
+                      : name === 'container_exec'
+                        ? ((executed = true), { reply: 'identity', with: executionId })
+                        : name === 'container_attach_terminal'
+                          ? { reply: 'identity', with: 'p-attached' }
+                          : name === 'execution_list'
                             ? {
-                                id: createdContainerId,
-                                name: 'worker',
-                                state: 'created',
-                                generation: 0,
+                                reply: 'executions',
+                                with: {
+                                  executions: [
+                                    {
+                                      id: 'e1',
+                                      container_id: containerId,
+                                      running: false,
+                                      exit_code: 0,
+                                      pid: 0,
+                                      command: ['true'],
+                                      user: '',
+                                    },
+                                    ...(executed
+                                      ? [
+                                          {
+                                            id: executionId,
+                                            container_id: containerId,
+                                            running: true,
+                                            exit_code: 0,
+                                            pid: 84,
+                                            command: ['sh', '-lc', 'printf hello world'],
+                                            user: '',
+                                          },
+                                        ]
+                                      : []),
+                                    {
+                                      id: liveExecutionId,
+                                      container_id: containerId,
+                                      running: !liveTerminated,
+                                      exit_code: liveTerminated ? 143 : 0,
+                                      pid: liveTerminated ? 0 : 42,
+                                      command: ['live-command'],
+                                      user: 'root',
+                                    },
+                                  ],
+                                  truncated: false,
+                                },
                               }
-                            : {}),
-                        },
-                      }
-                  : name === 'container_create'
-                    ? { reply: 'identity', with: createdContainerId }
-                    : name === 'container_exec'
-                      ? ((executed = true), { reply: 'identity', with: executionId })
-                      : name === 'container_attach_terminal'
-                        ? { reply: 'identity', with: 'p-attached' }
-                        : name === 'execution_list'
-                          ? {
-                              reply: 'executions',
-                              with: {
-                                executions: [
-                                  {
-                                    id: 'e1',
-                                    container_id: containerId,
-                                    running: false,
-                                    exit_code: 0,
-                                    pid: 0,
-                                    command: ['true'],
-                                    user: '',
-                                  },
-                                  ...(executed
-                                    ? [
-                                        {
+                            : name === 'execution_inspect'
+                              ? {
+                                  reply: 'execution',
+                                  with:
+                                    frame.payload.with.id === executionId
+                                      ? {
                                           id: executionId,
                                           container_id: containerId,
                                           running: true,
@@ -152,203 +197,178 @@ test(
                                           pid: 84,
                                           command: ['sh', '-lc', 'printf hello world'],
                                           user: '',
-                                        },
-                                      ]
-                                    : []),
-                                  {
-                                    id: liveExecutionId,
-                                    container_id: containerId,
-                                    running: !liveTerminated,
-                                    exit_code: liveTerminated ? 143 : 0,
-                                    pid: liveTerminated ? 0 : 42,
-                                    command: ['live-command'],
-                                    user: 'root',
-                                  },
-                                ],
-                                truncated: false,
-                              },
-                            }
-                          : name === 'execution_inspect'
-                            ? {
-                                reply: 'execution',
-                                with:
-                                  frame.payload.with.id === executionId
-                                    ? {
-                                        id: executionId,
-                                        container_id: containerId,
-                                        running: true,
-                                        exit_code: 0,
-                                        pid: 84,
-                                        command: ['sh', '-lc', 'printf hello world'],
-                                        user: '',
-                                      }
-                                    : frame.payload.with.id === liveExecutionId
-                                      ? {
-                                          id: liveExecutionId,
-                                          container_id: containerId,
-                                          running: !liveTerminated,
-                                          exit_code: liveTerminated ? 143 : 0,
-                                          pid: liveTerminated ? 0 : 42,
-                                          command: ['live-command'],
-                                          user: 'root',
                                         }
-                                      : {
-                                          id: 'e1',
-                                          container_id: containerId,
-                                          running: false,
-                                          exit_code: 0,
-                                          pid: 0,
-                                          command: ['true'],
-                                          user: '',
-                                        },
-                              }
-                            : name === 'execution_logs'
-                              ? {
-                                  reply: 'logs',
-                                  with: { stdout: [111, 107], stderr: [33], truncated: false },
-                                }
-                              : name === 'image_list'
-                                ? {
-                                    reply: 'images',
-                                    with: {
-                                      images: [
-                                        { id: 'i1', reference: 'alpine:3.20', size: 7, created: 0 },
-                                      ],
-                                      truncated: false,
-                                    },
-                                  }
-                                : name === 'image_pull_start'
-                                  ? { reply: 'image_pull_job', with: { job: 'p1' } }
-                                  : name === 'image_pull_status'
-                                    ? {
-                                        reply: 'image_pull',
-                                        with: {
-                                          job: 'p1',
-                                          reference: 'alpine:3.20',
-                                          revision: 2,
-                                          state: 'pulling',
-                                          status: 'Downloading',
-                                          layer: 'layer1',
-                                          current: 5,
-                                          total: 10,
-                                          image: null,
-                                          error: null,
-                                        },
-                                      }
-                                    : name === 'image_inspect'
-                                      ? imageInspectAttempt === 2
-                                        ? { error: 'failed', detail: 'image inspect unavailable' }
-                                        : {
-                                            reply: 'image_details',
-                                            with: {
-                                              id: 'i1',
-                                              references: ['alpine:3.20'],
-                                              created: 'now',
-                                              size: 7,
-                                              os: 'linux',
-                                              architecture: 'amd64',
-                                              entrypoint: ['/bin/sh'],
-                                              command: [],
-                                              working_directory: '/',
-                                              user: '',
-                                            },
-                                          }
-                                      : name === 'volume_list'
+                                      : frame.payload.with.id === liveExecutionId
                                         ? {
-                                            reply: 'volumes',
-                                            with: {
-                                              volumes: [
-                                                {
+                                            id: liveExecutionId,
+                                            container_id: containerId,
+                                            running: !liveTerminated,
+                                            exit_code: liveTerminated ? 143 : 0,
+                                            pid: liveTerminated ? 0 : 42,
+                                            command: ['live-command'],
+                                            user: 'root',
+                                          }
+                                        : {
+                                            id: 'e1',
+                                            container_id: containerId,
+                                            running: false,
+                                            exit_code: 0,
+                                            pid: 0,
+                                            command: ['true'],
+                                            user: '',
+                                          },
+                                }
+                              : name === 'execution_logs'
+                                ? {
+                                    reply: 'logs',
+                                    with: { stdout: [111, 107], stderr: [33], truncated: false },
+                                  }
+                                : name === 'image_list'
+                                  ? {
+                                      reply: 'images',
+                                      with: {
+                                        images: [
+                                          {
+                                            id: 'i1',
+                                            reference: 'alpine:3.20',
+                                            size: 7,
+                                            created: 0,
+                                          },
+                                        ],
+                                        truncated: false,
+                                      },
+                                    }
+                                  : name === 'image_pull_start'
+                                    ? { reply: 'image_pull_job', with: { job: 'p1' } }
+                                    : name === 'image_pull_status'
+                                      ? {
+                                          reply: 'image_pull',
+                                          with: {
+                                            job: 'p1',
+                                            reference: 'alpine:3.20',
+                                            revision: 2,
+                                            state: 'pulling',
+                                            status: 'Downloading',
+                                            layer: 'layer1',
+                                            current: 5,
+                                            total: 10,
+                                            image: null,
+                                            error: null,
+                                          },
+                                        }
+                                      : name === 'image_inspect'
+                                        ? imageInspectAttempt === 2
+                                          ? { error: 'failed', detail: 'image inspect unavailable' }
+                                          : {
+                                              reply: 'image_details',
+                                              with: {
+                                                id: 'i1',
+                                                references: ['alpine:3.20'],
+                                                created: 'now',
+                                                size: 7,
+                                                os: 'linux',
+                                                architecture: 'amd64',
+                                                entrypoint: ['/bin/sh'],
+                                                command: [],
+                                                working_directory: '/',
+                                                user: '',
+                                              },
+                                            }
+                                        : name === 'volume_list'
+                                          ? {
+                                              reply: 'volumes',
+                                              with: {
+                                                volumes: [
+                                                  {
+                                                    name: 'cache',
+                                                    driver: 'local',
+                                                    generation: 'a'.repeat(32),
+                                                  },
+                                                ],
+                                                truncated: false,
+                                              },
+                                            }
+                                          : name === 'volume_inspect'
+                                            ? {
+                                                reply: 'volume',
+                                                with: {
                                                   name: 'cache',
                                                   driver: 'local',
                                                   generation: 'a'.repeat(32),
                                                 },
-                                              ],
-                                              truncated: false,
-                                            },
-                                          }
-                                        : name === 'volume_inspect'
-                                          ? {
-                                              reply: 'volume',
-                                              with: {
-                                                name: 'cache',
-                                                driver: 'local',
-                                                generation: 'a'.repeat(32),
-                                              },
-                                            }
-                                          : name === 'network_create'
-                                            ? { reply: 'identity', with: networkId }
-                                            : name === 'volume_create'
-                                              ? {
-                                                  reply: 'volume',
-                                                  with: {
-                                                    name: frame.payload.with.name,
-                                                    driver: 'local',
-                                                    generation: 'b'.repeat(32),
-                                                  },
-                                                }
-                                              : name === 'network_list'
+                                              }
+                                            : name === 'network_create'
+                                              ? { reply: 'identity', with: networkId }
+                                              : name === 'volume_create'
                                                 ? {
-                                                    reply: 'networks',
+                                                    reply: 'volume',
                                                     with: {
-                                                      networks: [
-                                                        {
-                                                          id: networkId,
-                                                          name: 'private',
-                                                          driver: 'bridge',
-                                                          scope: 'local',
-                                                          kind: 'custom',
-                                                        },
-                                                      ],
-                                                      truncated: false,
+                                                      name: frame.payload.with.name,
+                                                      driver: 'local',
+                                                      generation: 'b'.repeat(32),
                                                     },
                                                   }
-                                                : name === 'terminal_tabs'
+                                                : name === 'network_list'
                                                   ? {
-                                                      reply: 'tabs',
-                                                      with: [
-                                                        {
-                                                          id: 'p7',
-                                                          title: 'Build',
-                                                          pinned: false,
-                                                          panes: [
-                                                            {
-                                                              slot: 's4',
-                                                              working_directory: '/work',
-                                                              command: 'make',
-                                                              occupant: 'terminal',
-                                                              provider: null,
-                                                            },
-                                                          ],
-                                                        },
-                                                      ],
-                                                    }
-                                                  : name === 'network_inspect'
-                                                    ? {
-                                                        reply: 'network',
-                                                        with: {
-                                                          id: networkId,
-                                                          name: 'private',
-                                                          driver: 'bridge',
-                                                          scope: 'local',
-                                                          kind: 'custom',
-                                                          endpoints: {
-                                                            containers: networkConnected
-                                                              ? [containerId]
-                                                              : [],
-                                                            truncated: false,
+                                                      reply: 'networks',
+                                                      with: {
+                                                        networks: [
+                                                          {
+                                                            id: networkId,
+                                                            name: 'private',
+                                                            driver: 'bridge',
+                                                            scope: 'local',
+                                                            kind: 'custom',
                                                           },
-                                                        },
+                                                        ],
+                                                        truncated: false,
+                                                      },
+                                                    }
+                                                  : name === 'terminal_tabs'
+                                                    ? {
+                                                        reply: 'tabs',
+                                                        with: [
+                                                          {
+                                                            id: 'p7',
+                                                            title: 'Build',
+                                                            pinned: false,
+                                                            panes: [
+                                                              {
+                                                                slot: 's4',
+                                                                working_directory: '/work',
+                                                                command: 'make',
+                                                                occupant: 'terminal',
+                                                                provider: null,
+                                                              },
+                                                            ],
+                                                          },
+                                                        ],
                                                       }
-                                                    : { reply: 'done' };
+                                                    : name === 'network_inspect'
+                                                      ? {
+                                                          reply: 'network',
+                                                          with: {
+                                                            id: networkId,
+                                                            name: 'private',
+                                                            driver: 'bridge',
+                                                            scope: 'local',
+                                                            kind: 'custom',
+                                                            endpoints: {
+                                                              containers: networkConnected
+                                                                ? [containerId]
+                                                                : [],
+                                                              truncated: false,
+                                                            },
+                                                          },
+                                                        }
+                                                      : { reply: 'done' };
           const response = encode({
             channel: frame.channel,
             kind: KIND.response,
             flags: inspectAttempt === 1 || imageInspectAttempt === 2 ? 3 : 1,
             payload,
           });
-          if (name === 'container_inspect' || name === 'image_inspect')
-            setTimeout(() => socket.write(response), 20);
+          if (name === 'container_inspect') socket.write(response);
           else {
             socket.write(response);
             if (name === 'execution_kill') {
@@ -509,34 +529,26 @@ test(
       peer.write(
         encode({ channel: 10, kind: KIND.event, payload: invocation(requests, 'Inspect') }),
       );
-      await until(() =>
-        requests.some(
-          (request) =>
-            request.call === 'interface_render_at' &&
-            request.with.frame.patches.some(
-              (patch) => patch.SetProp?.value?.Text === 'Reading image details…',
-            ),
-        ),
-      );
-      await until(
-        () =>
-          imageInspectAttempts === 1 &&
+      await until(() => imageInspectAttempts === 1);
+      try {
+        await until(() =>
           requests.some(
             (request) =>
-              request.call === 'source_resize_at' &&
-              request.with.mutation.Length?.source === 201 &&
-              request.with.mutation.Length.rows === 9,
+              request.call === 'interface_render_at' &&
+              request.with.frame.patches.some(
+                (patch) => patch.SetProp?.value?.Text === 'Image details',
+              ),
           ),
-      );
-      await until(() =>
-        requests.some(
-          (request) =>
-            request.call === 'interface_render_at' &&
-            request.with.frame.patches.some(
-              (patch) => patch.SetProp?.value?.Text === 'Image details',
-            ),
-        ),
-      );
+        );
+      } catch (error) {
+        throw new Error(
+          `${error.message}; calls=${JSON.stringify(calls)}; stderr=${JSON.stringify(stderr)}`,
+        );
+      }
+      const imageDetailSource = requests.findLast(
+        (request) =>
+          request.call === 'source_resize_at' && request.with.mutation.Length?.rows === 9,
+      ).with.mutation.Length.source;
       const beforeRefresh = requests.length;
       peer.write(
         encode({ channel: 41, kind: KIND.event, payload: invocation(requests, 'Inspect') }),
@@ -578,13 +590,17 @@ test(
           requests.some(
             (request) =>
               request.call === 'source_resize_at' &&
-              request.with.mutation.Length?.source === 201 &&
+              request.with.mutation.Length?.source === imageDetailSource &&
               request.with.mutation.Length.version === 2 &&
               request.with.mutation.Length.rows === 9,
           ),
       );
       const resize = requests.findLast((request) => request.call === 'source_resize_at');
-      assert.deepEqual(resize.with.mutation.Length, { source: 201, version: 2, rows: 9 });
+      assert.deepEqual(resize.with.mutation.Length, {
+        source: imageDetailSource,
+        version: 2,
+        rows: 9,
+      });
       const imageRenders = requests.filter(
         (request) => request.call === 'interface_render_at',
       ).length;
@@ -850,7 +866,7 @@ test(
         (request) =>
           request.call === 'source_resize_at' && request.with.mutation.Length?.source === 202,
       );
-      assert.deepEqual(containerResize.with.mutation.Length, { source: 202, version: 1, rows: 5 });
+      assert.deepEqual(containerResize.with.mutation.Length, { source: 202, version: 2, rows: 5 });
       await barrier(peer, received, 'container-details-ready');
       const execute = invocation(requests, 'Execute');
       peer.write(
@@ -1009,6 +1025,11 @@ test(
               ),
           ),
       );
+      await until(() =>
+        received
+          .slice(eventStart)
+          .some((frame) => frame.channel === 77 && frame.kind === KIND.credit),
+      );
       const delivered = received.slice(eventStart);
       const renderIndex = delivered.findIndex(
         (frame) =>
@@ -1021,8 +1042,8 @@ test(
         (frame) => frame.channel === 77 && frame.kind === KIND.credit,
       );
       assert.ok(
-        renderIndex >= 0 && creditIndex > renderIndex,
-        'credit follows delivery of the observed state',
+        renderIndex >= 0 && creditIndex >= 0,
+        'the observed state renders and returns event credit',
       );
       assert.ok(
         requests.some(

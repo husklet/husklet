@@ -87,7 +87,7 @@ export function fixtureApi(api: WorkspaceApi, mode = 'populated'): WorkspaceApi 
         container_id: containerId,
         titles: ['PID', 'USER', 'COMMAND'],
         processes: [['412', 'developer', 'npm test']],
-        snapshot: 'fixture-processes',
+        snapshot: 'f'.repeat(64),
         next: null,
         more: false,
         observed_at_ms: 1_725_000_000_000,
