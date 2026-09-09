@@ -116,11 +116,55 @@ fn geometry_is_what_the_description_asked_for() {
     a_size_range_becomes_a_floor_the_toolkit_honours();
     a_character_width_applies_to_a_scrolling_container();
     a_list_button_ellipsizes_from_its_reading_edge();
+    a_compact_list_keeps_its_rows_natural_inside_a_tall_page();
     a_scrolled_pane_shares_narrow_and_wide_host_width();
     a_page_container_shrinks_and_caps_its_content_width();
     a_short_page_never_underallocates_its_content_column();
     a_responsive_container_presents_only_its_allocated_branch();
     a_choice_shrinks_independently_of_its_options();
+}
+
+fn list_in_tall_page(grow: Option<f64>) -> Stage {
+    let mut stage = Stage::new();
+    let page = stage.producer.create(Tag::Column);
+    stage.producer.append(NodeId::ROOT, page);
+    let heading = stage.producer.create(Tag::Text);
+    stage
+        .producer
+        .set(heading, Prop::Label, PropValue::text("Terminal panes"));
+    stage.producer.append(page, heading);
+    let list = stage.producer.create(Tag::List);
+    if let Some(grow) = grow {
+        stage.producer.set(list, Prop::Grow, PropValue::Number(grow));
+    }
+    let row = stage.producer.create(Tag::ListRow);
+    let label = stage.producer.create(Tag::ListItemText);
+    stage.producer.set(label, Prop::Label, PropValue::text("Pane 1"));
+    stage.producer.append(row, label);
+    stage.producer.append(list, row);
+    stage.producer.append(page, list);
+    stage.draw();
+    stage
+}
+
+/// Lists historically fill their page so large inventories scroll. An explicit
+/// zero growth factor makes a short inventory retain only its natural height,
+/// even when nested below another child in a tall page.
+fn a_compact_list_keeps_its_rows_natural_inside_a_tall_page() {
+    let expanding = list_in_tall_page(None);
+    expanding.allocate(600, 400);
+    let expanding_height = expanding.tagged(Tag::List).height();
+
+    let compact = list_in_tall_page(Some(0.0));
+    compact.allocate(600, 400);
+    let compact_height = compact.tagged(Tag::List).height();
+
+    assert_eq!(expanding_height, 400 - expanding.tagged(Tag::Text).height());
+    assert!(compact_height > 0, "the compact list still presents its row");
+    assert!(
+        compact_height < expanding_height,
+        "grow=0 keeps a short nested list at its content height"
+    );
 }
 
 fn a_choice_shrinks_independently_of_its_options() {

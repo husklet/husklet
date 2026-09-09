@@ -6,7 +6,7 @@ import { Surface, reconciler } from '../dist/reconciler.js';
 import {
   COLUMN_KEY_BYTE_LIMIT, COLUMN_TITLE_BYTE_LIMIT, TABLE_COLUMN_LIMIT, value,
 } from '../dist/protocol.js';
-import { Button, Column, Text } from '../dist/components.js';
+import { Button, Column, List, ListItemText, ListRow, Text } from '../dist/components.js';
 
 /** A surface that keeps its frames instead of writing them to a socket. */
 function surface() {
@@ -165,4 +165,20 @@ test('a growth factor is sent as a number, because a flag decodes as nothing', (
   assert.deepEqual(value('Grow', true), { Number: 1 });
   assert.deepEqual(value('Grow', false), { Number: 0 });
   assert.deepEqual(value('Grow', 2), { Number: 2 });
+});
+
+test('a compact list explicitly clears the host default growth', () => {
+  const host = surface();
+  const frame = host.render(
+    h(List, { grow: false }, h(ListRow, null, h(ListItemText, { label: 'Build' }))),
+  );
+  const list = frame.patches.find((patch) => patch.Create?.tag === 'List').Create.id;
+  assert.ok(
+    frame.patches.some(
+      (patch) =>
+        patch.SetProp?.id === list &&
+        patch.SetProp.prop === 'Grow' &&
+        patch.SetProp.value?.Number === 0,
+    ),
+  );
 });
