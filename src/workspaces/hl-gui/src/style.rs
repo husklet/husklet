@@ -362,6 +362,28 @@ impl Scale {
         }
     }
 
+    /// Font size in pixels in the shared interface type scale.
+    #[must_use]
+    pub const fn font_size(self) -> u8 {
+        match self {
+            Self::Caption => 12,
+            Self::Body => 14,
+            Self::Title => 18,
+            Self::Display => 24,
+        }
+    }
+
+    /// Numeric font weight in the shared interface type scale.
+    #[must_use]
+    pub const fn font_weight(self) -> u16 {
+        match self {
+            Self::Caption => 450,
+            Self::Body => 400,
+            Self::Title => 600,
+            Self::Display => 700,
+        }
+    }
+
     pub const ALL: &'static [Self] = &[Self::Caption, Self::Body, Self::Title, Self::Display];
 }
 
@@ -447,7 +469,23 @@ impl Default for Theme {
 
 #[cfg(test)]
 mod tests {
-    use super::{Length, Rgb, Theme, Token};
+    use super::{Length, Rgb, Scale, Theme, Token};
+
+    #[test]
+    fn semantic_type_scale_owns_its_exact_metrics() {
+        assert_eq!(
+            Scale::ALL
+                .iter()
+                .map(|scale| (scale.as_str(), scale.font_size(), scale.font_weight()))
+                .collect::<Vec<_>>(),
+            [
+                ("caption", 12, 450),
+                ("body", 14, 400),
+                ("title", 18, 600),
+                ("display", 24, 700),
+            ]
+        );
+    }
 
     fn luminance(color: Rgb) -> f64 {
         let channel = |value: u8| {

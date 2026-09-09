@@ -11,6 +11,7 @@ import { CommandPaletteStory } from './command-palette.js';
 import { ConfirmationStory } from './confirmation.js';
 import { EntryWorkbench } from './entry.js';
 import { FormControlWorkbench } from './form-control.js';
+import { HeadingWorkbench } from './heading.js';
 import { IconButtonWorkbench } from './icon-button.js';
 import { JsonTreeStory } from './json-tree.js';
 import { RadioWorkbench } from './radio.js';
@@ -30,6 +31,7 @@ type NativeWorkbenchName =
   | 'Checkbox'
   | 'Entry'
   | 'FormControl'
+  | 'Heading'
   | 'IconButton'
   | 'Radio'
   | 'RadioGroup'
@@ -78,6 +80,7 @@ const nativeWorkbenchPages = {
   Checkbox: CheckboxWorkbench,
   Entry: EntryWorkbench,
   FormControl: FormControlWorkbench,
+  Heading: HeadingWorkbench,
   IconButton: IconButtonWorkbench,
   Radio: RadioWorkbench,
   RadioGroup: RadioGroupWorkbench,

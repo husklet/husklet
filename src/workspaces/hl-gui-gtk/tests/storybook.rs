@@ -27,6 +27,7 @@ mod unix {
         "RadioGroup",
         "FormControl",
         "Slider",
+        "Heading",
         "Extension acquisition",
         "Validated settings form",
         "Keyboard and semantic actions",
@@ -221,6 +222,7 @@ mod unix {
                 | "RadioGroup"
                 | "FormControl"
                 | "Slider"
+                | "Heading"
                 | "Switch"
                 | "DataTable"
         );
@@ -531,6 +533,27 @@ mod unix {
             None
         };
         capture_story(&realized_window, story);
+        if story == "Heading" {
+            let specimens = descendants::<gtk::Label>(&root)
+                .into_iter()
+                .filter(|label| label.text() == "Build, inspect, and ship with confidence")
+                .collect::<Vec<_>>();
+            assert_eq!(specimens.len(), 4, "Heading renders every semantic scale exactly once");
+            for class in [
+                "scale-caption",
+                "scale-body",
+                "scale-title",
+                "scale-display",
+            ] {
+                assert!(
+                    specimens.iter().any(|label| label.has_css_class(class)),
+                    "Heading specimen omitted {class}"
+                );
+            }
+            for label in specimens {
+                assert_eq!(label.accessible_role(), gtk::AccessibleRole::Heading);
+            }
+        }
         if story == "Checkbox" {
             let property = find::<gtk::Label>(&root, |label| label.text() == "Property");
             let owned = ["label", "checked", "indeterminate", "enabled", "onToggle"]
@@ -1245,6 +1268,19 @@ mod unix {
                 let choice =
                     find::<gtk::ToggleButton>(root, |button| button.tooltip_text().as_deref() == Some("Default shell"));
                 assert!(choice.grab_focus(), "Select accepts keyboard focus");
+            }
+            "Heading" => {
+                find::<gtk::Expander>(root, |expander| {
+                    descendants::<gtk::Label>(expander.upcast_ref())
+                        .iter()
+                        .any(|label| label.text() == "Playground")
+                })
+                .set_expanded(true);
+                settle_toolkit();
+                find::<gtk::Button>(root, |button| {
+                    button_caption(button).as_deref() == Some("display")
+                })
+                .emit_clicked();
             }
             "Switch" => {
                 labelled_switch(root, "Restore panes on launch").set_active(false);

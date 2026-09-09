@@ -167,16 +167,18 @@ fn variants(css: &mut String, theme: &Theme) {
 
 fn scales(css: &mut String, theme: &Theme) {
     let steps = [
-        (Scale::Caption, 12, "450", Token::TextDim),
-        (Scale::Body, 14, "400", Token::Text),
-        (Scale::Title, 18, "600", Token::Text),
-        (Scale::Display, 24, "700", Token::Text),
+        (Scale::Caption, Token::TextDim),
+        (Scale::Body, Token::Text),
+        (Scale::Title, Token::Text),
+        (Scale::Display, Token::Text),
     ];
-    for (scale, size, weight, token) in steps {
+    for (scale, token) in steps {
         let _ = writeln!(
             css,
             ".scale-{name} {{ font-size: {size}px; font-weight: {weight}; color: {color}; }}",
             name = scale.as_str(),
+            size = scale.font_size(),
+            weight = scale.font_weight(),
             color = theme.color(token).hex(),
         );
     }

@@ -17,6 +17,15 @@ import catalogue, {
 
 test('the catalogue describes the whole library', () => {
   assert.equal(catalogue.version, SHAPE_VERSION);
+  assert.deepEqual(
+    catalogue.enums.Scale.map(({ style, pixels, weight }) => ({ style, pixels, weight })),
+    [
+      { style: 'caption', pixels: 12, weight: 450 },
+      { style: 'body', pixels: 14, weight: 400 },
+      { style: 'title', pixels: 18, weight: 600 },
+      { style: 'display', pixels: 24, weight: 700 },
+    ],
+  );
   assert.ok(
     tags.length >= 120,
     `only ${tags.length} components; the catalogue is the whole library`,

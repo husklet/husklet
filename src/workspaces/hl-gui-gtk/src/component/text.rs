@@ -31,6 +31,7 @@ pub(crate) fn widget(tag: Tag) -> gtk::Widget {
 fn heading() -> gtk::Label {
     let widget = axis::label();
     widget.add_css_class("title-3");
+    widget.set_accessible_role(gtk::AccessibleRole::Heading);
     widget
 }
 

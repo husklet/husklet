@@ -16,7 +16,7 @@ use hl_gui::{Align, ControlSize, Density, Prop, Scale, Tag, Token, Tone, Variant
 
 /// Version of the document shape itself, so a consumer can refuse a catalogue
 /// it does not understand instead of reading absent fields as empty ones.
-const SHAPE_VERSION: u32 = 4;
+const SHAPE_VERSION: u32 = 5;
 
 /// Largest spacing step with a generated style class, as a length editor should
 /// offer it.
@@ -235,7 +235,7 @@ fn enumerations() -> Vec<String> {
     vec![
         format!("\"Tone\": {}", inline(&members(Tone::ALL, Tone::as_str))),
         format!("\"Variant\": {}", inline(&members(Variant::ALL, Variant::as_str))),
-        format!("\"Scale\": {}", inline(&members(Scale::ALL, Scale::as_str))),
+        format!("\"Scale\": {}", inline(&scale_members())),
         format!(
             "\"ControlSize\": {}",
             inline(&members(ControlSize::ALL, ControlSize::as_str))
@@ -251,6 +251,21 @@ fn enumerations() -> Vec<String> {
             ])
         ),
     ]
+}
+
+fn scale_members() -> Vec<String> {
+    Scale::ALL
+        .iter()
+        .map(|value| {
+            format!(
+                "{{\"wire\": {}, \"style\": {}, \"pixels\": {}, \"weight\": {}}}",
+                text(&format!("{value:?}")),
+                text(value.as_str()),
+                value.font_size(),
+                value.font_weight()
+            )
+        })
+        .collect()
 }
 
 /// The members of one closed enumeration.

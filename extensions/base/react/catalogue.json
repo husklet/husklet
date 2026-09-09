@@ -1,5 +1,5 @@
 {
-  "version": 4,
+  "version": 5,
   "families": [
     {"name": "layout", "label": "Layout", "note": "containers and spacing primitives"},
     {"name": "surface", "label": "Surface", "note": "framing and grouping, with the parts a card is composed from"},
@@ -235,7 +235,7 @@
   "enums": {
     "Tone": [{"wire": "Neutral", "style": "neutral"}, {"wire": "Accent", "style": "accent"}, {"wire": "Positive", "style": "positive"}, {"wire": "Warning", "style": "warning"}, {"wire": "Danger", "style": "danger"}],
     "Variant": [{"wire": "Plain", "style": "plain"}, {"wire": "Filled", "style": "filled"}, {"wire": "Outline", "style": "outline"}, {"wire": "Ghost", "style": "ghost"}],
-    "Scale": [{"wire": "Caption", "style": "caption"}, {"wire": "Body", "style": "body"}, {"wire": "Title", "style": "title"}, {"wire": "Display", "style": "display"}],
+    "Scale": [{"wire": "Caption", "style": "caption", "pixels": 12, "weight": 450}, {"wire": "Body", "style": "body", "pixels": 14, "weight": 400}, {"wire": "Title", "style": "title", "pixels": 18, "weight": 600}, {"wire": "Display", "style": "display", "pixels": 24, "weight": 700}],
     "ControlSize": [{"wire": "Small", "style": "small"}, {"wire": "Medium", "style": "medium"}, {"wire": "Large", "style": "large"}],
     "Align": [{"wire": "Start", "style": "start"}, {"wire": "Center", "style": "center"}, {"wire": "End", "style": "end"}, {"wire": "Stretch", "style": "stretch"}],
     "Density": [{"wire": "Compact", "style": "compact"}, {"wire": "Normal", "style": "normal"}, {"wire": "Comfortable", "style": "comfortable"}],
