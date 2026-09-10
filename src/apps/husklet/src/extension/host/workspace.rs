@@ -298,7 +298,7 @@ impl Workspace {
         let manifest = described(&record);
         let bridge = supply.live_bridge().map_err(HostError::Failed)?;
         let image = match &bridge {
-            Some(bridge) => Self::image(bridge, &record).map_err(HostError::Failed)?,
+            Some(bridge) => supply.image(bridge, &record).map_err(HostError::Failed)?,
             None => Image {
                 reference: record.image_digest.clone(),
                 digest: record.image_digest.clone(),
@@ -341,12 +341,12 @@ impl Workspace {
     }
 
     /// What the extension's image says about how to run it.
-    fn image(bridge: &Bridge, record: &Record) -> Result<Image, String> {
+    fn image(&self, bridge: &Bridge, record: &Record) -> Result<Image, String> {
         let client = bridge.client();
         let inspection = bridge
             .wait(client.images().inspect(&record.image_digest))
             .map_err(|error| error.to_string())?;
-        Ok(Image::from_inspection(record.image_digest.clone(), &inspection))
+        image_from_inspection(&record.image_digest, self.config.arch.as_str(), &inspection)
     }
 
     /// What this workspace tells an extension about itself.
@@ -370,7 +370,7 @@ impl Supply for Workspace {
         };
         let manifest = described(&record);
         let bridge = self.bridge()?;
-        let image = Self::image(&bridge, &record)?;
+        let image = self.image(&bridge, &record)?;
         let spec = SidecarSpec::new(&manifest, &record.granted, &image, self.socket(&record.name))
             .generation(record.installed_at);
         Ok(Some(Plan {
@@ -451,6 +451,80 @@ impl Supply for Workspace {
         };
         if let Err(error) = Sidecar::new(bridge).stop_owned(&plan.spec) {
             hl_log::hl_error!(hl_log::tag::RUNTIME, "extension {}: {error}", plan.record.name);
+        }
+    }
+}
+
+fn image_from_inspection(
+    recorded_digest: &str,
+    architecture: &str,
+    inspection: &hl_client::model::InspectImage,
+) -> Result<Image, String> {
+    if inspection.id != recorded_digest {
+        return Err(format!(
+            "extension image inspection returned digest {}, expected recorded digest {recorded_digest}; retry workspace provisioning to restore the exact extension image",
+            inspection.id
+        ));
+    }
+    if inspection.os != "linux" || inspection.architecture != architecture {
+        return Err(format!(
+            "recorded extension image {recorded_digest} is {}/{}, but this workspace requires linux/{architecture}; retry workspace provisioning with the correct architecture",
+            inspection.os, inspection.architecture
+        ));
+    }
+    Ok(Image::from_inspection(recorded_digest.to_owned(), inspection))
+}
+
+#[cfg(test)]
+mod image_tests {
+    use hl_client::model::{ImageConfig, InspectImage};
+
+    use super::image_from_inspection;
+
+    fn inspection(id: &str, os: &str, architecture: &str) -> InspectImage {
+        InspectImage {
+            id: id.to_owned(),
+            repo_tags: Vec::new(),
+            repo_digests: Vec::new(),
+            created: String::new(),
+            size: 0,
+            virtual_size: 0,
+            os: os.to_owned(),
+            architecture: architecture.to_owned(),
+            config: ImageConfig {
+                entrypoint: vec!["/extension".to_owned()],
+                ..ImageConfig::default()
+            },
+        }
+    }
+
+    #[test]
+    fn startup_is_bound_to_the_recorded_digest_and_workspace_platform() {
+        let digest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let image = image_from_inspection(digest, "amd64", &inspection(digest, "linux", "amd64"))
+            .expect("matching installed artifact");
+        assert_eq!(image.reference, digest);
+        assert_eq!(image.digest, digest);
+
+        let wrong_digest = image_from_inspection(
+            digest,
+            "amd64",
+            &inspection(
+                "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                "linux",
+                "amd64",
+            ),
+        )
+        .expect_err("daemon returned a different image");
+        assert!(wrong_digest.contains("expected recorded digest"));
+        assert!(wrong_digest.contains("retry workspace provisioning"));
+
+        for (os, architecture) in [("darwin", "amd64"), ("linux", "arm64")] {
+            let wrong_platform = image_from_inspection(digest, "amd64", &inspection(digest, os, architecture))
+                .expect_err("wrong platform");
+            assert!(wrong_platform.contains(&format!("is {os}/{architecture}")));
+            assert!(wrong_platform.contains("requires linux/amd64"));
+            assert!(wrong_platform.contains("retry workspace provisioning"));
         }
     }
 }
