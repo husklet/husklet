@@ -90,7 +90,7 @@ fn base(css: &mut String, theme: &Theme) {
          .hl-surface {{ background: {surface}; }}\n\
          * {{ outline-color: {accent}; }}\n\
          .hl-code, .monospace {{ font-family: {mono}; }}\n\
-         .hl-card {{ background: {surface}; border: 1px solid {line}; border-radius: {radius}px; box-shadow: 0 1px 2px rgba(0,0,0,.22); }}\n\
+         .hl-card {{ background: {surface}; border: 1px solid {line}; border-radius: {radius}px; box-shadow: 0 1px 2px rgba(0,0,0,.22), inset 0 1px rgba(255,255,255,.035); }}\n\
          .hl-toolbar, .hl-headerbar {{ background: {raised}; border-bottom: 1px solid {line}; }}\n\
          .hl-sidebar {{ background: {surface}; border-right: 1px solid {line}; }}",
         ground = theme.color(Token::Ground).hex(),
@@ -229,7 +229,6 @@ fn components(css: &mut String, theme: &Theme) {
          .hl-inlinemessage image {{ -gtk-icon-size: 16px; }}\n\
          .hl-avatar {{ background: {accent}; color: {ground}; border-radius: 18px; font-weight: 700; }}\n\
          .hl-banner, .hl-toast {{ background: {raised}; border: 1px solid {line}; border-radius: {radius}px; padding: 8px 12px; }}\n\
-         .hl-card {{ box-shadow: none; }}\n\
          .hl-card.variant-filled {{ background: {raised}; color: {text}; border-color: {line}; }}\n\
          .hl-cardactionarea:hover {{ background: {raised}; }}\n\
          .hl-card > box {{ padding: 10px; }}\n\
@@ -366,6 +365,9 @@ mod tests {
         );
         assert!(css.contains(".hl-listitembutton, .hl-listitembutton.variant-ghost { background: transparent;"));
         assert!(css.contains(".hl-card > box { padding: 10px"));
+        assert!(css.contains(".hl-card { background: #171a20; border: 1px solid #323843;"));
+        assert!(css.contains("box-shadow: 0 1px 2px rgba(0,0,0,.22), inset 0 1px rgba(255,255,255,.035);"));
+        assert!(!css.contains(".hl-card { box-shadow: none;"));
         assert!(css.contains(".hl-card.variant-filled { background: #21252d; color: #f0f2f5; border-color: #323843;"));
         assert!(
             !css.contains(".hl-card.variant-filled { background: #f0f2f5"),
