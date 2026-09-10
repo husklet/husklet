@@ -3401,7 +3401,7 @@ test('deep container methods and subscriptions use exact protocol request shapes
     {
       reply: 'execution',
       with: {
-        id: 'e1',
+        id: executionId,
         container_id: containerId,
         running: true,
         exit_code: 0,
@@ -3435,7 +3435,7 @@ test('deep container methods and subscriptions use exact protocol request shapes
     {
       reply: 'execution',
       with: {
-        id: 'e1',
+        id: executionId,
         container_id: containerId,
         running: false,
         exit_code: 0,
