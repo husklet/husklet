@@ -757,6 +757,52 @@ mod unix {
         if story == "RecoveryState" {
             assert_recovery_state(&root, "wide");
         }
+        if story == "Navigation and transient UI" {
+            let mut menu_items = descendants::<gtk::Button>(&root)
+                .into_iter()
+                .filter(|button| button.has_css_class("hl-menu-item"))
+                .collect::<Vec<_>>();
+            menu_items.reverse();
+            assert_eq!(
+                menu_items.len(),
+                2,
+                "command palette retains both described menu actions"
+            );
+            let captions = menu_items
+                .iter()
+                .flat_map(|button| descendants::<gtk::Label>(&button.clone().upcast()))
+                .map(|label| label.text().to_string())
+                .collect::<Vec<_>>();
+            assert_eq!(captions, ["Open terminal", "Create workspace"]);
+            let wide_metrics = menu_items
+                .iter()
+                .map(|button| (button.accessible_role(), button.width(), button.height()))
+                .collect::<Vec<_>>();
+            assert_eq!(
+                wide_metrics,
+                vec![(gtk::AccessibleRole::MenuItem, 902, 28); 2],
+                "menu actions keep native roles and exact compact wide geometry"
+            );
+            assert!(menu_items[0].grab_focus(), "first menu action accepts keyboard focus");
+            menu_items[0].set_state_flags(gtk::StateFlags::PRELIGHT, false);
+            settle_toolkit();
+            assert!(menu_items[0].has_focus());
+            assert!(menu_items[0].state_flags().contains(gtk::StateFlags::PRELIGHT));
+            capture_story(&realized_window, "Navigation menu wide");
+            realized_window.set_size_request(600, 800);
+            realized_window.set_default_size(600, 800);
+            settle_window_width(&realized_window, 600);
+            assert_contained(&root, "Navigation menu narrow");
+            let narrow_metrics = menu_items
+                .iter()
+                .map(|button| (button.width(), button.height()))
+                .collect::<Vec<_>>();
+            assert_eq!(narrow_metrics, vec![(550, 28); 2]);
+            capture_story(&realized_window, "Navigation menu narrow");
+            realized_window.set_size_request(1_200, 800);
+            realized_window.set_default_size(1_200, 800);
+            settle_window_width(&realized_window, 1_200);
+        }
         capture_story(&realized_window, story);
         if story == "Heading" {
             let specimens = descendants::<gtk::Label>(&root)

@@ -49,6 +49,10 @@ fn controls(css: &mut String, theme: &Theme) {
          .hl-select-option:focus, .hl-select-option:focus-visible {{ outline: none; background: {raised}; color: {text}; border-color: {accent}; box-shadow: inset 0 0 0 1px {accent}; }}\n\
          .hl-select-option.selected {{ background: alpha({accent}, .14); color: {text}; border-color: alpha({accent}, .38); box-shadow: inset 3px 0 0 {accent}; font-weight: 600; }}\n\
          .hl-select-option.selected:focus, .hl-select-option.selected:focus-visible {{ background: alpha({accent}, .14); box-shadow: inset 3px 0 0 {accent}, inset 0 0 0 1px {accent}; }}\n\
+         .hl-menu-item {{ min-height: 28px; padding: 3px 8px; background: transparent; color: {text}; border: 1px solid transparent; border-radius: {radius}px; box-shadow: none; }}\n\
+         .hl-menu-item:hover {{ background: {raised}; border-color: {line}; }}\n\
+         .hl-menu-item:focus, .hl-menu-item:focus-visible {{ outline: none; background: {raised}; border-color: {accent}; box-shadow: inset 0 0 0 1px {accent}; }}\n\
+         .hl-menu-item:disabled {{ background: transparent; color: {faint}; border-color: transparent; }}\n\
          entry:hover, spinbutton:hover, dropdown:hover > button {{ border-color: {dim}; }}\n\
          entry:focus-within, spinbutton:focus-within, textview:focus-within {{ border-color: {accent}; box-shadow: 0 0 0 1px {accent}; }}\n\
          entry:disabled, spinbutton:disabled, textview:disabled, dropdown:disabled, .hl-select:disabled {{ opacity: .62; background: {surface}; }}\n\
@@ -491,6 +495,23 @@ mod tests {
         assert!(css.contains(
             ".hl-select-option.selected:focus, .hl-select-option.selected:focus-visible { background: alpha(#559df7, .14); box-shadow: inset 3px 0 0 #559df7, inset 0 0 0 1px #559df7;"
         ));
+    }
+
+    #[test]
+    fn menu_items_keep_compact_pointer_keyboard_and_disabled_states() {
+        let css = super::sheet(&Theme::dark());
+        assert!(css.contains(
+            ".hl-menu-item { min-height: 28px; padding: 3px 8px; background: transparent; color: #f0f2f5; border: 1px solid transparent; border-radius: 8px; box-shadow: none;"
+        ));
+        assert!(css.contains(".hl-menu-item:hover { background: #21252d; border-color: #323843;"));
+        assert!(css.contains(
+            ".hl-menu-item:focus, .hl-menu-item:focus-visible { outline: none; background: #21252d; border-color: #559df7; box-shadow: inset 0 0 0 1px #559df7;"
+        ));
+        assert!(
+            css.contains(
+                ".hl-menu-item:disabled { background: transparent; color: #87909f; border-color: transparent;"
+            )
+        );
     }
 
     #[test]

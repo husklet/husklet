@@ -15,7 +15,8 @@ pub(crate) fn widget(tag: Tag) -> gtk::Widget {
         Tag::SplitButton => split().upcast(),
         Tag::Fab => floating().upcast(),
         Tag::SpeedDial | Tag::Overflow => dial().upcast(),
-        Tag::SpeedDialAction | Tag::MenuItem | Tag::PaginationItem | Tag::TableSortLabel => axis::item().upcast(),
+        Tag::MenuItem => menu_item().upcast(),
+        Tag::SpeedDialAction | Tag::PaginationItem | Tag::TableSortLabel => axis::item().upcast(),
         // FilePicker is the last button tag routed here. GTK4 has no
         // file-chooser *widget* left: the chooser is `gtk::FileDialog`, which is
         // asynchronous and needs a parent window the adapter does not have at
@@ -49,6 +50,23 @@ fn toggle() -> gtk::ToggleButton {
 fn icon() -> gtk::Button {
     let widget = sized(gtk::Button::new());
     widget.set_icon_name("view-more-symbolic");
+    widget
+}
+
+/// One menu action retains both its optional emblem and its caption. A plain
+/// `gtk::Button` cannot do that: setting its icon replaces the label child.
+fn menu_item() -> gtk::Button {
+    let widget = axis::item();
+    widget.add_css_class("hl-menu-item");
+    widget.set_accessible_role(gtk::AccessibleRole::MenuItem);
+    widget.set_hexpand(true);
+    widget.set_halign(gtk::Align::Fill);
+    let content = axis::row(8);
+    content.append(&slot::emblem_image());
+    let caption = slot::caption_label();
+    caption.set_hexpand(true);
+    content.append(&caption);
+    widget.set_child(Some(&content));
     widget
 }
 
