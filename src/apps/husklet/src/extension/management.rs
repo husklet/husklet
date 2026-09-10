@@ -13,6 +13,21 @@ use super::acquisition::{AcquisitionJob, AcquisitionSnapshot, AcquisitionState, 
 use super::management_events::ExtensionEvents;
 use super::Roster;
 
+trait RemovalCleanup {
+    fn retire(&self) -> Result<(), HostError>;
+    fn purge(self) -> Result<(), HostError>;
+}
+
+impl RemovalCleanup for super::host::ExtensionRemoval {
+    fn retire(&self) -> Result<(), HostError> {
+        super::host::ExtensionRemoval::retire(self)
+    }
+
+    fn purge(self) -> Result<(), HostError> {
+        super::host::ExtensionRemoval::purge(self)
+    }
+}
+
 pub struct ExtensionManagement {
     workspace: WorkspaceConfig,
     acquisitions: ExtensionAcquisitions,
@@ -65,6 +80,23 @@ impl ExtensionManagement {
             self.events.inventory(entries);
         }
         Ok(())
+    }
+
+    fn remove_with<R: RemovalCleanup>(
+        &self,
+        name: ExtensionName,
+        image_digest: &str,
+        cleanup: R,
+    ) -> Result<(), HostError> {
+        // Runtime cleanup can fail transiently. Keep the exact digest-bound
+        // record until it succeeds so the same uninstall remains retryable.
+        cleanup.retire()?;
+        let result = self.roster()?.remove_if_digest(&name, image_digest).map_err(failure);
+        self.changed(result)?;
+        cleanup.purge()?;
+        super::StateBlob::new(&self.workspace.storage_dir(&crate::paths::hl_root()), &name)
+            .map_err(|error| HostError::Failed(error.to_string()))?
+            .purge()
     }
 }
 
@@ -120,12 +152,7 @@ impl ExtensionStore for ExtensionManagement {
         // runs only after the digest-bound record mutation succeeds, so a
         // storage failure cannot leave an installed extension with erased data.
         let removal = super::Workspace::extension_removal(&self.workspace, &name, image_digest)?;
-        let result = self.roster()?.remove_if_digest(&name, image_digest).map_err(failure);
-        self.changed(result)?;
-        removal.finish()?;
-        super::StateBlob::new(&self.workspace.storage_dir(&crate::paths::hl_root()), &name)
-            .map_err(|error| HostError::Failed(error.to_string()))?
-            .purge()
+        self.remove_with(name, image_digest, removal)
     }
 
     fn acquisition_start(&self, reference: &str) -> Result<ExtensionAcquisitionJob, HostError> {
@@ -342,6 +369,25 @@ mod tests {
     use super::*;
     use hl_extension::port::ExtensionStateStore as _;
 
+    struct Cleanup {
+        data: std::path::PathBuf,
+        fail_retire: bool,
+    }
+
+    impl RemovalCleanup for Cleanup {
+        fn retire(&self) -> Result<(), HostError> {
+            if self.fail_retire {
+                Err(HostError::Failed("sidecar removal timed out".into()))
+            } else {
+                Ok(())
+            }
+        }
+
+        fn purge(self) -> Result<(), HostError> {
+            std::fs::remove_dir_all(self.data).map_err(|error| HostError::Failed(error.to_string()))
+        }
+    }
+
     fn workspace(root: &std::path::Path) -> WorkspaceConfig {
         let mut workspace = WorkspaceConfig::new("test", "alpine", hl_ws::Arch::Amd64);
         workspace.storage = Some(root.to_owned());
@@ -526,6 +572,72 @@ mod tests {
         management.remove(name.as_str(), &digest).unwrap();
         assert!(state.read().unwrap().contents.is_empty());
         assert!(!data.exists(), "uninstall must remove the extension's private data");
+    }
+
+    #[test]
+    fn sidecar_cleanup_failure_retains_exact_authority_for_retry() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = workspace(root.path());
+        let management = ExtensionManagement::new(&workspace);
+        let name = ExtensionName::new("postgres").unwrap();
+        let digest = format!("sha256:{}", "c".repeat(64));
+        let manifest = hl_extension::Manifest {
+            containers: hl_extension::ContainerGrant::default(),
+            images: hl_extension::ImageGrant::default(),
+            networks: hl_extension::NetworkGrant::default(),
+            volumes: hl_extension::VolumeGrant::default(),
+            name: name.clone(),
+            display_name: "Postgres".into(),
+            version: "1".into(),
+            protocol: hl_extension::PROTOCOL,
+            capabilities: Grant::new([hl_extension::Capability::StateWrite]),
+            entrypoint: None,
+            activation: hl_extension::Activation::default(),
+            interface: None,
+            pane_providers: Vec::new(),
+            resources: hl_extension::Resources::default(),
+            filesystem: hl_extension::FilesystemGrant::default(),
+            workspace_environment: hl_extension::WorkspaceEnvironmentGrant::default(),
+        };
+        management
+            .roster()
+            .unwrap()
+            .register(&manifest, &digest, &manifest.capabilities, 1)
+            .unwrap();
+        let state = super::super::StateBlob::new(root.path(), &name).unwrap();
+        state.write("absent", b"retry-state").unwrap();
+        let data = root.path().join("extensions/postgres/data");
+        std::fs::create_dir_all(&data).unwrap();
+        std::fs::write(data.join("index.db"), b"retry-data").unwrap();
+
+        let failure = management
+            .remove_with(
+                name.clone(),
+                &digest,
+                Cleanup {
+                    data: data.clone(),
+                    fail_retire: true,
+                },
+            )
+            .expect_err("runtime cleanup fails");
+        assert!(matches!(failure, HostError::Failed(reason) if reason.contains("timed out")));
+        assert_eq!(management.inspect(name.as_str()).unwrap().image_digest, digest);
+        assert_eq!(state.read().unwrap().contents, b"retry-state");
+        assert_eq!(std::fs::read(data.join("index.db")).unwrap(), b"retry-data");
+
+        management
+            .remove_with(
+                name.clone(),
+                &digest,
+                Cleanup {
+                    data: data.clone(),
+                    fail_retire: false,
+                },
+            )
+            .unwrap();
+        assert!(matches!(management.inspect(name.as_str()), Err(HostError::Absent(_))));
+        assert!(state.read().unwrap().contents.is_empty());
+        assert!(!data.exists());
     }
 
     #[test]

@@ -75,11 +75,16 @@ pub struct ExtensionRemoval {
 }
 
 impl ExtensionRemoval {
-    /// Stops the captured sidecar, then deletes only its private data directory.
-    pub fn finish(self) -> Result<(), HostError> {
-        if let Some(bridge) = self.bridge {
-            Sidecar::new(bridge).remove_owned(&self.spec)?;
+    /// Retires the captured runtime while its durable record still exists.
+    pub fn retire(&self) -> Result<(), HostError> {
+        if let Some(bridge) = &self.bridge {
+            Sidecar::new(Arc::clone(bridge)).remove_owned(&self.spec)?;
         }
+        Ok(())
+    }
+
+    /// Deletes private data only after the durable record was forgotten.
+    pub fn purge(self) -> Result<(), HostError> {
         self.spec
             .purge_data()
             .map_err(|error| HostError::Failed(error.to_string()))

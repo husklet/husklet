@@ -34,6 +34,7 @@ use voice::speak;
 pub(crate) use voice::speak_at;
 pub(crate) use voice::Voice;
 
+pub(crate) use workspace::ExtensionRemoval;
 pub use workspace::Workspace;
 
 /// The channel host-sent interface events ride on.
