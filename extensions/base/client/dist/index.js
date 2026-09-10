@@ -618,6 +618,12 @@ export function workspace(session, { signal } = {}) {
         }
         return inventory;
     };
+    const exactTabs = (tabs) => {
+        if (new Set(tabs.map(({ id }) => id)).size !== tabs.length) {
+            throw new TypeError('host returned duplicate tab identities; no tab selection was assumed');
+        }
+        return tabs;
+    };
     const exactExecution = (execution, id, operation) => {
         if (execution.id !== id) {
             throw new TypeError(`host returned ${operation} for execution ${execution.id}, expected ${id}; no execution state was assumed`);
@@ -1353,7 +1359,7 @@ export function workspace(session, { signal } = {}) {
         },
         terminal: {
             panes: async () => exactPaneInventory(expect(await session.call('pane_list'), 'panes')),
-            tabs: async () => expect(await session.call('terminal_tabs'), 'tabs'),
+            tabs: async () => exactTabs(expect(await session.call('terminal_tabs'), 'tabs')),
             topology: async () => expect(await session.call('terminal_topology'), 'topology'),
             openTab: async (title) => expect(await session.call('terminal_open_tab', { title }), 'identity'),
             split: async (slot, division) => expect(await session.call('terminal_split', { slot, division }), 'identity'),
@@ -2270,7 +2276,7 @@ export function workspace(session, { signal } = {}) {
             await stopWatching();
         }
     };
-    api.watchTerminal = (listener) => watch('terminal', 'terminal', listener, 'terminal');
+    api.watchTerminal = (listener) => watch('terminal', 'terminal', (tabs) => listener(exactTabs(tabs)), 'terminal');
     api.watchPaneChanges = (listener) => watch('pane-changes', 'pane_changes', listener, 'pane change');
     api.paneChanges = async function* ({ signal: iteratorSignal } = {}) {
         if (iteratorSignal?.aborted)

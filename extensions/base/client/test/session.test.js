@@ -7277,6 +7277,42 @@ test('real Unix pane inventory rejects duplicate slots and preserves session hea
   );
 });
 
+test('real Unix tab inventory rejects duplicate identities and preserves session health', async () => {
+  let inventories = 0;
+  await withPaneIdentityHost(
+    ['terminals:read'],
+    (_request, socket) => {
+      inventories += 1;
+      const tab = { id: 'tab-a', title: 'Shell', pinned: false, panes: [] };
+      socket.write(
+        encode({
+          channel: 2,
+          kind: KIND.response,
+          payload: {
+            reply: 'tabs',
+            with: inventories === 1 ? [tab, { ...tab, title: 'Replacement' }] : [tab],
+          },
+        }),
+      );
+    },
+    async (session, calls) => {
+      const terminal = workspace(session).terminal;
+      await assert.rejects(terminal.tabs(), /duplicate tab identities/);
+      assert.deepEqual(
+        calls.map(({ call }) => call),
+        ['terminal_tabs'],
+      );
+      assert.deepEqual(await terminal.tabs(), [
+        { id: 'tab-a', title: 'Shell', pinned: false, panes: [] },
+      ]);
+      assert.deepEqual(
+        calls.map(({ call }) => call),
+        ['terminal_tabs', 'terminal_tabs'],
+      );
+    },
+  );
+});
+
 test('real Unix terminal-to-text rejects same-slot replacement and preserves session health', async () => {
   let reads = 0;
   await withPaneIdentityHost(
