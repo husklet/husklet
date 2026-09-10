@@ -1756,8 +1756,15 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
         return inventory;
       },
       list: async () => (await api.networks.inventory()).networks,
-      inspect: async (reference) =>
-        expect(await session.call('network_inspect', { reference }), 'network'),
+      inspect: async (reference) => {
+        const network = expect(await session.call('network_inspect', { reference }), 'network');
+        if (/^[0-9a-fA-F]{32}$/.test(reference) && network.id !== reference) {
+          throw new TypeError(
+            `host returned network ${network.id}, expected ${reference}; no network state was assumed`,
+          );
+        }
+        return network;
+      },
       create: async (name) => expect(await session.call('network_create', { name }), 'identity'),
       remove: (reference) =>
         done('network_remove', { reference: immutableIdentity(reference, [32], 'network') }),
