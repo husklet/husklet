@@ -1984,7 +1984,13 @@ export function workspace(session, { signal } = {}) {
             },
         },
         preferences: {
-            read: async () => expect(await session.call('preference_read', undefined), 'preferences'),
+            read: async () => {
+                const preferences = expect(await session.call('preference_read', undefined), 'preferences');
+                if (new Set(preferences.entries.map(([key]) => key)).size !== preferences.entries.length) {
+                    throw new TypeError('host returned duplicate preference keys; no preference state was assumed');
+                }
+                return preferences;
+            },
             set: async (observed, key, value) => expect(await session.call('preference_set', { observed, key, value }), 'revision'),
             remove: async (observed, key) => expect(await session.call('preference_remove', { observed, key }), 'revision'),
         },

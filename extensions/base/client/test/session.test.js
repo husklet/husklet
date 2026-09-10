@@ -1047,6 +1047,66 @@ test('real Unix credential calls reveal only the named value and preserve CAS fr
   }
 });
 
+test('real Unix preference read rejects duplicate keys without mutation and preserves session health', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-preference-identities-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const calls = [];
+  const connections = new Set();
+  const server = net.createServer((socket) => {
+    connections.add(socket);
+    socket.on('close', () => connections.delete(socket));
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.kind !== KIND.request || frame.channel !== 2) continue;
+        calls.push(frame.payload.call);
+        socket.write(
+          encode({
+            channel: 2,
+            kind: KIND.response,
+            payload: {
+              reply: 'preferences',
+              with: {
+                revision: 7,
+                entries:
+                  calls.length === 1
+                    ? [
+                        ['database', { kind: 'string', value: 'development' }],
+                        ['database', { kind: 'string', value: 'production' }],
+                      ]
+                    : [['database', { kind: 'string', value: 'development' }]],
+              },
+            },
+          }),
+        );
+      }
+    });
+    socket.write(
+      encode({
+        channel: CONTROL,
+        kind: KIND.open,
+        payload: { protocol: 1, peer: 'database-ui', granted: ['preferences:read'] },
+      }),
+    );
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    const preferences = workspace(session).preferences;
+    await assert.rejects(preferences.read(), /duplicate preference keys/);
+    assert.deepEqual(calls, ['preference_read'], 'rejection emits no follow-up or mutation');
+    assert.deepEqual((await preferences.read()).entries, [
+      ['database', { kind: 'string', value: 'development' }],
+    ]);
+    assert.deepEqual(calls, ['preference_read', 'preference_read']);
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('real Unix credential read rejects another key without mutation and preserves session health', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-credential-identity-'));
   const socketPath = path.join(directory, 'host.sock');
