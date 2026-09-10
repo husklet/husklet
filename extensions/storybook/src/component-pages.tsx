@@ -6,6 +6,7 @@ import {
 } from '@husklet/react';
 
 import { ButtonWorkbench } from './button.js';
+import { CardWorkbench } from './card.js';
 import { CheckboxWorkbench } from './checkbox.js';
 import { CommandPaletteStory } from './command-palette.js';
 import { ConfirmationStory } from './confirmation.js';
@@ -30,6 +31,7 @@ import { ComponentDocument, DocumentationSection } from './component-document.js
 type Page = React.ComponentType<Record<string, never>>;
 type NativeWorkbenchName =
   | 'Button'
+  | 'Card'
   | 'Checkbox'
   | 'Entry'
   | 'Expander'
@@ -81,6 +83,7 @@ const compositePages = Object.fromEntries(
 
 const nativeWorkbenchPages = {
   Button: ButtonWorkbench,
+  Card: CardWorkbench,
   Checkbox: CheckboxWorkbench,
   Entry: EntryWorkbench,
   Expander: ExpanderWorkbench,

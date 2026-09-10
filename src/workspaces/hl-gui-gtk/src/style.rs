@@ -229,6 +229,7 @@ fn components(css: &mut String, theme: &Theme) {
          .hl-avatar {{ background: {accent}; color: {ground}; border-radius: 18px; font-weight: 700; }}\n\
          .hl-banner, .hl-toast {{ background: {raised}; border: 1px solid {line}; border-radius: {radius}px; padding: 8px 12px; }}\n\
          .hl-card {{ box-shadow: none; }}\n\
+         .hl-card.variant-filled {{ background: {raised}; color: {text}; border-color: {line}; }}\n\
          .hl-cardactionarea:hover {{ background: {raised}; }}\n\
          .hl-card > box {{ padding: 10px; }}\n\
          .hl-cardactions {{ margin-top: 4px; }}\n\
@@ -364,6 +365,11 @@ mod tests {
         );
         assert!(css.contains(".hl-listitembutton, .hl-listitembutton.variant-ghost { background: transparent;"));
         assert!(css.contains(".hl-card > box { padding: 10px"));
+        assert!(css.contains(".hl-card.variant-filled { background: #21252d; color: #f0f2f5; border-color: #323843;"));
+        assert!(
+            !css.contains(".hl-card.variant-filled { background: #f0f2f5"),
+            "filled Card must not inherit the high-emphasis button inversion"
+        );
     }
 
     #[test]

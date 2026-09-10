@@ -17,6 +17,7 @@ mod unix {
 
     const STORIES: &[&str] = &[
         "Button",
+        "Card",
         "IconButton",
         "Entry",
         "Select",
@@ -912,6 +913,66 @@ mod unix {
             assert_eq!(view.columns().n_items(), 2, "property/value schema was not rendered");
             assert!(view.model().is_some(), "inspector has no virtualized selection model");
             assert_ne!(view.accessible_role(), gtk::AccessibleRole::Generic);
+        }
+        if story == "Card" {
+            let cards = descendants::<gtk::Frame>(&root)
+                .into_iter()
+                .filter(|frame| frame.has_css_class("hl-card"))
+                .collect::<Vec<_>>();
+            assert_eq!(cards.len(), 4, "Card workbench must render four bounded live specimens");
+            assert!(
+                cards
+                    .iter()
+                    .all(|card| card.accessible_role() != gtk::AccessibleRole::Generic)
+            );
+            for card in &cards {
+                let header = card
+                    .label_widget()
+                    .expect("CardHeader occupies the native frame header slot");
+                assert!(
+                    descendants::<gtk::Label>(&header)
+                        .iter()
+                        .any(|label| !label.text().is_empty()),
+                    "Card header has no visible subject"
+                );
+                let body = card.child().expect("Card owns a body");
+                let actions = descendants::<gtk::Box>(&body)
+                    .into_iter()
+                    .find(|candidate| candidate.halign() == gtk::Align::End)
+                    .expect("CardActions remains after content");
+                let content = body.first_child().expect("Card body starts with content");
+                assert!(
+                    content.allocation().y() <= actions.allocation().y(),
+                    "Card actions appeared before its content"
+                );
+                assert!(
+                    descendants::<gtk::Button>(actions.upcast_ref())
+                        .iter()
+                        .all(|button| (28..=36).contains(&button.height())),
+                    "Card actions are not compact controls"
+                );
+            }
+            let long = find::<gtk::Label>(&root, |label| {
+                label
+                    .text()
+                    .starts_with("Long identifiers and operational explanations")
+            });
+            assert!(long.wraps(), "long Card copy does not wrap");
+            assert_contained(&root, "Card wide");
+            realized_window.set_size_request(600, 800);
+            realized_window.set_default_size(600, 800);
+            settle_window_width(&realized_window, 600);
+            assert_contained(&root, "Card narrow");
+            assert!(long.width() <= 552, "long Card copy escaped 16px narrow insets");
+            capture_story(&realized_window, "Card narrow");
+            let (status, stderr) = child.stop();
+            assert!(stderr.is_empty(), "{story} wrote warnings/errors: {stderr}");
+            assert!(
+                !status.success(),
+                "the long-running entrypoint should only end when killed"
+            );
+            std::fs::remove_file(socket).expect("test socket is removed");
+            return;
         }
         if story == "InlineMessage" {
             for (tone, label, icon) in [
