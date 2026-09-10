@@ -1387,9 +1387,15 @@ export function workspace(session, { signal } = {}) {
                 }
                 if (pane.kind === 'terminal') {
                     const snapshot = exactPane(expect(await session.call('terminal_read_pane', { slot, lines }), 'text'), slot, 'terminal text');
+                    if (snapshot.generation !== pane.generation || snapshot.revision !== pane.revision) {
+                        throw new Error(`pane ${slot} changed during bounded text conversion`);
+                    }
                     return { kind: 'terminal', text: snapshot.lines.join('\n'), snapshot };
                 }
                 const snapshot = exactPane(expect(await session.call('pane_semantic_read', { slot }), 'semantics'), slot, 'pane semantics');
+                if (snapshot.generation !== pane.generation || snapshot.revision !== pane.revision) {
+                    throw new Error(`pane ${slot} changed during bounded text conversion`);
+                }
                 return { kind: 'ui', text: semanticXml(snapshot), snapshot };
             },
             readAll: async ({ lines } = {}) => {

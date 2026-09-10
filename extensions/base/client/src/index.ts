@@ -1788,6 +1788,9 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
             slot,
             'terminal text',
           );
+          if (snapshot.generation !== pane.generation || snapshot.revision !== pane.revision) {
+            throw new Error(`pane ${slot} changed during bounded text conversion`);
+          }
           return { kind: 'terminal', text: snapshot.lines.join('\n'), snapshot };
         }
         const snapshot = exactPane(
@@ -1795,6 +1798,9 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
           slot,
           'pane semantics',
         );
+        if (snapshot.generation !== pane.generation || snapshot.revision !== pane.revision) {
+          throw new Error(`pane ${slot} changed during bounded text conversion`);
+        }
         return { kind: 'ui', text: semanticXml(snapshot), snapshot };
       },
       readAll: async ({ lines }: { lines?: number } = {}) => {

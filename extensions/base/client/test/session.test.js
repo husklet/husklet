@@ -6910,6 +6910,63 @@ test('real Unix terminal-to-text rejects text carrying another pane identity', a
   );
 });
 
+test('real Unix terminal-to-text rejects same-slot replacement and preserves session health', async () => {
+  let reads = 0;
+  await withPaneIdentityHost(
+    ['panes:observe', 'terminals:output'],
+    (request, socket) => {
+      if (request.call === 'terminal_read_pane') reads += 1;
+      const payload =
+        request.call === 'pane_list'
+          ? {
+              reply: 'panes',
+              with: {
+                panes: [
+                  {
+                    slot: 'pane-a',
+                    generation: 3,
+                    revision: 8,
+                    kind: 'terminal',
+                    provider: null,
+                    tab: null,
+                    title: 'Shell',
+                    focused: true,
+                  },
+                ],
+                truncated: false,
+              },
+            }
+          : {
+              reply: 'text',
+              with: {
+                slot: 'pane-a',
+                generation: reads === 1 ? 4 : 5,
+                revision: 1,
+                columns: 80,
+                rows: 24,
+                lines: ['replacement'],
+                cursor_column: 0,
+                cursor_row: 0,
+                truncated: false,
+              },
+            };
+      socket.write(encode({ channel: 2, kind: KIND.response, payload }));
+    },
+    async (session, calls) => {
+      await assert.rejects(
+        workspace(session).terminal.toText('pane-a'),
+        /pane pane-a changed during bounded text conversion/,
+      );
+      assert.deepEqual(
+        calls.map(({ call }) => call),
+        ['pane_list', 'terminal_read_pane'],
+      );
+      assert.equal((await workspace(session).terminal.read('pane-a')).generation, 5);
+      assert.equal(calls.at(-1).call, 'terminal_read_pane');
+    },
+  );
+});
+
 test('real Unix execAndWait prevalidates then executes, waits, and reads bounded output in order', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-exec-and-wait-'));
   const socketPath = path.join(directory, 'host.sock');
