@@ -1739,8 +1739,15 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
     images: {
       inventory: async () => expect(await session.call('image_list'), 'images'),
       list: async () => (await api.images.inventory()).images,
-      inspect: async (reference) =>
-        expect(await session.call('image_inspect', { reference }), 'image_details'),
+      inspect: async (reference) => {
+        const image = expect(await session.call('image_inspect', { reference }), 'image_details');
+        if (/^sha256:[0-9a-f]{64}$/.test(reference) && image.id !== reference) {
+          throw new TypeError(
+            `host returned image ${image.id}, expected ${reference}; no image state was assumed`,
+          );
+        }
+        return image;
+      },
       pull: async (
         reference,
         { timeoutMs = 120_000, signal }: { timeoutMs?: number; signal?: AbortSignal } = {},
