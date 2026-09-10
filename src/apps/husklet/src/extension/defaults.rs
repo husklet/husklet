@@ -15,8 +15,11 @@ pub const DEFAULT_EXTENSIONS: [(&str, &str); 1] = [(
 
 /// Acquires, grants, records, and enables the trusted first-party control surface.
 ///
-/// Completed entries are retained when a later acquisition fails, so retrying
-/// provisioning resumes instead of pulling and recording the same image again.
+/// A retry inspects the release reference again before trusting retained state.
+/// Tags are human release coordinates rather than immutable identity: a failed
+/// provisioning attempt may have left a record from an earlier image carrying
+/// the same tag, and the current digest must replace it before the workspace is
+/// allowed to start.
 pub fn install_defaults(workspace: &WorkspaceConfig) -> Result<(), String> {
     install_defaults_with(workspace, Candidate::read)
 }
@@ -28,15 +31,6 @@ fn install_defaults_with(
     let mut roster = Roster::workspace(workspace).map_err(|error| error.to_string())?;
     for (expected, reference) in DEFAULT_EXTENSIONS {
         let name = ExtensionName::new(expected).map_err(|error| error.to_string())?;
-        if let Some(entry) = roster.entries().into_iter().find(|entry| entry.name == name) {
-            match entry.stage {
-                Stage::Duty => continue,
-                Stage::Standby => roster.enable(&name).map_err(|error| error.to_string())?,
-                Stage::Fault { .. } => roster.retry(&name).map_err(|error| error.to_string())?,
-                Stage::Vacancy => unreachable!("entries never contain vacancies"),
-            }
-            continue;
-        }
         let candidate = read(workspace, reference).map_err(|reason| {
             format!(
                 "default extension {expected} {version} is unavailable from public image {reference}: {reason}; check registry access, then retry workspace provisioning",
@@ -49,21 +43,48 @@ fn install_defaults_with(
                 candidate.manifest.name
             ));
         }
-        roster
-            .register_resource_scoped(
-                &candidate.manifest,
-                &candidate.digest,
-                &candidate.manifest.capabilities,
-                &candidate.manifest.containers,
-                &candidate.manifest.images,
-                &candidate.manifest.networks,
-                &candidate.manifest.volumes,
-                &candidate.manifest.filesystem,
-                &candidate.manifest.workspace_environment,
-                moment(),
-            )
-            .map_err(|error| error.to_string())?;
-        roster.enable(&name).map_err(|error| error.to_string())?;
+        if let Some(entry) = roster.entries().into_iter().find(|entry| entry.name == name) {
+            if entry.image_digest != candidate.digest {
+                let update = roster
+                    .prepare_update(&candidate.manifest, &candidate.digest)
+                    .map_err(|error| error.to_string())?;
+                roster
+                    .commit_update_resource_scoped(
+                        update,
+                        &candidate.manifest.capabilities,
+                        &candidate.manifest.containers,
+                        &candidate.manifest.images,
+                        &candidate.manifest.networks,
+                        &candidate.manifest.volumes,
+                        &candidate.manifest.filesystem,
+                        &candidate.manifest.workspace_environment,
+                        moment(),
+                    )
+                    .map_err(|error| error.to_string())?;
+            }
+            match roster.stage(&name) {
+                Stage::Duty => {}
+                Stage::Standby => roster.enable(&name).map_err(|error| error.to_string())?,
+                Stage::Fault { .. } => roster.retry(&name).map_err(|error| error.to_string())?,
+                Stage::Vacancy => unreachable!("the existing default remains installed"),
+            }
+        } else {
+            roster
+                .register_resource_scoped(
+                    &candidate.manifest,
+                    &candidate.digest,
+                    &candidate.manifest.capabilities,
+                    &candidate.manifest.containers,
+                    &candidate.manifest.images,
+                    &candidate.manifest.networks,
+                    &candidate.manifest.volumes,
+                    &candidate.manifest.filesystem,
+                    &candidate.manifest.workspace_environment,
+                    moment(),
+                )
+                .map_err(|error| error.to_string())?;
+            roster.enable(&name).map_err(|error| error.to_string())?;
+        }
     }
     Ok(())
 }
@@ -171,5 +192,60 @@ mod tests {
         assert!(error.contains(env!("CARGO_PKG_VERSION")));
         assert!(error.contains("check registry access"));
         assert!(error.contains("retry workspace provisioning"));
+    }
+
+    #[test]
+    fn retry_replaces_a_same_tag_default_with_the_current_image_digest() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut workspace = WorkspaceConfig::new("demo", "alpine:3.20", hl_ws::Arch::Amd64);
+        workspace.storage = Some(directory.path().join("workspace"));
+        let manifest = Manifest {
+            name: ExtensionName::new("top").unwrap(),
+            display_name: "Top".into(),
+            version: "0.4.0".into(),
+            protocol: hl_extension::PROTOCOL,
+            capabilities: Grant::new([Capability::WorkspaceRead, Capability::Interface]),
+            entrypoint: None,
+            activation: Activation::Workspace,
+            interface: Some(Presentation {
+                tab_title: "Top".into(),
+                icon: None,
+            }),
+            pane_providers: Vec::new(),
+            resources: Resources::default(),
+            containers: hl_extension::ContainerGrant::default(),
+            images: hl_extension::ImageGrant::default(),
+            networks: hl_extension::NetworkGrant::default(),
+            volumes: hl_extension::VolumeGrant::default(),
+            filesystem: hl_extension::FilesystemGrant::default(),
+            workspace_environment: hl_extension::WorkspaceEnvironmentGrant::default(),
+        };
+        // Model interruption after the record was saved but before provisioning
+        // enabled it. The mutable release tag may resolve differently on retry.
+        Roster::workspace(&workspace)
+            .unwrap()
+            .register(&manifest, "sha256:old-top", &manifest.capabilities, 1)
+            .unwrap();
+        assert_eq!(
+            Roster::workspace(&workspace).unwrap().entries()[0].stage,
+            Stage::Standby
+        );
+        let mut acquisitions = 0;
+        install_defaults_with(&workspace, |_, reference| {
+            acquisitions += 1;
+            Ok(Candidate {
+                reference: reference.to_owned(),
+                digest: "sha256:current-top".to_owned(),
+                manifest: manifest.clone(),
+            })
+        })
+        .unwrap();
+
+        assert_eq!(acquisitions, 1, "retry must inspect the current release image");
+        let entries = Roster::workspace(&workspace).unwrap().entries();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].image_digest, "sha256:current-top");
+        assert_eq!(entries[0].version, "0.4.0");
+        assert_eq!(entries[0].stage, Stage::Duty);
     }
 }
