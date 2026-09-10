@@ -439,6 +439,10 @@ impl Sidecar {
             self.remove(target)?;
             return Ok(None);
         }
+        if container.state.activity.paused {
+            self.unpause(spec.container())?;
+            return Ok(Some(Outcome::Resumption));
+        }
         if container.state.activity.running {
             return Ok(Some(Outcome::Reuse));
         }
@@ -472,6 +476,14 @@ impl Sidecar {
         let client = self.bridge.client();
         self.bridge
             .wait(client.containers().start(container))
+            .map_err(|error| failure(&error))
+    }
+
+    /// Resumes a paused extension container before reporting it available.
+    fn unpause(&self, container: &str) -> Result<(), HostError> {
+        let client = self.bridge.client();
+        self.bridge
+            .wait(client.containers().unpause(container))
             .map_err(|error| failure(&error))
     }
 
@@ -774,6 +786,38 @@ mod tests {
                 "GET /v1.43/containers/extension%2Dsample/json?size=false",
             ],
             "one create/start wins and the other caller only reuses it"
+        );
+    }
+
+    #[test]
+    fn ensure_unpauses_a_matching_container_before_reporting_resumption() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let socket = temporary.path().join("docker.sock");
+        let listener = UnixListener::bind(&socket).expect("mock Docker socket");
+        let wanted = spec().generation(42);
+        let signature = wanted.signature();
+        let served = std::thread::spawn(move || {
+            let labels =
+                format!(r#"{{"{SIGNATURE_LABEL}":"{signature}","{NAME_LABEL}":"sample","{GENERATION_LABEL}":"42"}}"#);
+            let paused = inspection("paused-id", &labels).replace("\"Paused\":false", "\"Paused\":true");
+            let mut requests = Vec::new();
+            for (status, body) in [("200 OK", paused.as_bytes()), ("204 No Content", &[])] {
+                let mut stream = accept_bounded(&listener);
+                requests.push(read_request(&mut stream).expect("Docker request"));
+                respond_close(&mut stream, status, body);
+            }
+            requests
+        });
+        let bridge = Arc::new(super::super::Bridge::new(socket).expect("bridge"));
+
+        assert_eq!(Sidecar::new(bridge).ensure(&wanted), Ok(super::Outcome::Resumption));
+        assert_eq!(
+            served.join().expect("daemon joined"),
+            vec![
+                "GET /v1.43/containers/extension%2Dsample/json?size=false",
+                "POST /v1.43/containers/extension%2Dsample/unpause",
+            ],
+            "availability is reported only after the paused process is resumed"
         );
     }
 
