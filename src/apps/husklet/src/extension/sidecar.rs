@@ -437,6 +437,7 @@ impl Sidecar {
             || !sandbox_matches(spec, &container.host_config)
             || !mounts_match(spec, &container.details.metadata.mounts)
             || !process_matches(spec, &container.path, &container.args)
+            || !environment_matches(spec, &container.config.env)
             || !lifecycle_matches(&container.config, &container.network_settings)
             || container.execution != CreateExecution::Interpreted
         {
@@ -617,6 +618,11 @@ fn lifecycle_matches(config: &hl_daemon::api::ContainerConfig, network: &hl_daem
         && config.stop_timeout == 10
         && network.ports.is_empty()
         && network.networks.is_empty()
+}
+
+fn environment_matches(spec: &SidecarSpec, actual: &[String]) -> bool {
+    let expected = spec.request().env.unwrap_or_default();
+    actual.len() == expected.len() && expected.iter().all(|value| actual.contains(value))
 }
 
 fn replacement_target<'a>(
@@ -1057,6 +1063,50 @@ mod tests {
     }
 
     #[test]
+    fn ensure_replaces_a_matching_signature_with_redirected_process_environment() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let socket = temporary.path().join("docker.sock");
+        let listener = UnixListener::bind(&socket).expect("mock Docker socket");
+        let wanted = spec().generation(42);
+        let signature = wanted.signature();
+        let served = std::thread::spawn(move || {
+            let labels =
+                format!(r#"{{"{SIGNATURE_LABEL}":"{signature}","{NAME_LABEL}":"sample","{GENERATION_LABEL}":"42"}}"#);
+            let redirected = inspection("redirected-env-id", &labels).replace(
+                "HUSKLET_EXTENSION_SOCKET=/run/husklet/extension.sock",
+                "HUSKLET_EXTENSION_SOCKET=/tmp/foreign.sock",
+            );
+            let responses = [
+                ("200 OK", redirected.into_bytes()),
+                ("204 No Content", Vec::new()),
+                ("201 Created", br#"{"Id":"fresh-id","Warnings":[]}"#.to_vec()),
+                ("204 No Content", Vec::new()),
+            ];
+            responses
+                .into_iter()
+                .map(|(status, body)| {
+                    let mut stream = accept_bounded(&listener);
+                    let request = read_request(&mut stream).expect("Docker request");
+                    respond_close(&mut stream, status, &body);
+                    request
+                })
+                .collect::<Vec<_>>()
+        });
+        let bridge = Arc::new(super::super::Bridge::new(socket).expect("bridge"));
+
+        assert_eq!(Sidecar::new(bridge).ensure(&wanted), Ok(super::Outcome::Creation));
+        assert_eq!(
+            served.join().expect("daemon joined"),
+            vec![
+                "GET /v1.43/containers/extension%2Dsample/json?size=false",
+                "DELETE /v1.43/containers/redirected%2Denv%2Did?force=true&v=false",
+                "POST /v1.43/containers/create?name=extension%2Dsample",
+                "POST /v1.43/containers/extension%2Dsample/start",
+            ]
+        );
+    }
+
+    #[test]
     fn ensure_replaces_a_matching_signature_running_a_different_program() {
         let temporary = tempfile::tempdir().expect("temporary directory");
         let socket = temporary.path().join("docker.sock");
@@ -1377,9 +1427,16 @@ mod tests {
     }
 
     fn inspection(id: &str, labels: &str) -> String {
-        format!(
+        let mut inspection: serde_json::Value = serde_json::from_str(&format!(
             r#"{{"Id":"{id}","Image":"sha256:aaaa","Mounts":[{{"Type":"bind","Name":"","Source":"/run/sample/extension.sock","Destination":"/run/husklet/extension.sock","Driver":"","Mode":"","RW":true,"Propagation":""}},{{"Type":"bind","Name":"","Source":"/run/sample/data","Destination":"/var/lib/husklet-extension","Driver":"","Mode":"","RW":true,"Propagation":""}}],"Path":"/usr/bin/extension","Args":["--serve"],"Name":"sidecar","Created":"","HuskletExecution":"interpreted","State":{{"Status":"running","Running":true,"Paused":false,"Restarting":false,"OOMKilled":false,"Dead":false,"Pid":1,"ExitCode":0,"Error":"","StartedAt":"","FinishedAt":""}},"RestartCount":0,"Config":{{"ExposedPorts":{{}},"Labels":{labels},"StopSignal":"SIGTERM","StopTimeout":10}},"HostConfig":{{"Memory":268435456,"NanoCpus":1000000000,"PidsLimit":128,"NetworkMode":"none","AutoRemove":false,"RestartPolicy":{{"Name":"no","MaximumRetryCount":0}}}},"NetworkSettings":{{"Ports":{{}},"Networks":{{}}}}}}"#
-        )
+        ))
+        .expect("valid inspection fixture");
+        inspection["Config"]["Env"] = serde_json::json!([
+            "HUSKLET_EXTENSION_DATA=/var/lib/husklet-extension",
+            "HUSKLET_EXTENSION_SOCKET=/run/husklet/extension.sock",
+            "NODE_OPTIONS=--jitless",
+        ]);
+        inspection.to_string()
     }
 
     fn respond_close(stream: &mut std::os::unix::net::UnixStream, status: &str, body: &[u8]) {

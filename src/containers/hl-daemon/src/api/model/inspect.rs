@@ -56,6 +56,8 @@ impl InspectContainer {
 pub struct ContainerConfig {
     pub exposed_ports: BTreeMap<String, serde_json::Value>,
     #[serde(default)]
+    pub env: Vec<String>,
+    #[serde(default)]
     pub labels: BTreeMap<String, String>,
     pub stop_signal: String,
     pub stop_timeout: i64,
@@ -260,6 +262,7 @@ impl From<hl_container::Container> for InspectContainer {
                     .iter()
                     .map(|port| (PortKey::from(*port).to_string(), serde_json::json!({})))
                     .collect(),
+                env: value.spec.process.env.text_records().unwrap_or_default(),
                 labels: value.spec.labels.clone(),
                 stop_signal: Signal::from(value.spec.stop_signal).to_string(),
                 stop_timeout: i64::try_from(value.spec.stop_timeout_seconds).unwrap_or(i64::MAX),
@@ -560,18 +563,23 @@ mod tests {
             "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
                 .parse()
                 .unwrap(),
-            hl_container::ContainerSpec::from_directory("/rootfs", hl_container::Process::new("/bin/server"))
-                .name("web")
-                .execution(hl_container::Execution::Interpreted)
-                .resolver(
-                    hl_container::Resolver::new(
-                        vec!["192.0.2.53".parse().unwrap()],
-                        vec!["service.test".into()],
-                        vec!["ndots:2".into()],
-                    )
-                    .unwrap(),
+            hl_container::ContainerSpec::from_directory(
+                "/rootfs",
+                hl_container::Process::new("/bin/server")
+                    .env("B", "two")
+                    .env("A", "one"),
+            )
+            .name("web")
+            .execution(hl_container::Execution::Interpreted)
+            .resolver(
+                hl_container::Resolver::new(
+                    vec!["192.0.2.53".parse().unwrap()],
+                    vec!["service.test".into()],
+                    vec!["ndots:2".into()],
                 )
-                .restart(hl_container::RestartPolicy::OnFailure { maximum: Some(3) }),
+                .unwrap(),
+            )
+            .restart(hl_container::RestartPolicy::OnFailure { maximum: Some(3) }),
             hl_container::ContainerState::Running {
                 process_id: 7,
                 started_at_ms: 1_000,
@@ -596,6 +604,7 @@ mod tests {
             assert!(inspect.get(key).is_some(), "missing {key}: {inspect}");
         }
         assert_eq!(inspect["Config"]["StopTimeout"], 10);
+        assert_eq!(inspect["Config"]["Env"], serde_json::json!(["A=one", "B=two"]));
         assert_eq!(inspect["HuskletExecution"], "interpreted");
         assert_eq!(inspect["HostConfig"]["AutoRemove"], false);
         assert_eq!(inspect["HostConfig"]["Memory"], 0);

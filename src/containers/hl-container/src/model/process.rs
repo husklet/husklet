@@ -134,6 +134,16 @@ impl Environment {
         }
     }
 
+    /// Returns this environment in the text form exposed by Docker-compatible
+    /// inspection, or `None` when it contains exact non-text records.
+    #[must_use]
+    pub fn text_records(&self) -> Option<Vec<String>> {
+        let Self::Text(values) = self else {
+            return None;
+        };
+        Some(values.iter().map(|(name, value)| format!("{name}={value}")).collect())
+    }
+
     #[must_use]
     pub fn contains(&self, name: &str) -> bool {
         self.records()
@@ -212,6 +222,20 @@ mod environment_tests {
             text.text().unwrap(),
             BTreeMap::from([("NAME".to_owned(), "value".to_owned())])
         );
+    }
+
+    #[test]
+    fn docker_text_records_are_sorted_and_exact_records_are_not_represented() {
+        let mut text = Environment::default();
+        text.insert_text("Z".to_owned(), "last".to_owned());
+        text.insert_text("A".to_owned(), "first".to_owned());
+        assert_eq!(
+            text.text_records(),
+            Some(vec!["A=first".to_owned(), "Z=last".to_owned()])
+        );
+
+        let exact = Environment::Exact(vec![EnvironmentRecord::new(b"RAW", b"value\xff")]);
+        assert_eq!(exact.text_records(), None);
     }
 
     #[test]
