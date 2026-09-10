@@ -59,6 +59,34 @@ impl ObjectImpl for Pane {
         self.parent_constructed();
         let layout = gtk::Box::new(gtk::Orientation::Vertical, 0);
         let paned = gtk::Paned::new(gtk::Orientation::Horizontal);
+        paned.add_css_class("hl-responsive-divider");
+        paned.set_accessible_role(gtk::AccessibleRole::Separator);
+        paned.update_property(&[
+            gtk::accessible::Property::Label("Resize navigation"),
+            gtk::accessible::Property::Description("Drag or use the keyboard to resize the navigation pane"),
+            gtk::accessible::Property::Orientation(gtk::Orientation::Vertical),
+            gtk::accessible::Property::ValueMin(0.0),
+        ]);
+        let responsive = self.obj().downgrade();
+        paned.connect_position_notify(move |paned| {
+            let value = paned.position();
+            let text = format!("{value} pixels");
+            paned.update_property(&[
+                gtk::accessible::Property::ValueNow(f64::from(value)),
+                gtk::accessible::Property::ValueText(&text),
+            ]);
+            if let Some(responsive) = responsive.upgrade() {
+                remember_position(responsive.upcast_ref(), value);
+            }
+        });
+        paned.connect_orientation_notify(|paned| {
+            let separator = match paned.orientation() {
+                gtk::Orientation::Horizontal => gtk::Orientation::Vertical,
+                gtk::Orientation::Vertical => gtk::Orientation::Horizontal,
+                _ => unreachable!("GTK orientations are closed"),
+            };
+            paned.update_property(&[gtk::accessible::Property::Orientation(separator)]);
+        });
         paned.set_resize_start_child(false);
         paned.set_shrink_start_child(false);
         paned.set_resize_end_child(true);
@@ -113,6 +141,7 @@ impl WidgetImpl for Pane {
         layout.measure(gtk::Orientation::Horizontal, -1);
         layout.measure(gtk::Orientation::Vertical, width);
         layout.allocate(width, height, baseline, None);
+        paned.update_property(&[gtk::accessible::Property::ValueMax(f64::from(width))]);
         self.allocating.set(false);
     }
 }

@@ -378,9 +378,7 @@ fn splitter(widget: &gtk::Widget, node: NodeId, slot: &Slot, reports: &Reports) 
     };
     let reports = reports.clone();
     let slot = slot.clone();
-    let responsive = widget.clone();
     paned.connect_position_notify(move |paned| {
-        crate::build::responsive::remember_position(&responsive, paned.position());
         let Some(id) = slot.id() else { return };
         reports.push(Event::Change {
             node,

@@ -833,6 +833,24 @@ mod unix {
                         "{story} rebuilt or lost its document while changing responsive branches"
                     );
                     let navigation = paned.start_child().expect("wide shell retains navigation");
+                    let body = paned.end_child().expect("wide shell retains its document");
+                    assert_eq!(paned.accessible_role(), gtk::AccessibleRole::Separator);
+                    assert!(paned.is_focusable(), "responsive divider is keyboard reachable");
+                    assert!(
+                        paned.has_css_class("hl-responsive-divider"),
+                        "responsive divider exposes its shared interaction chrome"
+                    );
+                    let navigation_bounds = navigation
+                        .compute_bounds(paned)
+                        .expect("navigation belongs to the responsive divider");
+                    let body_bounds = body
+                        .compute_bounds(paned)
+                        .expect("document belongs to the responsive divider");
+                    assert_eq!(
+                        (body_bounds.x() - navigation_bounds.x() - navigation_bounds.width()).round(),
+                        8.0,
+                        "{story} responsive divider must expose an exact 8px interaction target"
+                    );
                     assert!(
                         (238..=242).contains(&navigation.width()),
                         "{story} allocated {}px to its authored 240px navigation",
@@ -966,6 +984,24 @@ mod unix {
                 "adjacent component exposes the native prelight state"
             );
             capture_story(&realized_window, "Button navigation states");
+            let body = paned.end_child().expect("Button document remains beside navigation");
+            let body_before = body.width();
+            paned.set_position(280);
+            root.allocate(1_200, 1_600, -1, None);
+            settle_toolkit();
+            assert_eq!(navigation.width(), 280, "native divider resizes the Storybook rail");
+            assert_eq!(
+                body.width(),
+                body_before - 40,
+                "resizing the rail transfers exactly the same width from the document"
+            );
+            assert!(paned.grab_focus(), "resized divider accepts keyboard focus");
+            assert!(paned.has_focus(), "resized divider exposes its focused handle state");
+            capture_story(&realized_window, "Button resized navigation");
+            paned.set_position(240);
+            root.allocate(1_200, 1_600, -1, None);
+            selected.grab_focus();
+            settle_toolkit();
         }
         if story == "DataTable" {
             settle_toolkit();

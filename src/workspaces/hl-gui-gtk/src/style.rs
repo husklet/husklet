@@ -49,6 +49,18 @@ fn controls(css: &mut String, theme: &Theme) {
          entry.tone-danger, .hl-entry.tone-danger {{ border-color: {danger}; box-shadow: 0 0 0 1px {danger}; }}\n\
          scrolledwindow, viewport, listview, columnview, notebook, frame, paned, expander {{ \
            background: transparent; color: {text}; }}\n\
+         paned.hl-responsive-divider.horizontal > separator {{ min-width: 8px; min-height: 28px; \
+           background-color: transparent; \
+           background-image: linear-gradient(to right, transparent 3px, {dim} 3px, {dim} 5px, transparent 5px); }}\n\
+         paned.hl-responsive-divider.vertical > separator {{ min-height: 8px; min-width: 28px; \
+           background-color: transparent; \
+           background-image: linear-gradient(to bottom, transparent 3px, {dim} 3px, {dim} 5px, transparent 5px); }}\n\
+         paned.hl-responsive-divider.horizontal > separator:hover, paned.hl-responsive-divider.horizontal:focus > separator {{ \
+           background-color: transparent; border-color: {accent}; \
+           background-image: linear-gradient(to right, transparent 3px, {accent} 3px, {accent} 5px, transparent 5px); }}\n\
+         paned.hl-responsive-divider.vertical > separator:hover, paned.hl-responsive-divider.vertical:focus > separator {{ \
+           background-color: transparent; border-color: {accent}; \
+           background-image: linear-gradient(to bottom, transparent 3px, {accent} 3px, {accent} 5px, transparent 5px); }}\n\
          notebook header, notebook tab {{ background: {surface}; color: {dim}; }}\n\
          notebook tab:checked {{ color: {text}; }}\n\
          switch {{ background: {line}; }}\n\
@@ -441,6 +453,20 @@ mod tests {
         assert!(css.contains(".hl-table { background: #0f1115; border: 1px solid #323843;"));
         assert!(css.contains(".hl-tablehead .hl-tablecell { background: #21252d;"));
         assert!(css.contains(".hl-tablecell { min-height: 32px; padding: 6px 8px; border-bottom: 1px solid #323843;"));
+    }
+
+    #[test]
+    fn responsive_divider_has_a_visible_eight_pixel_interaction_target() {
+        let css = super::sheet(&Theme::dark());
+        assert!(css.contains("paned.hl-responsive-divider.horizontal > separator { min-width: 8px; min-height: 28px;"));
+        assert!(css.contains(
+            "background-image: linear-gradient(to right, transparent 3px, #a7aeba 3px, #a7aeba 5px, transparent 5px);"
+        ));
+        assert!(
+            css.contains(
+                "paned.hl-responsive-divider.horizontal > separator:hover, paned.hl-responsive-divider.horizontal:focus > separator"
+            )
+        );
     }
 
     #[test]

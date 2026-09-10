@@ -509,6 +509,44 @@ mod unix {
                     hovered.state_flags().contains(gtk::StateFlags::PRELIGHT),
                     "hovered Top destination exposes the native prelight state"
                 );
+                let paned = widgets_with_class(&root, "hl-responsive-divider")
+                    .into_iter()
+                    .next()
+                    .and_then(|widget| widget.downcast::<gtk::Paned>().ok())
+                    .expect("Top desktop navigation owns a responsive divider");
+                assert_eq!(paned.accessible_role(), gtk::AccessibleRole::Separator);
+                assert!(paned.is_focusable(), "Top divider is keyboard reachable");
+                let navigation = paned.start_child().expect("Top divider retains navigation");
+                let body = paned.end_child().expect("Top divider retains the selected section");
+                let navigation_bounds = navigation
+                    .compute_bounds(&paned)
+                    .expect("Top navigation belongs to its divider");
+                let body_bounds = body.compute_bounds(&paned).expect("Top section belongs to its divider");
+                assert_eq!(
+                    (body_bounds.x() - navigation_bounds.x() - navigation_bounds.width()).round(),
+                    8.0,
+                    "Top responsive divider must expose an exact 8px interaction target"
+                );
+                let body_before = body.width();
+                paned.set_position(200);
+                root.allocate(1_200, 1_600, -1, None);
+                settle_toolkit();
+                assert_eq!(navigation.width(), 200, "native divider resizes the Top rail");
+                assert_eq!(
+                    body.width(),
+                    body_before - 40,
+                    "resizing the Top rail transfers exactly the same width from its content"
+                );
+                assert!(paned.grab_focus(), "resized Top divider accepts keyboard focus");
+                assert!(
+                    paned.has_focus(),
+                    "resized Top divider exposes its focused handle state"
+                );
+                capture(&window, "populated-workspace-resized-wide", 1_200, 800);
+                paned.set_position(160);
+                root.allocate(1_200, 1_600, -1, None);
+                selected.grab_focus();
+                settle_toolkit();
             }
             capture(&window, &format!("{capture_fixture}-{name}-{width_name}"), width, 800);
             if fixture == "populated" && name == "extensions" {
