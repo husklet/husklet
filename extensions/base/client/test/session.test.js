@@ -2312,6 +2312,7 @@ test('real Unix semantic action wait arms before authority and disposes after ch
   const socketPath = path.join(directory, 'host.sock');
   const calls = [];
   const connections = new Set();
+  let replacement = false;
   const server = net.createServer((socket) => {
     connections.add(socket);
     socket.on('close', () => connections.delete(socket));
@@ -2332,8 +2333,8 @@ test('real Unix semantic action wait arms before authority and disposes after ch
                 of: {
                   slot: 'settings',
                   kind: 'native',
-                  generation: 2,
-                  revision: 4,
+                  generation: replacement ? 3 : 2,
+                  revision: replacement ? 1 : 4,
                   coalesced: 0,
                 },
               },
@@ -2351,8 +2352,8 @@ test('real Unix semantic action wait arms before authority and disposes after ch
                   panes: [
                     {
                       slot: 'settings',
-                      generation: 2,
-                      revision: 4,
+                      generation: replacement ? 3 : 2,
+                      revision: replacement ? 1 : 4,
                       kind: 'native',
                       provider: null,
                       tab: null,
@@ -2374,8 +2375,8 @@ test('real Unix semantic action wait arms before authority and disposes after ch
                 reply: 'semantics',
                 with: {
                   slot: 'settings',
-                  generation: 2,
-                  revision: 4,
+                  generation: replacement ? 3 : 2,
+                  revision: replacement ? 1 : 4,
                   truncated: false,
                   root: {
                     id: 0,
@@ -2426,6 +2427,18 @@ test('real Unix semantic action wait arms before authority and disposes after ch
       'pane_semantic_read',
       'event_unsubscribe',
     ]);
+    calls.length = 0;
+    replacement = true;
+    await assert.rejects(
+      workspace(session).terminal.actAndWait('settings', {
+        generation: 2,
+        revision: 4,
+        node: 7,
+        action: 'invoke',
+      }),
+      /semantic action pane was replaced before its result could be verified/,
+    );
+    assert.equal(calls.at(-1), 'event_unsubscribe');
     await session.close();
   } finally {
     for (const connection of connections) connection.destroy();
@@ -6624,10 +6637,10 @@ test('real Unix inspectAndAct validates live semantic authority before revision-
   }
 });
 
-function semanticTree(slot, revision = 4) {
+function semanticTree(slot, revision = 4, generation = 2) {
   return {
     slot,
-    generation: 2,
+    generation,
     revision,
     truncated: false,
     root: {
@@ -6720,7 +6733,7 @@ test('real Unix inspectAndAct rejects wrong pre-action pane identity before muta
   );
 });
 
-test('real Unix inspectAndAct rejects a wrong post-action pane identity', async () => {
+test('real Unix inspectAndAct rejects a replacement generation after mutation', async () => {
   let reads = 0;
   await withPaneIdentityHost(
     ['panes:observe', 'panes:semantic-read', 'panes:semantic-control'],
@@ -6733,7 +6746,7 @@ test('real Unix inspectAndAct rejects a wrong post-action pane identity', async 
             kind: KIND.response,
             payload: {
               reply: 'semantics',
-              with: semanticTree(reads === 1 ? 'pane-a' : 'pane-b', reads === 1 ? 4 : 5),
+              with: semanticTree('pane-a', reads === 1 ? 4 : 1, reads === 1 ? 2 : 3),
             },
           }),
         );
@@ -6762,9 +6775,10 @@ test('real Unix inspectAndAct rejects a wrong post-action pane identity', async 
     async (session, calls) => {
       await assert.rejects(
         workspace(session).terminal.inspectAndAct('pane-a', { node: 7, action: 'invoke' }),
-        /pane semantics for pane pane-b, expected pane-a; no pane state was assumed/,
+        /inspected semantic pane was replaced before action verification/,
       );
       assert.equal(calls.filter(({ call }) => call === 'pane_semantic_action').length, 1);
+      assert.equal((await workspace(session).terminal.semantics('pane-a')).generation, 3);
     },
   );
 });

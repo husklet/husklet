@@ -1319,7 +1319,7 @@ export interface WorkspaceApi {
       | { changed: false; after: Pick<PaneText | PaneSemanticTree, 'generation' | 'revision'> }
     >;
     act(slot: string, action: PaneSemanticAction): Promise<void>;
-    /** Arm pane observation, perform one revision-bound semantic action, then read its changed projection. */
+    /** Arm observation, perform one revision-bound action, and reject pane replacement during verification. */
     actAndWait(
       slot: string,
       action: PaneSemanticAction,
@@ -1328,7 +1328,7 @@ export interface WorkspaceApi {
       | { changed: true; readable: ReadablePane }
       | { changed: false; after: { generation: number; revision: number } }
     >;
-    /** Inspect and validate an enabled advertised action, then invoke it with that exact semantic cursor. */
+    /** Inspect an advertised action, invoke its exact cursor, and reject replacement during verification. */
     inspectAndAct(
       slot: string,
       proposal: { node: number; action: SemanticActionKind; value?: string | null },

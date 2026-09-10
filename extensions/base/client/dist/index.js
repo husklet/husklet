@@ -2632,6 +2632,9 @@ export function workspace(session, { signal } = {}) {
                     after: { generation: action.generation, revision: action.revision },
                 };
             const readable = await api.terminal.toText(slot, { lines });
+            if (readable.snapshot.generation !== action.generation) {
+                throw new Error('semantic action pane was replaced before its result could be verified');
+            }
             if (readable.snapshot.generation === action.generation &&
                 readable.snapshot.revision === action.revision) {
                 throw new Error('pane change did not advance the readable snapshot cursor');
@@ -2709,6 +2712,9 @@ export function workspace(session, { signal } = {}) {
             if (change === null)
                 return { changed: false, before };
             const afterSnapshot = await api.terminal.semantics(slot);
+            if (afterSnapshot.generation !== cursor.generation) {
+                throw new Error('inspected semantic pane was replaced before action verification');
+            }
             if (afterSnapshot.generation === cursor.generation &&
                 afterSnapshot.revision === cursor.revision) {
                 throw new Error('pane change did not advance the semantic tree cursor');
