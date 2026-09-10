@@ -182,6 +182,16 @@ impl<S: Storage> Roster<S> {
         self.installation.stage(name)
     }
 
+    /// Whether the complete persisted declaration and consent match a manifest.
+    /// Reconstructing through [`described`] includes launch-only fields that the
+    /// flattened management entry intentionally does not expose.
+    #[must_use]
+    pub(crate) fn matches_manifest(&self, name: &ExtensionName, manifest: &Manifest) -> bool {
+        self.installation
+            .record(name)
+            .is_some_and(|record| described(record) == *manifest)
+    }
+
     /// Records a first install of `manifest`, granting no more than `consented`.
     ///
     /// The consent is taken as an argument rather than read from the manifest

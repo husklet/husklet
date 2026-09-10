@@ -58,7 +58,7 @@ fn install_defaults_with(
             ));
         }
         if let Some(entry) = roster.entries().into_iter().find(|entry| entry.name == name) {
-            if entry.image_digest != candidate.digest || !matches_trusted_authority(&entry, &candidate.manifest) {
+            if entry.image_digest != candidate.digest || !roster.matches_manifest(&name, &candidate.manifest) {
                 let update = roster
                     .prepare_update(&candidate.manifest, &candidate.digest)
                     .map_err(|error| error.to_string())?;
@@ -101,20 +101,6 @@ fn install_defaults_with(
         }
     }
     Ok(())
-}
-
-fn matches_trusted_authority(entry: &super::Entry, manifest: &Manifest) -> bool {
-    entry.version == manifest.version
-        && entry.display_name == manifest.display_name
-        && entry.interface == manifest.interface
-        && entry.granted == manifest.capabilities
-        && entry.containers == manifest.containers
-        && entry.images == manifest.images
-        && entry.networks == manifest.networks
-        && entry.volumes == manifest.volumes
-        && entry.filesystem == manifest.filesystem
-        && entry.workspace_environment == manifest.workspace_environment
-        && entry.pane_providers == manifest.pane_providers
 }
 
 fn trusted_manifest(name: &str) -> Result<Manifest, String> {
@@ -440,7 +426,47 @@ mod tests {
         assert_eq!(repaired[0].image_digest, "sha256:same-top");
         assert_eq!(repaired[0].granted, trusted.capabilities);
         assert!(!repaired[0].granted.holds(Capability::FilesystemWrite));
-        assert!(matches_trusted_authority(&repaired[0], &trusted));
+        assert!(Roster::workspace(&workspace)
+            .unwrap()
+            .matches_manifest(&trusted.name, &trusted));
         assert_eq!(repaired[0].stage, Stage::Duty);
+    }
+
+    #[test]
+    fn same_digest_retry_repairs_retained_launch_contract_before_enabling() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut workspace = WorkspaceConfig::new("demo", "alpine:3.20", hl_ws::Arch::Amd64);
+        workspace.storage = Some(directory.path().join("workspace"));
+        let trusted = top_manifest();
+        let mut stale = trusted.clone();
+        stale.entrypoint = Some(vec!["/bin/false".to_owned()]);
+        Roster::workspace(&workspace)
+            .unwrap()
+            .register_resource_scoped(
+                &stale,
+                "sha256:same-top",
+                &stale.capabilities,
+                &stale.containers,
+                &stale.images,
+                &stale.networks,
+                &stale.volumes,
+                &stale.filesystem,
+                &stale.workspace_environment,
+                1,
+            )
+            .unwrap();
+
+        install_defaults_with(&workspace, |_, reference| {
+            Ok(Candidate {
+                reference: reference.to_owned(),
+                digest: "sha256:same-top".to_owned(),
+                manifest: trusted.clone(),
+            })
+        })
+        .expect("same-digest launch contract repair");
+
+        let repaired = Roster::workspace(&workspace).unwrap();
+        assert!(repaired.matches_manifest(&trusted.name, &trusted));
+        assert_eq!(repaired.stage(&trusted.name), Stage::Duty);
     }
 }
