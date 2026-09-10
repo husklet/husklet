@@ -675,6 +675,65 @@ test('real Unix workspace inspection rejects another name without mutation and p
   }
 });
 
+test('real Unix workspace inventory rejects duplicate identities and preserves session health', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-workspace-identities-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const calls = [];
+  const connections = new Set();
+  const workspaceState = (running, current) => ({
+    name: 'test-runner',
+    image: 'alpine:3.20',
+    architecture: 'amd64',
+    running,
+    current,
+  });
+  const server = net.createServer((socket) => {
+    connections.add(socket);
+    socket.on('close', () => connections.delete(socket));
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.kind !== KIND.request || frame.channel !== 2) continue;
+        calls.push(frame.payload.call);
+        socket.write(
+          encode({
+            channel: 2,
+            kind: KIND.response,
+            payload: {
+              reply: 'workspaces',
+              with:
+                calls.length === 1
+                  ? [workspaceState(true, true), workspaceState(false, false)]
+                  : [workspaceState(true, true)],
+            },
+          }),
+        );
+      }
+    });
+    socket.write(
+      encode({
+        channel: CONTROL,
+        kind: KIND.open,
+        payload: { protocol: 1, peer: 'test-orchestrator', granted: ['workspaces:read'] },
+      }),
+    );
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    const api = workspace(session);
+    await assert.rejects(api.list(), /duplicate workspace identities/);
+    assert.deepEqual(calls, ['workspace_list'], 'rejection emits no follow-up or mutation');
+    assert.equal((await api.list())[0].name, 'test-runner');
+    assert.deepEqual(calls, ['workspace_list', 'workspace_list']);
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('real Unix extension inspection rejects another name without mutation and preserves session health', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-extension-inspect-'));
   const socketPath = path.join(directory, 'host.sock');

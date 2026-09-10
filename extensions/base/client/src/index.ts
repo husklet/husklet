@@ -937,7 +937,15 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
       return session.grantedCapabilities ?? session.granted;
     },
     info: async () => expect(await session.call('workspace_info'), 'workspace'),
-    list: async () => expect(await session.call('workspace_list'), 'workspaces'),
+    list: async () => {
+      const workspaces = expect(await session.call('workspace_list'), 'workspaces');
+      if (new Set(workspaces.map(({ name }) => name)).size !== workspaces.length) {
+        throw new TypeError(
+          'host returned duplicate workspace identities; no workspace selection was assumed',
+        );
+      }
+      return workspaces;
+    },
     inspect: async (name) =>
       exactWorkspaceConfiguration(
         expect(await session.call('workspace_inspect', { name }), 'workspace_configuration'),
