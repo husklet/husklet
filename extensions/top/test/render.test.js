@@ -2495,12 +2495,13 @@ test('installed extension removal requires final consent and a failure remains r
     enabled: true,
     status: 'running',
   };
+  let installed = extension;
   const stage = host();
   stage.render(
     h(Extensions, {
       api: {
         extensions: {
-          list: async () => [extension],
+          list: async () => (installed ? [installed] : []),
           removeAndWait: async (name, digest) => {
             calls.push([name, digest]);
             removes += 1;
@@ -2508,7 +2509,8 @@ test('installed extension removal requires final consent and a failure remains r
               return new Promise((_, reject) => {
                 rejectRemoval = () => reject(new Error('extension is still stopping'));
               });
-            return { changed: true, extension };
+            installed = null;
+            throw new Error('connection closed before removal reply');
           },
         },
         watchExtensions: async () => () => {},
@@ -2536,7 +2538,12 @@ test('installed extension removal requires final consent and a failure remains r
   await settled();
   await settled();
   assert.equal(calls.length, 2);
-  assert.ok(labelled(stage, 'assistant removed and verified.'));
+  assert.ok(
+    labelled(
+      stage,
+      'assistant removed, but the confirmation reply was lost. Current extension state was verified by refresh.',
+    ),
+  );
 });
 
 test('Top is visibly required and offers no self-disable or self-removal trap', async () => {

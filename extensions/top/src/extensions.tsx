@@ -773,6 +773,23 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
             },
       );
     } catch (cause) {
+      if (action === 'remove') {
+        try {
+          const listing = await api.extensions.list();
+          const current = listing.find((item) => item.name === extension.name);
+          if (!current || current.image_digest !== extension.image_digest) {
+            setInstalled(listing);
+            setLifecycleFailure(null);
+            setNotice({
+              label: `${extension.name} removed, but the confirmation reply was lost. Current extension state was verified by refresh.`,
+              uncertain: false,
+            });
+            return;
+          }
+        } catch {
+          // Preserve the original operation failure when reconciliation is also unavailable.
+        }
+      }
       setLifecycleFailure({ ...operation, detail: message(cause) });
     } finally {
       lifecycleInFlight.current = false;
