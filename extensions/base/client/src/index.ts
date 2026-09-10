@@ -1073,11 +1073,13 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
           const page = await api.containers.processes(id, { snapshot, after, limit });
           snapshot ??= page.snapshot;
           if (page.snapshot !== snapshot) throw new Error('host mixed container process snapshots');
+          const more = page.more;
+          const next = page.next;
           yield page;
-          if (!page.more) return;
-          if (page.next === null || page.next <= after)
+          if (!more) return;
+          if (next === null || next <= after)
             throw new Error('host returned an invalid container process continuation');
-          after = page.next;
+          after = next;
         }
       },
       logs: async (id, { stdout = true, stderr = true } = {}) =>
@@ -1147,10 +1149,13 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
             invalid = 'continued page did not advance its cursor';
           if (invalid)
             throw new ExecutionOutputProtocolError(executionId, cursor, page.next, invalid);
+          const next = page.next;
+          const eof = page.eof;
+          const more = page.more;
           yield page;
-          cursor = page.next;
-          if (page.eof) return;
-          if (!page.more) await outputPoll(pollIntervalMs, signal);
+          cursor = next;
+          if (eof) return;
+          if (!more) await outputPoll(pollIntervalMs, signal);
         }
       },
       waitExecution: async (id, { timeoutMs = 30_000 } = {}) =>
@@ -2013,8 +2018,9 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
           requireFilesystemActive(signal);
           journal = page.journal;
           after = page.next;
+          const more = page.more;
           if (page.truncated || page.changes.length > 0 || page.next !== requestedAfter) yield page;
-          if (page.more) continue;
+          if (more) continue;
           await new Promise<void>((resolve, reject) => {
             const timer = setTimeout(done, pollMs);
             function done() {
@@ -2127,10 +2133,11 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
           const current = stack.at(-1)!;
           if (current.index < current.entries.length) {
             const entry = current.entries[current.index++];
+            const child = entry.directory ? entry.path : null;
             yield entry;
-            if (entry.directory) {
+            if (child !== null) {
               stack.push({
-                path: entry.path,
+                path: child,
                 after: null,
                 observed: null,
                 entries: [],
@@ -2247,9 +2254,11 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
           if (range.identity !== identity) {
             throw new TypeError('host changed filesystem file identity during iteration');
           }
+          const eof = range.eof;
+          const next = cursor + range.contents.length;
           yield range;
-          if (range.eof) return;
-          cursor += range.contents.length;
+          if (eof) return;
+          cursor = next;
         }
       },
       readText: async (

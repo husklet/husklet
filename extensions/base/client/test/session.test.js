@@ -1508,7 +1508,10 @@ test('real Unix filesystem iterators page recursively, stream stable chunks, and
     const session = await connect({ path: socketPath });
     const host = workspace(session);
     const walk = host.files.walk('src', { pageSize: 2 });
-    assert.equal((await walk.next()).value.path, 'src/a.ts');
+    const firstEntry = (await walk.next()).value;
+    assert.equal(firstEntry.path, 'src/a.ts');
+    firstEntry.path = 'src/redirected';
+    firstEntry.directory = true;
     await new Promise((resolve) => setTimeout(resolve, 20));
     assert.equal(
       requests.filter(({ call }) => call === 'filesystem_list_page').length,
@@ -1530,11 +1533,23 @@ test('real Unix filesystem iterators page recursively, stream stable chunks, and
     assert.equal(rangeCalls, 1, 'cancellation between chunks sends no ambiguous ordered call');
     assert.equal((await host.info()).name, 'demo', 'local cancellation leaves the session usable');
 
-    const chunks = [];
-    for await (const range of host.files.readChunks('src/a.ts', { chunkBytes: 2 })) {
-      chunks.push(...range.contents);
-    }
+    const stable = host.files.readChunks('src/a.ts', { chunkBytes: 2 });
+    const firstRange = (await stable.next()).value;
+    const chunks = [...firstRange.contents];
+    firstRange.contents.length = 0;
+    firstRange.eof = true;
+    const secondRange = (await stable.next()).value;
+    chunks.push(...secondRange.contents);
     assert.deepEqual(chunks, [65, 66, 67, 68]);
+    assert.equal((await stable.next()).done, true);
+    assert.equal(
+      requests.some(
+        ({ call, with: value }) =>
+          call === 'filesystem_list_page' && value.path === 'src/redirected',
+      ),
+      false,
+      'mutating a yielded entry cannot redirect recursive traversal',
+    );
     await assert.rejects(
       host.files.readRange('src/bad.ts'),
       /host returned an inconsistent filesystem file range/,

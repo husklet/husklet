@@ -918,7 +918,7 @@ export interface WorkspaceApi {
             after?: number;
             limit?: number;
         }): Promise<ProcessList>;
-        /** Traverse one immutable process snapshot without mixing pages from later samples. */
+        /** Traverse one immutable snapshot; yielded-page mutation cannot alter its continuation. */
         processPages(id: string, options?: {
             limit?: number;
             signal?: AbortSignal;
@@ -938,7 +938,7 @@ export interface WorkspaceApi {
             limit?: number;
         }): Promise<ExecutionOutputPage>;
         /**
-         * Pulls bounded output pages with consumer-driven backpressure until EOF.
+         * Pulls bounded output pages with consumer-driven backpressure until EOF; continuation is captured before yield.
          * Cancellation is checked between calls and never tears down the ordered session.
          */
         executionOutputPages(id: string, options?: {
@@ -1543,6 +1543,7 @@ export interface WorkspaceApi {
             limit?: number;
         }): Promise<DirectoryPage>;
         /** Depth-first traversal with bounded pages and memory proportional to active directory depth. */
+        /** Recursively walk with consumer-driven paging; yielded entries cannot redirect traversal. */
         walk(path: string, options?: {
             pageSize?: number;
             signal?: AbortSignal;
@@ -1558,6 +1559,7 @@ export interface WorkspaceApi {
             observed?: string | null;
         }>): Promise<FileRange[]>;
         /** Reads a stable file identity as consumer-driven bounded chunks until EOF. */
+        /** Read identity-pinned ranges; yielded-range mutation cannot alter offset or completion. */
         readChunks(path: string, options?: {
             offset?: number;
             chunkBytes?: number;

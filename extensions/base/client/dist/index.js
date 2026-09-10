@@ -814,12 +814,14 @@ export function workspace(session, { signal } = {}) {
                     snapshot ??= page.snapshot;
                     if (page.snapshot !== snapshot)
                         throw new Error('host mixed container process snapshots');
+                    const more = page.more;
+                    const next = page.next;
                     yield page;
-                    if (!page.more)
+                    if (!more)
                         return;
-                    if (page.next === null || page.next <= after)
+                    if (next === null || next <= after)
                         throw new Error('host returned an invalid container process continuation');
-                    after = page.next;
+                    after = next;
                 }
             },
             logs: async (id, { stdout = true, stderr = true } = {}) => expect(await session.call('container_logs', { id, stdout, stderr }), 'logs'),
@@ -868,11 +870,14 @@ export function workspace(session, { signal } = {}) {
                         invalid = 'continued page did not advance its cursor';
                     if (invalid)
                         throw new ExecutionOutputProtocolError(executionId, cursor, page.next, invalid);
+                    const next = page.next;
+                    const eof = page.eof;
+                    const more = page.more;
                     yield page;
-                    cursor = page.next;
-                    if (page.eof)
+                    cursor = next;
+                    if (eof)
                         return;
-                    if (!page.more)
+                    if (!more)
                         await outputPoll(pollIntervalMs, signal);
                 }
             },
@@ -1555,9 +1560,10 @@ export function workspace(session, { signal } = {}) {
                     requireFilesystemActive(signal);
                     journal = page.journal;
                     after = page.next;
+                    const more = page.more;
                     if (page.truncated || page.changes.length > 0 || page.next !== requestedAfter)
                         yield page;
-                    if (page.more)
+                    if (more)
                         continue;
                     await new Promise((resolve, reject) => {
                         const timer = setTimeout(done, pollMs);
@@ -1645,10 +1651,11 @@ export function workspace(session, { signal } = {}) {
                     const current = stack.at(-1);
                     if (current.index < current.entries.length) {
                         const entry = current.entries[current.index++];
+                        const child = entry.directory ? entry.path : null;
                         yield entry;
-                        if (entry.directory) {
+                        if (child !== null) {
                             stack.push({
-                                path: entry.path,
+                                path: child,
                                 after: null,
                                 observed: null,
                                 entries: [],
@@ -1738,10 +1745,12 @@ export function workspace(session, { signal } = {}) {
                     if (range.identity !== identity) {
                         throw new TypeError('host changed filesystem file identity during iteration');
                     }
+                    const eof = range.eof;
+                    const next = cursor + range.contents.length;
                     yield range;
-                    if (range.eof)
+                    if (eof)
                         return;
-                    cursor += range.contents.length;
+                    cursor = next;
                 }
             },
             readText: async (path, { maxBytes, chunkBytes = 65_536, observed = null, signal, }) => {

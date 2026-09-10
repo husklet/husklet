@@ -2036,6 +2036,55 @@ test('streaming execution applies callback backpressure and cancels callback fai
   stage.server.close();
 });
 
+test('mutable yielded pages cannot corrupt process or output continuation', async () => {
+  const api = workspace({
+    granted: ['containers:read'],
+    call() {
+      throw new Error('test replaces the paged methods');
+    },
+    onEvent() {
+      return () => {};
+    },
+  });
+  let processCalls = 0;
+  api.containers.processes = async () => {
+    processCalls += 1;
+    return processCalls === 1
+      ? { processes: [], snapshot: 'snapshot-1', next: 1, more: true }
+      : { processes: [], snapshot: 'snapshot-1', next: null, more: false };
+  };
+  const processes = api.containers.processPages('c'.repeat(64), { limit: 1 });
+  const processPage = (await processes.next()).value;
+  processPage.more = false;
+  processPage.next = null;
+  assert.equal((await processes.next()).done, false);
+  assert.equal(processCalls, 2);
+
+  let outputCalls = 0;
+  api.containers.executionOutput = async () => {
+    outputCalls += 1;
+    return outputCalls === 1
+      ? {
+          entries: [{ sequence: 1, timestamp_ms: 1, stream: 'stdout', bytes: [1] }],
+          next: 1,
+          more: true,
+          eof: false,
+          gap: false,
+        }
+      : { entries: [], next: 1, more: false, eof: true, gap: false };
+  };
+  const output = api.containers.executionOutputPages('e'.repeat(32), {
+    limit: 1,
+    pollIntervalMs: 10,
+  });
+  const outputPage = (await output.next()).value;
+  outputPage.next = 0;
+  outputPage.more = false;
+  outputPage.eof = true;
+  assert.equal((await output.next()).done, false);
+  assert.equal(outputCalls, 2);
+});
+
 test('pre-aborted streaming execution never starts a container command', async () => {
   const stage = await pair();
   await frames(stage.host)();
