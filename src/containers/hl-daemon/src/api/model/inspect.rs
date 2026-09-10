@@ -19,6 +19,8 @@ pub struct InspectContainer {
     pub args: Vec<String>,
     pub name: String,
     pub created: String,
+    #[serde(default, rename = "HuskletExecution")]
+    pub execution: super::CreateExecution,
     pub state: ContainerState,
     pub restart_count: i64,
     pub config: ContainerConfig,
@@ -228,6 +230,7 @@ impl From<hl_container::Container> for InspectContainer {
                 .map(|name| format!("/{name}"))
                 .unwrap_or_default(),
             created: Timestamp::from_millis(value.created_at_ms).to_string(),
+            execution: value.spec.execution.into(),
             state: ContainerState {
                 status: lifecycle.status.to_string(),
                 activity: lifecycle.activity,
@@ -559,6 +562,7 @@ mod tests {
                 .unwrap(),
             hl_container::ContainerSpec::from_directory("/rootfs", hl_container::Process::new("/bin/server"))
                 .name("web")
+                .execution(hl_container::Execution::Interpreted)
                 .resolver(
                     hl_container::Resolver::new(
                         vec!["192.0.2.53".parse().unwrap()],
@@ -581,6 +585,7 @@ mod tests {
             "Name",
             "Image",
             "Created",
+            "HuskletExecution",
             "State",
             "Config",
             "HostConfig",
@@ -591,6 +596,7 @@ mod tests {
             assert!(inspect.get(key).is_some(), "missing {key}: {inspect}");
         }
         assert_eq!(inspect["Config"]["StopTimeout"], 10);
+        assert_eq!(inspect["HuskletExecution"], "interpreted");
         assert_eq!(inspect["HostConfig"]["AutoRemove"], false);
         assert_eq!(inspect["HostConfig"]["Memory"], 0);
         assert_eq!(inspect["HostConfig"]["NanoCpus"], 0);

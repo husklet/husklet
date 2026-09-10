@@ -67,6 +67,18 @@ impl CreateExecution {
     }
 }
 
+#[cfg(feature = "runtime")]
+impl From<hl_container::Execution> for CreateExecution {
+    fn from(value: hl_container::Execution) -> Self {
+        match value {
+            hl_container::Execution::Auto => Self::Auto,
+            hl_container::Execution::Interpreted => Self::Interpreted,
+            hl_container::Execution::Translit | hl_container::Execution::Translated { .. } => Self::Translit,
+            hl_container::Execution::Native { .. } => Self::Native,
+        }
+    }
+}
+
 /// Docker create-time network endpoint selection.
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "PascalCase")]

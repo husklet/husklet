@@ -438,6 +438,7 @@ impl Sidecar {
             || !mounts_match(spec, &container.details.metadata.mounts)
             || !process_matches(spec, &container.path, &container.args)
             || !lifecycle_matches(&container.config, &container.network_settings)
+            || container.execution != CreateExecution::Interpreted
         {
             let target = replacement_target(spec, &container.config.labels, &container.details.metadata.id)?;
             self.remove(target)?;
@@ -1138,6 +1139,50 @@ mod tests {
     }
 
     #[test]
+    fn ensure_replaces_a_matching_signature_using_the_wrong_execution_backend() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let socket = temporary.path().join("docker.sock");
+        let listener = UnixListener::bind(&socket).expect("mock Docker socket");
+        let wanted = spec().generation(42);
+        let signature = wanted.signature();
+        let served = std::thread::spawn(move || {
+            let labels =
+                format!(r#"{{"{SIGNATURE_LABEL}":"{signature}","{NAME_LABEL}":"sample","{GENERATION_LABEL}":"42"}}"#);
+            let native = inspection("native-id", &labels).replace(
+                "\"HuskletExecution\":\"interpreted\"",
+                "\"HuskletExecution\":\"native\"",
+            );
+            let responses = [
+                ("200 OK", native.into_bytes()),
+                ("204 No Content", Vec::new()),
+                ("201 Created", br#"{"Id":"fresh-id","Warnings":[]}"#.to_vec()),
+                ("204 No Content", Vec::new()),
+            ];
+            responses
+                .into_iter()
+                .map(|(status, body)| {
+                    let mut stream = accept_bounded(&listener);
+                    let request = read_request(&mut stream).expect("Docker request");
+                    respond_close(&mut stream, status, &body);
+                    request
+                })
+                .collect::<Vec<_>>()
+        });
+        let bridge = Arc::new(super::super::Bridge::new(socket).expect("bridge"));
+
+        assert_eq!(Sidecar::new(bridge).ensure(&wanted), Ok(super::Outcome::Creation));
+        assert_eq!(
+            served.join().expect("daemon joined"),
+            vec![
+                "GET /v1.43/containers/extension%2Dsample/json?size=false",
+                "DELETE /v1.43/containers/native%2Did?force=true&v=false",
+                "POST /v1.43/containers/create?name=extension%2Dsample",
+                "POST /v1.43/containers/extension%2Dsample/start",
+            ]
+        );
+    }
+
+    #[test]
     fn owned_stop_uses_real_transport_and_never_addresses_a_replacement_name() {
         for (actual, id, expected_requests) in [
             (Some(spec().signature()), "immutable-old-id", 2),
@@ -1333,7 +1378,7 @@ mod tests {
 
     fn inspection(id: &str, labels: &str) -> String {
         format!(
-            r#"{{"Id":"{id}","Image":"sha256:aaaa","Mounts":[{{"Type":"bind","Name":"","Source":"/run/sample/extension.sock","Destination":"/run/husklet/extension.sock","Driver":"","Mode":"","RW":true,"Propagation":""}},{{"Type":"bind","Name":"","Source":"/run/sample/data","Destination":"/var/lib/husklet-extension","Driver":"","Mode":"","RW":true,"Propagation":""}}],"Path":"/usr/bin/extension","Args":["--serve"],"Name":"sidecar","Created":"","State":{{"Status":"running","Running":true,"Paused":false,"Restarting":false,"OOMKilled":false,"Dead":false,"Pid":1,"ExitCode":0,"Error":"","StartedAt":"","FinishedAt":""}},"RestartCount":0,"Config":{{"ExposedPorts":{{}},"Labels":{labels},"StopSignal":"SIGTERM","StopTimeout":10}},"HostConfig":{{"Memory":268435456,"NanoCpus":1000000000,"PidsLimit":128,"NetworkMode":"none","AutoRemove":false,"RestartPolicy":{{"Name":"no","MaximumRetryCount":0}}}},"NetworkSettings":{{"Ports":{{}},"Networks":{{}}}}}}"#
+            r#"{{"Id":"{id}","Image":"sha256:aaaa","Mounts":[{{"Type":"bind","Name":"","Source":"/run/sample/extension.sock","Destination":"/run/husklet/extension.sock","Driver":"","Mode":"","RW":true,"Propagation":""}},{{"Type":"bind","Name":"","Source":"/run/sample/data","Destination":"/var/lib/husklet-extension","Driver":"","Mode":"","RW":true,"Propagation":""}}],"Path":"/usr/bin/extension","Args":["--serve"],"Name":"sidecar","Created":"","HuskletExecution":"interpreted","State":{{"Status":"running","Running":true,"Paused":false,"Restarting":false,"OOMKilled":false,"Dead":false,"Pid":1,"ExitCode":0,"Error":"","StartedAt":"","FinishedAt":""}},"RestartCount":0,"Config":{{"ExposedPorts":{{}},"Labels":{labels},"StopSignal":"SIGTERM","StopTimeout":10}},"HostConfig":{{"Memory":268435456,"NanoCpus":1000000000,"PidsLimit":128,"NetworkMode":"none","AutoRemove":false,"RestartPolicy":{{"Name":"no","MaximumRetryCount":0}}}},"NetworkSettings":{{"Ports":{{}},"Networks":{{}}}}}}"#
         )
     }
 
