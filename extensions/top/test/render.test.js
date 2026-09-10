@@ -1074,6 +1074,11 @@ test('extension discovery reviews the first-party Storybook without requiring a 
   await settled();
   selectExtensionMode(stage, 'Discover');
   await settled();
+  assert.deepEqual(
+    taggedProperty(stage, 'Review access', 'Button', 'Size'),
+    { ControlSize: 'Small' },
+    'new-extension review keeps its catalogue card compact',
+  );
   invoke(stage, 'Review access');
   await settled();
   await settled();
@@ -1431,12 +1436,22 @@ test('an installed catalogue extension exposes its update review without retypin
     }),
   );
   await settled();
+  assert.deepEqual(
+    taggedProperty(stage, 'Review update', 'Button', 'Size'),
+    { ControlSize: 'Small' },
+    'installed update review keeps its management card compact',
+  );
   selectExtensionMode(stage, 'Discover');
   await settled();
   assert.equal(
     labelledInCard(stage, 'Component playground', 'Review update').length,
     1,
     'the Discover update card owns an immediate review action',
+  );
+  assert.deepEqual(
+    taggedProperty(stage, 'Review update', 'Button', 'Size'),
+    { ControlSize: 'Small' },
+    'the Discover update action keeps catalogue cards compact',
   );
   assert.ok(labelled(stage, 'Update to Version 2.0.0 · Compatibility not declared'));
   assert.equal(
@@ -2581,6 +2596,11 @@ test('installed extension lifecycle reconciles a lost reply without masking a re
   );
   await settled();
 
+  assert.deepEqual(
+    taggedProperty(stage, 'Enable', 'Button', 'Size'),
+    { ControlSize: 'Small' },
+    'the installed lifecycle action keeps its card compact',
+  );
   invoke(stage, 'Enable');
   await settled();
   await settled();
@@ -2716,6 +2736,11 @@ test('installed extensions expose truthful enabled, disabled, fault and retry st
     'fault details are separated from the bounded status badge',
   );
   assert.ok(labelled(stage, 'Retry'));
+  assert.deepEqual(
+    taggedProperty(stage, 'Retry', 'Button', 'Size'),
+    { ControlSize: 'Small' },
+    'fault recovery keeps the installed card compact',
+  );
   invoke(stage, 'Retry');
   await settled();
   assert.ok(labelled(stage, 'Retrying assistant…'));

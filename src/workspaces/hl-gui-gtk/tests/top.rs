@@ -702,13 +702,29 @@ mod unix {
             assert!(!has_placeholder(&discover_root, "Search installed"));
             assert!(has_label(&discover_root, "19 of 20 extensions"));
             let review = find_tooltip_button(&discover_root, "Review the 1.0.0 update for Developer Tool 01");
+            let review_access = find_tooltip_button(&discover_root, "Review access requested by Developer Tool 02");
             assert!(review.is_sensitive(), "compatible Discover update is actionable");
+            for (label, action) in [("update", &review), ("access", &review_access)] {
+                assert_eq!(action.accessible_role(), gtk::AccessibleRole::Button);
+                assert!(action.is_focusable(), "Discover {label} action is keyboard reachable");
+                assert!(
+                    action.has_css_class("size-small"),
+                    "Discover {label} action uses the compact tier"
+                );
+            }
             for (width_name, width) in [("wide", 1_200), ("narrow", 600)] {
                 window.set_default_size(width, 800);
                 window.set_size_request(width, 800);
                 settle_toolkit();
                 discover_root.allocate(width, 1_600, -1, None);
                 assert_contained(&discover_root, &format!("discover/extensions/{width_name}"));
+                for (label, action) in [("update", &review), ("access", &review_access)] {
+                    assert_eq!(
+                        action.height(),
+                        28,
+                        "{width_name} Discover {label} action control height"
+                    );
+                }
                 assert!(
                     vertical_end(&discover_root, review.upcast_ref()) <= 800,
                     "{width_name} Discover update action fell below the first viewport"
@@ -1758,6 +1774,19 @@ mod unix {
             vertical_end(root, &first) <= 780,
             "{case} first installed card was not completely visible in the 800px viewport"
         );
+        for label in ["Retry", "Review update", "Enable"] {
+            let Some(action) = find_button_optional(root, label) else {
+                assert_eq!(label, "Review update", "{case} omitted required {label} action");
+                continue;
+            };
+            assert_eq!(action.accessible_role(), gtk::AccessibleRole::Button);
+            assert!(action.is_focusable(), "{case} {label} action is keyboard reachable");
+            assert!(
+                action.has_css_class("size-small"),
+                "{case} {label} action uses the compact card tier"
+            );
+            assert_eq!(action.height(), 28, "{case} {label} action control height");
+        }
         let expected_visible = if width == 600 { 1 } else { 3 };
         let visible = cards
             .iter()

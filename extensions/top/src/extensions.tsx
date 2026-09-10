@@ -1194,6 +1194,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                                 <Button
                                   label="Review update"
                                   tooltip={`Review the ${entry.version} update for ${entry.title}`}
+                                  size="small"
                                   variant="filled"
                                   tone="accent"
                                   enabled={!busy && compatibility.compatible !== false}
@@ -1205,6 +1206,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                                 <Button
                                   label="Review access"
                                   tooltip={`Review access requested by ${entry.title}`}
+                                  size="small"
                                   variant="filled"
                                   tone="accent"
                                   enabled={!busy && compatibility.compatible !== false}
@@ -1848,6 +1850,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                                 <Button
                                   key="review-update"
                                   label="Review update"
+                                  size="small"
                                   variant="filled"
                                   tone="accent"
                                   enabled={!busy && updateCompatibility?.compatible !== false}
@@ -1860,6 +1863,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                                 <Button
                                   key="lifecycle"
                                   label="Retry"
+                                  size="small"
                                   variant="outline"
                                   tone="accent"
                                   enabled={!busy}
@@ -1869,6 +1873,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                                 <Button
                                   key="lifecycle"
                                   label="Enable"
+                                  size="small"
                                   variant="outline"
                                   tone="accent"
                                   enabled={!busy}
