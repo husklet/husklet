@@ -436,6 +436,7 @@ impl Sidecar {
             || !image_matches(spec, &container.details.metadata.image)
             || !sandbox_matches(spec, &container.host_config)
             || !mounts_match(spec, &container.details.metadata.mounts)
+            || !process_matches(spec, &container.path, &container.args)
         {
             let target = replacement_target(spec, &container.config.labels, &container.details.metadata.id)?;
             self.remove(target)?;
@@ -584,6 +585,28 @@ fn mounts_match(spec: &SidecarSpec, actual: &[hl_daemon::api::MountPoint]) -> bo
                     && mount.read_write
             })
         })
+}
+
+fn process_matches(spec: &SidecarSpec, program: &str, arguments: &[String]) -> bool {
+    let (expected_program, entrypoint_arguments) = spec.entrypoint.split_first().map_or_else(
+        || {
+            spec.command
+                .split_first()
+                .map_or(("", &[][..]), |(program, args)| (program.as_str(), args))
+        },
+        |(program, args)| (program.as_str(), args),
+    );
+    let expected_arguments = entrypoint_arguments.iter().chain(
+        (!spec.entrypoint.is_empty())
+            .then_some(spec.command.as_slice())
+            .into_iter()
+            .flatten(),
+    );
+    program == expected_program
+        && arguments
+            .iter()
+            .map(String::as_str)
+            .eq(expected_arguments.map(String::as_str))
 }
 
 fn replacement_target<'a>(
@@ -1024,6 +1047,47 @@ mod tests {
     }
 
     #[test]
+    fn ensure_replaces_a_matching_signature_running_a_different_program() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let socket = temporary.path().join("docker.sock");
+        let listener = UnixListener::bind(&socket).expect("mock Docker socket");
+        let wanted = spec().generation(42);
+        let signature = wanted.signature();
+        let served = std::thread::spawn(move || {
+            let labels =
+                format!(r#"{{"{SIGNATURE_LABEL}":"{signature}","{NAME_LABEL}":"sample","{GENERATION_LABEL}":"42"}}"#);
+            let redirected = inspection("redirected-id", &labels).replace("/usr/bin/extension", "/bin/sh");
+            let responses = [
+                ("200 OK", redirected.into_bytes()),
+                ("204 No Content", Vec::new()),
+                ("201 Created", br#"{"Id":"fresh-id","Warnings":[]}"#.to_vec()),
+                ("204 No Content", Vec::new()),
+            ];
+            responses
+                .into_iter()
+                .map(|(status, body)| {
+                    let mut stream = accept_bounded(&listener);
+                    let request = read_request(&mut stream).expect("Docker request");
+                    respond_close(&mut stream, status, &body);
+                    request
+                })
+                .collect::<Vec<_>>()
+        });
+        let bridge = Arc::new(super::super::Bridge::new(socket).expect("bridge"));
+
+        assert_eq!(Sidecar::new(bridge).ensure(&wanted), Ok(super::Outcome::Creation));
+        assert_eq!(
+            served.join().expect("daemon joined"),
+            vec![
+                "GET /v1.43/containers/extension%2Dsample/json?size=false",
+                "DELETE /v1.43/containers/redirected%2Did?force=true&v=false",
+                "POST /v1.43/containers/create?name=extension%2Dsample",
+                "POST /v1.43/containers/extension%2Dsample/start",
+            ]
+        );
+    }
+
+    #[test]
     fn owned_stop_uses_real_transport_and_never_addresses_a_replacement_name() {
         for (actual, id, expected_requests) in [
             (Some(spec().signature()), "immutable-old-id", 2),
@@ -1219,7 +1283,7 @@ mod tests {
 
     fn inspection(id: &str, labels: &str) -> String {
         format!(
-            r#"{{"Id":"{id}","Image":"sha256:aaaa","Mounts":[{{"Type":"bind","Name":"","Source":"/run/sample/extension.sock","Destination":"/run/husklet/extension.sock","Driver":"","Mode":"","RW":true,"Propagation":""}},{{"Type":"bind","Name":"","Source":"/run/sample/data","Destination":"/var/lib/husklet-extension","Driver":"","Mode":"","RW":true,"Propagation":""}}],"Path":"/extension","Args":[],"Name":"sidecar","Created":"","State":{{"Status":"running","Running":true,"Paused":false,"Restarting":false,"OOMKilled":false,"Dead":false,"Pid":1,"ExitCode":0,"Error":"","StartedAt":"","FinishedAt":""}},"RestartCount":0,"Config":{{"ExposedPorts":{{}},"Labels":{labels},"StopSignal":"SIGTERM","StopTimeout":10}},"HostConfig":{{"Memory":268435456,"NanoCpus":1000000000,"PidsLimit":128,"NetworkMode":"none","AutoRemove":false,"RestartPolicy":{{"Name":"no","MaximumRetryCount":0}}}},"NetworkSettings":{{"Ports":{{}},"Networks":{{}}}}}}"#
+            r#"{{"Id":"{id}","Image":"sha256:aaaa","Mounts":[{{"Type":"bind","Name":"","Source":"/run/sample/extension.sock","Destination":"/run/husklet/extension.sock","Driver":"","Mode":"","RW":true,"Propagation":""}},{{"Type":"bind","Name":"","Source":"/run/sample/data","Destination":"/var/lib/husklet-extension","Driver":"","Mode":"","RW":true,"Propagation":""}}],"Path":"/usr/bin/extension","Args":["--serve"],"Name":"sidecar","Created":"","State":{{"Status":"running","Running":true,"Paused":false,"Restarting":false,"OOMKilled":false,"Dead":false,"Pid":1,"ExitCode":0,"Error":"","StartedAt":"","FinishedAt":""}},"RestartCount":0,"Config":{{"ExposedPorts":{{}},"Labels":{labels},"StopSignal":"SIGTERM","StopTimeout":10}},"HostConfig":{{"Memory":268435456,"NanoCpus":1000000000,"PidsLimit":128,"NetworkMode":"none","AutoRemove":false,"RestartPolicy":{{"Name":"no","MaximumRetryCount":0}}}},"NetworkSettings":{{"Ports":{{}},"Networks":{{}}}}}}"#
         )
     }
 
