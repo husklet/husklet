@@ -841,6 +841,61 @@ test('real Unix extension inspection rejects another name without mutation and p
   }
 });
 
+test('real Unix extension inventory rejects duplicate names without mutation and preserves session health', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-extension-identities-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const calls = [];
+  const connections = new Set();
+  const extension = {
+    name: 'catalogue',
+    image_digest: `sha256:${'a'.repeat(64)}`,
+    status: 'standby',
+  };
+  const server = net.createServer((socket) => {
+    connections.add(socket);
+    socket.on('close', () => connections.delete(socket));
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.kind !== KIND.request || frame.channel !== 2) continue;
+        calls.push(frame.payload.call);
+        const extensions =
+          calls.length === 1
+            ? [extension, { ...extension, image_digest: `sha256:${'b'.repeat(64)}` }]
+            : [extension];
+        socket.write(
+          encode({
+            channel: 2,
+            kind: KIND.response,
+            payload: { reply: 'extensions', with: extensions },
+          }),
+        );
+      }
+    });
+    socket.write(
+      encode({
+        channel: CONTROL,
+        kind: KIND.open,
+        payload: { protocol: 1, peer: 'catalogue', granted: ['extensions:read'] },
+      }),
+    );
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    const extensions = workspace(session).extensions;
+    await assert.rejects(extensions.list(), /duplicate extension identities/);
+    assert.deepEqual(calls, ['extension_list'], 'rejection emits no follow-up or mutation');
+    assert.deepEqual(await extensions.list(), [extension]);
+    assert.deepEqual(calls, ['extension_list', 'extension_list']);
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('real Unix digest-pinned image inspection rejects another identity and preserves session health', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-image-inspect-'));
   const socketPath = path.join(directory, 'host.sock');

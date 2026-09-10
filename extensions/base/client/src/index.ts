@@ -1040,7 +1040,15 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
       },
     },
     extensions: {
-      list: async () => expect(await session.call('extension_list'), 'extensions'),
+      list: async () => {
+        const extensions = expect(await session.call('extension_list'), 'extensions');
+        if (new Set(extensions.map(({ name }) => name)).size !== extensions.length) {
+          throw new TypeError(
+            'host returned duplicate extension identities; no extension selection was assumed',
+          );
+        }
+        return extensions;
+      },
       catalogue: async () => {
         const catalogue = expect(await session.call('extension_catalogue'), 'extension_catalogue');
         if (catalogue.entries.length > 64)
