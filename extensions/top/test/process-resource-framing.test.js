@@ -45,6 +45,7 @@ test(
             payload = {
               reply: 'processes',
               with: {
+                container_id: container,
                 titles: ['PID', 'COMMAND'],
                 processes:
                   attempts === 3
@@ -181,6 +182,7 @@ test(
                 : {
                     reply: 'processes',
                     with: {
+                      container_id: healthy,
                       titles: ['PID', 'COMMAND'],
                       processes: [['23', '/usr/bin/healthy']],
                       observed_at_ms: 1_700_000_000_000,
