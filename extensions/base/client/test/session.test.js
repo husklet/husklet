@@ -7313,6 +7313,65 @@ test('real Unix tab inventory rejects duplicate identities and preserves session
   );
 });
 
+test('real Unix topology rejects duplicate pane slots and preserves session health', async () => {
+  let inventories = 0;
+  await withPaneIdentityHost(
+    ['terminals:read'],
+    (_request, socket) => {
+      inventories += 1;
+      const leaf = (slot) => ({
+        kind: 'pane',
+        pane: {
+          slot,
+          working_directory: null,
+          command: null,
+          occupant: 'terminal',
+          provider: null,
+        },
+        grid: { columns: 80, rows: 24 },
+        focused: slot === 'pane-a',
+      });
+      const topology = {
+        active_tab: 'tab-a',
+        tabs: [
+          {
+            id: 'tab-a',
+            title: 'Shell',
+            pinned: false,
+            root: {
+              kind: 'split',
+              division: 'beside',
+              ratio_per_mille: 500,
+              first: leaf('pane-a'),
+              second: leaf(inventories === 1 ? 'pane-a' : 'pane-b'),
+            },
+          },
+        ],
+      };
+      socket.write(
+        encode({
+          channel: 2,
+          kind: KIND.response,
+          payload: { reply: 'topology', with: topology },
+        }),
+      );
+    },
+    async (session, calls) => {
+      const terminal = workspace(session).terminal;
+      await assert.rejects(terminal.topology(), /duplicate pane slots in terminal topology/);
+      assert.deepEqual(
+        calls.map(({ call }) => call),
+        ['terminal_topology'],
+      );
+      assert.equal((await terminal.topology()).tabs[0].id, 'tab-a');
+      assert.deepEqual(
+        calls.map(({ call }) => call),
+        ['terminal_topology', 'terminal_topology'],
+      );
+    },
+  );
+});
+
 test('real Unix terminal-to-text rejects same-slot replacement and preserves session health', async () => {
   let reads = 0;
   await withPaneIdentityHost(

@@ -624,6 +624,29 @@ export function workspace(session, { signal } = {}) {
         }
         return tabs;
     };
+    const exactTopology = (topology) => {
+        exactTabs(topology.tabs);
+        if (topology.active_tab != null &&
+            !topology.tabs.some(({ id }) => id === topology.active_tab)) {
+            throw new TypeError('host returned a terminal topology with an unknown active tab');
+        }
+        const slots = new Set();
+        const visit = (node) => {
+            if (node.kind === 'split') {
+                visit(node.first);
+                visit(node.second);
+            }
+            else if (slots.has(node.pane.slot)) {
+                throw new TypeError('host returned duplicate pane slots in terminal topology; no layout selection was assumed');
+            }
+            else {
+                slots.add(node.pane.slot);
+            }
+        };
+        for (const tab of topology.tabs)
+            visit(tab.root);
+        return topology;
+    };
     const exactExecution = (execution, id, operation) => {
         if (execution.id !== id) {
             throw new TypeError(`host returned ${operation} for execution ${execution.id}, expected ${id}; no execution state was assumed`);
@@ -1360,7 +1383,7 @@ export function workspace(session, { signal } = {}) {
         terminal: {
             panes: async () => exactPaneInventory(expect(await session.call('pane_list'), 'panes')),
             tabs: async () => exactTabs(expect(await session.call('terminal_tabs'), 'tabs')),
-            topology: async () => expect(await session.call('terminal_topology'), 'topology'),
+            topology: async () => exactTopology(expect(await session.call('terminal_topology'), 'topology')),
             openTab: async (title) => expect(await session.call('terminal_open_tab', { title }), 'identity'),
             split: async (slot, division) => expect(await session.call('terminal_split', { slot, division }), 'identity'),
             splitObserved: (slot, generation, revision, division) => {

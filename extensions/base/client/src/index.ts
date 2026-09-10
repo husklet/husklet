@@ -58,6 +58,10 @@ type ReplyPayload<K extends WireReply['reply']> =
     ? Payload
     : undefined;
 
+type IdentityLayout =
+  | { kind: 'pane'; pane: { slot: string } }
+  | { kind: 'split'; first: IdentityLayout; second: IdentityLayout };
+
 /** A post-creation execution failure whose immutable identity remains recoverable. */
 export class ExecutionOperationError extends Error {
   readonly executionId;
@@ -809,6 +813,34 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
       throw new TypeError('host returned duplicate tab identities; no tab selection was assumed');
     }
     return tabs;
+  };
+  const exactTopology = <
+    Topology extends { active_tab?: string | null; tabs: { id: string; root: IdentityLayout }[] },
+  >(
+    topology: Topology,
+  ) => {
+    exactTabs(topology.tabs);
+    if (
+      topology.active_tab != null &&
+      !topology.tabs.some(({ id }) => id === topology.active_tab)
+    ) {
+      throw new TypeError('host returned a terminal topology with an unknown active tab');
+    }
+    const slots = new Set<string>();
+    const visit = (node: IdentityLayout) => {
+      if (node.kind === 'split') {
+        visit(node.first);
+        visit(node.second);
+      } else if (slots.has(node.pane.slot)) {
+        throw new TypeError(
+          'host returned duplicate pane slots in terminal topology; no layout selection was assumed',
+        );
+      } else {
+        slots.add(node.pane.slot);
+      }
+    };
+    for (const tab of topology.tabs) visit(tab.root);
+    return topology;
   };
   const exactExecution = (execution: ExecutionSummary, id: string, operation: string) => {
     if (execution.id !== id) {
@@ -1734,7 +1766,8 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
     terminal: {
       panes: async () => exactPaneInventory(expect(await session.call('pane_list'), 'panes')),
       tabs: async () => exactTabs(expect(await session.call('terminal_tabs'), 'tabs')),
-      topology: async () => expect(await session.call('terminal_topology'), 'topology'),
+      topology: async () =>
+        exactTopology(expect(await session.call('terminal_topology'), 'topology')),
       openTab: async (title) =>
         expect(await session.call('terminal_open_tab', { title }), 'identity'),
       split: async (slot, division) =>
