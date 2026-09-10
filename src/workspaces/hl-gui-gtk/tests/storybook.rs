@@ -36,6 +36,7 @@ mod unix {
         "Heading",
         "Expander",
         "InlineMessage",
+        "RecoveryState",
         "Extension acquisition",
         "Validated settings form",
         "Keyboard and semantic actions",
@@ -233,6 +234,7 @@ mod unix {
                 | "Heading"
                 | "Expander"
                 | "InlineMessage"
+                | "RecoveryState"
                 | "Switch"
                 | "DataTable"
         );
@@ -243,6 +245,9 @@ mod unix {
         if narrow_story {
             assert!(realized_window.width() <= 600, "{story} narrow capture remained wide");
             assert_contained(&root, story);
+            if story == "RecoveryState" {
+                assert_recovery_state(&root, "narrow");
+            }
             capture_story(&realized_window, &format!("{story} narrow"));
             if story == "Button" {
                 let document = descendants::<gtk::ScrolledWindow>(&root)
@@ -693,6 +698,9 @@ mod unix {
                 paned.position(),
             );
             assert_document_horizontally_contained(&root, story);
+        }
+        if story == "RecoveryState" {
+            assert_recovery_state(&root, "wide");
         }
         capture_story(&realized_window, story);
         if story == "Heading" {
@@ -1339,6 +1347,20 @@ mod unix {
             assert!(disclosure.is_expanded(), "controlled state survives its rerender");
             assert!(disclosure.has_focus(), "controlled rerender preserves summary focus");
         }
+        if story == "RecoveryState" {
+            find::<gtk::Label>(&root, |label| label.text() == "Attempt 2");
+            let disclosure = find::<gtk::Expander>(&root, |expander| {
+                expander.label().as_deref() == Some("Technical details")
+            });
+            assert!(
+                disclosure.grab_focus(),
+                "RecoveryState disclosure accepts keyboard focus"
+            );
+            disclosure.emit_by_name::<()>("activate", &[]);
+            settle_toolkit();
+            assert!(disclosure.is_expanded(), "RecoveryState reveals its bounded diagnostic");
+            capture_story(&realized_window, "RecoveryState expanded");
+        }
         if story == "Search" {
             let search = find::<gtk::SearchEntry>(&root, |entry| {
                 entry.tooltip_text().as_deref() == Some("Find extensions")
@@ -1876,6 +1898,10 @@ mod unix {
                 assert!(disclosure.grab_focus(), "Expander summary accepts keyboard focus");
                 disclosure.emit_by_name::<()>("activate", &[]);
             }
+            "RecoveryState" => {
+                find::<gtk::Button>(root, |button| button_caption(button).as_deref() == Some("Try again"))
+                    .emit_clicked();
+            }
             "Switch" => {
                 labelled_switch(root, "Restore panes on launch").set_active(false);
             }
@@ -2170,6 +2196,55 @@ mod unix {
             .mnemonic_widget()
             .and_then(|widget| widget.downcast::<gtk::Switch>().ok())
             .expect("FormControlLabel caption names its Switch")
+    }
+
+    fn assert_recovery_state(root: &gtk::Widget, case: &str) {
+        let message = find::<gtk::Box>(root, |candidate| {
+            candidate.has_css_class("hl-inlinemessage")
+                && descendants::<gtk::Label>(candidate.upcast_ref())
+                    .iter()
+                    .any(|label| label.text() == "Container inventory lost its connection. No change was assumed.")
+        });
+        assert_eq!(message.accessible_role(), gtk::AccessibleRole::Alert);
+        let retry = find::<gtk::Button>(root, |button| button_caption(button).as_deref() == Some("Try again"));
+        assert_eq!(retry.accessible_role(), gtk::AccessibleRole::Button);
+        assert!(retry.is_focusable(), "{case} RecoveryState retry is keyboard reachable");
+        assert!(retry.has_css_class("size-small"));
+        assert_eq!(retry.height(), 28, "{case} RecoveryState retry control height");
+        let disclosure = find::<gtk::Expander>(root, |expander| {
+            expander.label().as_deref() == Some("Technical details")
+        });
+        assert_eq!(disclosure.accessible_role(), gtk::AccessibleRole::Button);
+        assert!(
+            disclosure.is_focusable(),
+            "{case} RecoveryState disclosure is keyboard reachable"
+        );
+        assert!(
+            !disclosure.is_expanded(),
+            "{case} RecoveryState starts with diagnostics collapsed"
+        );
+
+        let message_bounds = message
+            .compute_bounds(root)
+            .expect("RecoveryState message belongs to its document");
+        let retry_bounds = retry
+            .compute_bounds(root)
+            .expect("RecoveryState retry belongs to its document");
+        let disclosure_bounds = disclosure
+            .compute_bounds(root)
+            .expect("RecoveryState disclosure belongs to its document");
+        assert!(
+            message_bounds.y() + message_bounds.height() <= retry_bounds.y(),
+            "{case} RecoveryState retry overlaps its summary"
+        );
+        assert!(
+            retry_bounds.y() + retry_bounds.height() <= disclosure_bounds.y(),
+            "{case} RecoveryState disclosure overlaps its retry"
+        );
+        assert!(
+            message_bounds.x() >= 0.0 && message_bounds.x() + message_bounds.width() <= root.width() as f32,
+            "{case} RecoveryState summary escapes the component document"
+        );
     }
 
     fn assert_toggle_receipt(root: &gtk::Widget, text: &str, maximum_height: i32) {

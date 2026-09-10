@@ -10,6 +10,7 @@ import {
   ListSubheader,
   NavigationMenu,
   NavigationMenuItem,
+  RecoveryState,
   Row,
   Scroll,
   Spinner,
@@ -23,7 +24,6 @@ import {
   type TabSummary,
   type VolumeSummary,
 } from '@husklet/react';
-import { boundedMessage } from './model.js';
 
 export const SECTIONS = [
   'workspace',
@@ -166,6 +166,17 @@ export function Overview({
           />
         </Row>
         <Text label="Current inventory and reported runtime attention." color="text-dim" wrap />
+        <ErrorRecovery
+          error={
+            containers.error ??
+            executions.error ??
+            images.error ??
+            volumes.error ??
+            networks.error ??
+            terminals.error
+          }
+          onRetry={refreshAll}
+        />
         <Row width="fill" gap={1} wrap>
           <Summary title="Containers" {...containersSummary} onOpen={() => onOpen('containers')} />
           <Summary
@@ -181,16 +192,6 @@ export function Overview({
           <Summary title="Terminal tabs" {...terminalsSummary} onOpen={() => onOpen('terminals')} />
           <Summary title="Extensions" {...extensionsSummary} onOpen={() => onOpen('extensions')} />
         </Row>
-        <ErrorText
-          error={
-            containers.error ??
-            executions.error ??
-            images.error ??
-            volumes.error ??
-            networks.error ??
-            terminals.error
-          }
-        />
       </Column>
     </Scroll>
   );
@@ -236,8 +237,15 @@ function Summary({
   );
 }
 
-function ErrorText({ error }: { error: unknown }) {
-  return error ? <Text label={boundedMessage(error)} color="danger" wrap /> : null;
+function ErrorRecovery({ error, onRetry }: { error: unknown; onRetry: () => Promise<void> }) {
+  return error ? (
+    <RecoveryState
+      operation="Workspace inventory"
+      error={error}
+      retryLabel="Retry inventory"
+      onRetry={onRetry}
+    />
+  ) : null;
 }
 
 function title(value: string): string {

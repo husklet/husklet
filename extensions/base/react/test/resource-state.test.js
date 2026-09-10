@@ -61,6 +61,13 @@ test('error retry dispatches exactly once and bounds host text', () => {
     (patch) => patch.SetProp?.prop === 'Label' && patch.SetProp.value.Text === 'Retry inventory',
   ).SetProp.id;
   const parent = patches.find((patch) => patch.Insert?.child === retry)?.Insert.parent;
+  assert.deepEqual(
+    patches.findLast(
+      (patch) => patch.SetProp?.id === retry && patch.SetProp.prop === 'Size',
+    )?.SetProp.value,
+    { ControlSize: 'Small' },
+    'shared recovery actions use the compact control height',
+  );
   assert.equal(
     patches.find((patch) => patch.Create?.id === parent)?.Create.tag,
     'Row',

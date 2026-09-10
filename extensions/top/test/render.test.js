@@ -2812,19 +2812,26 @@ test('installed extensions translate the host duty stage into a developer-facing
   assert.ok(labelled(stage, 'Enabled'));
 });
 
-test('overview never presents stale inventory counts as current during loading or failure', () => {
+test('overview keeps failures actionable while never presenting stale inventory as current', async () => {
   const stale = [{ id: 'old', state: 'running' }];
   const stage = host();
   const opened = [];
+  const reloaded = [];
+  const resource = (name, data, loading = false, error = null) => ({
+    data,
+    loading,
+    error,
+    reload: async () => reloaded.push(name),
+  });
   stage.render(
     h(Overview, {
-      containers: { data: stale, loading: true, error: null },
-      executions: { data: [], loading: false, error: null },
-      images: { data: stale, loading: false, error: new Error('image refresh failed') },
-      volumes: { data: [], loading: false, error: null },
-      networks: { data: [], loading: false, error: null },
-      terminals: { data: [], loading: false, error: null },
-      extensions: { data: [], loading: false, error: null },
+      containers: resource('containers', stale, true),
+      executions: resource('executions', []),
+      images: resource('images', stale, false, new Error('image refresh failed')),
+      volumes: resource('volumes', []),
+      networks: resource('networks', []),
+      terminals: resource('terminals', []),
+      extensions: resource('extensions', []),
       onOpen: (section) => opened.push(section),
     }),
   );
@@ -2835,6 +2842,16 @@ test('overview never presents stale inventory counts as current during loading o
   assert.ok(labelled(stage, 'Unavailable'));
   assert.ok(labelled(stage, 'Reading inventory…'));
   assert.ok(labelled(stage, '0 running'));
+  assert.ok(labelled(stage, 'Workspace inventory could not be completed.'));
+  assert.ok(labelled(stage, 'Retry inventory'));
+  assert.ok(labelled(stage, 'Technical details'));
+  assert.ok(
+    ancestorTags(stage, 'image refresh failed').includes('Expander'),
+    'the bounded diagnostic stays behind an explicit disclosure',
+  );
+  assert.notDeepEqual(taggedProperty(stage, 'Technical details', 'Expander', 'Expanded'), {
+    Flag: true,
+  });
   const patches = stage.frames.flatMap((frame) => frame.patches);
   const actionNodes = new Set(
     patches
@@ -2926,6 +2943,13 @@ test('overview never presents stale inventory counts as current during loading o
     }),
   );
   assert.deepEqual(opened, ['containers'], 'the directly clickable card retains navigation');
+  invoke(stage, 'Retry inventory');
+  await settled();
+  assert.deepEqual(
+    reloaded.sort(),
+    ['containers', 'executions', 'extensions', 'images', 'networks', 'terminals', 'volumes'],
+    'the in-context recovery action retries every authoritative inventory',
+  );
 });
 
 test('overview refreshes every authoritative inventory in one action', async () => {

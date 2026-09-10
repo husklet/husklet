@@ -258,6 +258,16 @@ mod unix {
                 "Network inventory is unavailable. Check that the workspace is running, then retry.",
             );
         }
+        if fixture == "error" && name == "workspace" {
+            assert!(has_label(
+                &root,
+                "Workspace inventory lost its connection. No change was assumed."
+            ));
+            assert!(has_label(&root, "Retry inventory"));
+            assert!(has_label(&root, "Technical details"));
+            assert!(!find_expander(&root, "Technical details").is_expanded());
+            assert_inline_message(&root, "Workspace inventory lost its connection. No change was assumed.");
+        }
         if fixture == "populated" && name == "extensions" {
             assert!(
                 has_placeholder(&root, "Search installed"),
@@ -553,7 +563,25 @@ mod unix {
                 let content_start = if width == 600 { 16 } else { 184 };
                 assert_overview_grid(&root, width, content_start, width_name);
             }
+            if fixture == "error" && name == "workspace" {
+                assert_overview_recovery(&root, width, width_name);
+            }
             capture(&window, &format!("{capture_fixture}-{name}-{width_name}"), width, 800);
+            if fixture == "error" && name == "workspace" {
+                let disclosure = find_expander(&root, "Technical details");
+                assert!(
+                    disclosure.grab_focus(),
+                    "{width_name} recovery disclosure accepts focus"
+                );
+                disclosure.emit_by_name::<()>("activate", &[]);
+                settle_toolkit();
+                assert!(disclosure.is_expanded(), "{width_name} recovery disclosure opens");
+                find_mapped_labelled(&root, "workspace daemon socket refused the connection");
+                capture(&window, &format!("error-workspace-details-{width_name}"), width, 800);
+                disclosure.emit_by_name::<()>("activate", &[]);
+                settle_toolkit();
+                assert!(!disclosure.is_expanded(), "{width_name} recovery disclosure closes");
+            }
             if fixture == "populated" && name == "extensions" {
                 assert_extension_filter(
                     &root,
@@ -1514,6 +1542,68 @@ mod unix {
             found.extend(widgets_with_class(&current, class));
         }
         found
+    }
+
+    fn assert_overview_recovery(root: &gtk::Widget, width: i32, case: &str) {
+        let summary = "Workspace inventory lost its connection. No change was assumed.";
+        let message = find_inline_message(root, summary).expect("overview recovery uses InlineMessage");
+        assert_eq!(message.accessible_role(), gtk::AccessibleRole::Alert);
+        let retry = find_button(root, "Retry inventory");
+        assert_eq!(retry.accessible_role(), gtk::AccessibleRole::Button);
+        assert!(retry.is_focusable(), "{case} overview retry is keyboard reachable");
+        assert!(retry.has_css_class("size-small"));
+        assert_eq!(retry.height(), 28, "{case} overview retry control height");
+        let disclosure = find_expander(root, "Technical details");
+        assert_eq!(disclosure.accessible_role(), gtk::AccessibleRole::Button);
+        assert!(
+            disclosure.is_focusable(),
+            "{case} overview diagnostic disclosure is keyboard reachable"
+        );
+        assert!(!disclosure.is_expanded(), "{case} overview diagnostics start collapsed");
+
+        let first_card = widgets_with_class(root, "hl-card")
+            .into_iter()
+            .next()
+            .expect("overview recovery retains resource cards");
+        let message_bounds = message
+            .compute_bounds(root)
+            .expect("overview recovery belongs to Top root");
+        let retry_bounds = retry.compute_bounds(root).expect("overview retry belongs to Top root");
+        let disclosure_bounds = disclosure
+            .compute_bounds(root)
+            .expect("overview disclosure belongs to Top root");
+        let card_bounds = first_card
+            .compute_bounds(root)
+            .expect("overview card belongs to Top root");
+        let content_start = if width == 600 { 16.0 } else { 184.0 };
+        assert_eq!(
+            message_bounds.x(),
+            content_start,
+            "{case} recovery starts at the page inset"
+        );
+        assert_eq!(
+            message_bounds.x() + message_bounds.width(),
+            root.width() as f32 - 16.0,
+            "{case} recovery reaches the trailing page inset"
+        );
+        assert!(
+            message_bounds.y() + message_bounds.height() <= retry_bounds.y(),
+            "{case} retry overlaps the recovery summary"
+        );
+        assert!(
+            retry_bounds.y() + retry_bounds.height() <= disclosure_bounds.y(),
+            "{case} disclosure overlaps the retry action"
+        );
+        assert!(
+            disclosure_bounds.y() + disclosure_bounds.height() <= card_bounds.y(),
+            "{case} resource cards precede the recovery controls"
+        );
+        let maximum_card_y = if width == 600 { 280.0 } else { 240.0 };
+        assert!(
+            card_bounds.y() <= maximum_card_y,
+            "{case} recovery pushed the first resource card to {}px",
+            card_bounds.y()
+        );
     }
 
     fn assert_overview_grid(root: &gtk::Widget, width: i32, content_start: i32, case: &str) {
