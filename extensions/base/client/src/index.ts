@@ -1135,7 +1135,22 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
         }
         return containers;
       },
-      inspect: async (id) => expect(await session.call('container_inspect', { id }), 'container'),
+      inspect: async (id) => {
+        const exactId = immutableIdentity(id, [32, 64], 'container');
+        const container = expect(
+          await session.call('container_inspect', { id: exactId }),
+          'container',
+        );
+        const matches =
+          container.id === exactId ||
+          (exactId.length === 32 && container.id.length === 64 && container.id.startsWith(exactId));
+        if (!matches) {
+          throw new TypeError(
+            `host returned container ${container.id}, expected ${exactId}; no container state was assumed`,
+          );
+        }
+        return container;
+      },
       inspectObserved: async (id, generation) => {
         const observedGeneration = containerMutation(id, generation).generation;
         const container = expect(

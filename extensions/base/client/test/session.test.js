@@ -1042,6 +1042,66 @@ test('real Unix observed inspection rejects a replacement before publishing its 
   }
 });
 
+test('real Unix container inspection rejects another identity without mutation and preserves session health', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-container-inspect-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const id = 'a'.repeat(64);
+  const calls = [];
+  const connections = new Set();
+  const summary = (containerId) => ({
+    id: containerId,
+    name: 'postgres',
+    image: 'postgres:17',
+    state: 'running',
+    created: 2,
+    generation: 8,
+    ports: [{ container: 5432, host: 15432, protocol: 'tcp' }],
+  });
+  const server = net.createServer((socket) => {
+    connections.add(socket);
+    socket.on('close', () => connections.delete(socket));
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.kind !== KIND.request || frame.channel !== 2) continue;
+        calls.push(frame.payload.call);
+        socket.write(
+          encode({
+            channel: 2,
+            kind: KIND.response,
+            payload: {
+              reply: 'container',
+              with: summary(calls.length === 1 ? 'b'.repeat(64) : id),
+            },
+          }),
+        );
+      }
+    });
+    socket.write(
+      encode({
+        channel: CONTROL,
+        kind: KIND.open,
+        payload: { protocol: 1, peer: 'postgres-preview', granted: ['containers:read'] },
+      }),
+    );
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    const containers = workspace(session).containers;
+    await assert.rejects(containers.inspect(id), /host returned container/);
+    assert.deepEqual(calls, ['container_inspect'], 'rejection emits no follow-up or mutation');
+    assert.equal((await containers.inspect(id)).id, id);
+    assert.equal((await containers.inspect(id.slice(0, 32))).id, id);
+    assert.deepEqual(calls, ['container_inspect', 'container_inspect', 'container_inspect']);
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('real Unix filesystem watcher publishes filtered cursor-only progress for restart', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-filtered-cursor-'));
   const socketPath = path.join(directory, 'host.sock');
