@@ -314,6 +314,77 @@ test('real Unix stat rejects another file identity and preserves session health'
   }
 });
 
+test('real Unix process inspection rejects another container and preserves session health', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-process-identity-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const containerId = 'a'.repeat(64);
+  const calls = [];
+  const connections = new Set();
+  const server = net.createServer((socket) => {
+    connections.add(socket);
+    socket.on('close', () => connections.delete(socket));
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.kind !== KIND.request || frame.channel !== 2) continue;
+        calls.push(frame.payload);
+        const owner = calls.length === 1 ? 'b'.repeat(64) : containerId;
+        socket.write(
+          encode({
+            channel: 2,
+            kind: KIND.response,
+            payload: {
+              reply: 'processes',
+              with: {
+                container_id: owner,
+                titles: ['PID', 'CMD'],
+                processes: [['7', 'postgres']],
+                snapshot: 'c'.repeat(64),
+                next: null,
+                more: false,
+                observed_at_ms: 1,
+                scope: 'namespace',
+                pid_identity: 'snapshot',
+                truncated: false,
+              },
+            },
+          }),
+        );
+      }
+    });
+    socket.write(
+      encode({
+        channel: CONTROL,
+        kind: KIND.open,
+        payload: { protocol: 1, peer: 'process-identity', granted: ['containers:read'] },
+      }),
+    );
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    const containers = workspace(session).containers;
+    await assert.rejects(
+      containers.processes(containerId),
+      new RegExp(`processes for container ${'b'.repeat(64)}, expected ${containerId}`),
+    );
+    assert.deepEqual(
+      calls.map(({ call }) => call),
+      ['container_processes'],
+    );
+    assert.equal((await containers.processes(containerId)).container_id, containerId);
+    assert.deepEqual(
+      calls.map(({ call }) => call),
+      ['container_processes', 'container_processes'],
+    );
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('real Unix credential injection sends only the key without granting secret reads', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-credential-exec-'));
   const socketPath = path.join(directory, 'host.sock');

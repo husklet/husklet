@@ -814,7 +814,11 @@ export function workspace(session, { signal } = {}) {
                     throw new TypeError('container process snapshot must be 64 hexadecimal characters');
                 if (after > 0 && snapshot === undefined)
                     throw new TypeError('container process continuation requires its snapshot identity');
-                return expect(await session.call('container_processes', { id, snapshot, after, limit }), 'processes');
+                const page = expect(await session.call('container_processes', { id, snapshot, after, limit }), 'processes');
+                if (/^(?:[0-9a-fA-F]{32}|[0-9a-fA-F]{64})$/.test(id) && page.container_id !== id) {
+                    throw new TypeError(`host returned processes for container ${page.container_id}, expected ${id}; no process snapshot was assumed`);
+                }
+                return page;
             },
             processPages: async function* (id, { limit = 128, signal } = {}) {
                 let snapshot;
