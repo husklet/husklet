@@ -31,6 +31,7 @@ import type {
   ConnectOptions,
   ExecutionSummary,
   ExtensionAcquisitionStatus,
+  ExtensionCapability,
   ExtensionState,
   PreferenceValue,
   ExtensionSummary,
@@ -794,6 +795,17 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
     return snapshot;
   };
   const done = async (name, argument) => expect(await session.call(name, argument), 'done');
+  const requireCapabilities = (...capabilities: ExtensionCapability[]) => {
+    for (const capability of capabilities) {
+      if (!session.grantedCapabilities.includes(capability)) {
+        throw new ExtensionError({
+          error: 'denied',
+          capability,
+          detail: `extension lacks negotiated capability ${capability}`,
+        });
+      }
+    }
+  };
   const subscription = (call, topic) => {
     if (!SNAPSHOT_TOPICS.includes(topic))
       throw new RangeError(`host does not publish the ${topic} snapshot topic`);
@@ -1285,8 +1297,12 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
           workingDirectory?: string;
           stdin?: boolean;
         } = {},
-      ) =>
-        expect(
+      ) => {
+        requireCapabilities(
+          'containers:execute',
+          ...(stdin ? (['containers:input'] as const) : []),
+        );
+        return expect(
           await session.call('container_exec', {
             ...containerMutation(id, generation),
             command,
@@ -1296,13 +1312,19 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
             ...(stdin ? { stdin: true } : {}),
           }),
           'identity',
-        ),
+        );
+      },
       execWithCredentials: async (
         id,
         generation,
         { command, environment = [], credentials, user, workingDirectory, stdin = false },
       ) => {
         const exactEnvironment = exactExecEnvironment(environment);
+        requireCapabilities(
+          'containers:execute',
+          'credentials:inject',
+          ...(stdin ? (['containers:input'] as const) : []),
+        );
         return expect(
           await session.call('container_exec_credential', {
             ...containerMutation(id, generation),

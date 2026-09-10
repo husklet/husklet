@@ -98,6 +98,69 @@ test('real Unix chunk reads pin a prior file identity across fragmented frames',
   }
 });
 
+test('real Unix composite execution authority rejects before framing and preserves session health', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-exec-authority-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const calls = [];
+  const connections = new Set();
+  const server = net.createServer((socket) => {
+    connections.add(socket);
+    socket.on('close', () => connections.delete(socket));
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.kind !== KIND.request || frame.channel !== 2) continue;
+        calls.push(frame.payload.call);
+        socket.write(
+          encode({
+            channel: 2,
+            kind: KIND.response,
+            payload: {
+              reply: 'workspace',
+              with: { name: 'database', image: 'toolbox', architecture: 'amd64' },
+            },
+          }),
+        );
+      }
+    });
+    socket.write(
+      encode({
+        channel: CONTROL,
+        kind: KIND.open,
+        payload: {
+          protocol: 1,
+          peer: 'fixture',
+          granted: ['containers:execute', 'workspaces:read'],
+        },
+      }),
+    );
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    const containers = workspace(session).containers;
+    await assert.rejects(
+      containers.execWithCredentials('c'.repeat(64), 1, {
+        command: ['psql'],
+        credentials: [['PGPASSWORD', 'postgres.password']],
+      }),
+      /credentials:inject/,
+    );
+    await assert.rejects(
+      containers.exec('c'.repeat(64), 1, { command: ['debug-helper'], stdin: true }),
+      /containers:input/,
+    );
+    assert.deepEqual(calls, [], 'secondary authority denial must not frame an execution mutation');
+    assert.equal((await workspace(session).info()).name, 'database');
+    assert.deepEqual(calls, ['workspace_info']);
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('real Unix range batch preserves ordered paths and one bounded frame', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-range-batch-'));
   const socketPath = path.join(directory, 'host.sock');

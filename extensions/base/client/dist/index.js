@@ -613,6 +613,17 @@ export function workspace(session, { signal } = {}) {
         return snapshot;
     };
     const done = async (name, argument) => expect(await session.call(name, argument), 'done');
+    const requireCapabilities = (...capabilities) => {
+        for (const capability of capabilities) {
+            if (!session.grantedCapabilities.includes(capability)) {
+                throw new ExtensionError({
+                    error: 'denied',
+                    capability,
+                    detail: `extension lacks negotiated capability ${capability}`,
+                });
+            }
+        }
+    };
     const subscription = (call, topic) => {
         if (!SNAPSHOT_TOPICS.includes(topic))
             throw new RangeError(`host does not publish the ${topic} snapshot topic`);
@@ -977,16 +988,20 @@ export function workspace(session, { signal } = {}) {
                 name: exactContainerName(name),
             }),
             kill: (id, generation, signal) => done('container_kill', { ...containerMutation(id, generation), signal }),
-            exec: async (id, generation, { command, environment = [], user, workingDirectory, stdin = false, } = {}) => expect(await session.call('container_exec', {
-                ...containerMutation(id, generation),
-                command,
-                environment: exactExecEnvironment(environment),
-                user: user ?? null,
-                working_directory: workingDirectory ?? null,
-                ...(stdin ? { stdin: true } : {}),
-            }), 'identity'),
+            exec: async (id, generation, { command, environment = [], user, workingDirectory, stdin = false, } = {}) => {
+                requireCapabilities('containers:execute', ...(stdin ? ['containers:input'] : []));
+                return expect(await session.call('container_exec', {
+                    ...containerMutation(id, generation),
+                    command,
+                    environment: exactExecEnvironment(environment),
+                    user: user ?? null,
+                    working_directory: workingDirectory ?? null,
+                    ...(stdin ? { stdin: true } : {}),
+                }), 'identity');
+            },
             execWithCredentials: async (id, generation, { command, environment = [], credentials, user, workingDirectory, stdin = false }) => {
                 const exactEnvironment = exactExecEnvironment(environment);
+                requireCapabilities('containers:execute', 'credentials:inject', ...(stdin ? ['containers:input'] : []));
                 return expect(await session.call('container_exec_credential', {
                     ...containerMutation(id, generation),
                     command,
