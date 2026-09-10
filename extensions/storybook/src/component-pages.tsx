@@ -14,6 +14,7 @@ import { ExpanderWorkbench } from './expander.js';
 import { FormControlWorkbench } from './form-control.js';
 import { HeadingWorkbench } from './heading.js';
 import { IconButtonWorkbench } from './icon-button.js';
+import { InlineMessageWorkbench } from './inline-message.js';
 import { JsonTreeStory } from './json-tree.js';
 import { RadioWorkbench } from './radio.js';
 import { RadioGroupWorkbench } from './radio-group.js';
@@ -35,6 +36,7 @@ type NativeWorkbenchName =
   | 'FormControl'
   | 'Heading'
   | 'IconButton'
+  | 'InlineMessage'
   | 'Radio'
   | 'RadioGroup'
   | 'Select'
@@ -85,6 +87,7 @@ const nativeWorkbenchPages = {
   FormControl: FormControlWorkbench,
   Heading: HeadingWorkbench,
   IconButton: IconButtonWorkbench,
+  InlineMessage: InlineMessageWorkbench,
   Radio: RadioWorkbench,
   RadioGroup: RadioGroupWorkbench,
   Select: SelectWorkbench,

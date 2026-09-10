@@ -4,7 +4,7 @@ use gtk::prelude::*;
 use hl_gui::{Length, Node, Orientation, Prop, PropValue, Tag};
 
 use crate::build;
-use crate::component::{choice, field};
+use crate::component::{choice, feedback, field};
 use crate::text;
 
 /// Applies one property to an already constructed widget.
@@ -16,7 +16,12 @@ pub(crate) fn apply(widget: &gtk::Widget, node: &Node, prop: Prop, value: &PropV
         Prop::Detail => text::detail(widget, value),
         Prop::Help | Prop::Tooltip => tooltip(widget, value),
         Prop::Placeholder => text::placeholder(widget, value),
-        Prop::Icon => text::icon(widget, value),
+        Prop::Icon => {
+            text::icon(widget, value);
+            if value.as_text().is_none() {
+                feedback::tone(widget, node, node.prop(Prop::Tone).unwrap_or(&PropValue::Nothing));
+            }
+        }
         Prop::Uri => text::uri(widget, value),
         Prop::Enabled => widget.set_sensitive(value.as_flag().unwrap_or(true)),
         Prop::Visible => widget.set_visible(value.as_flag().unwrap_or(true)),
@@ -31,7 +36,12 @@ pub(crate) fn apply(widget: &gtk::Widget, node: &Node, prop: Prop, value: &PropV
         Prop::Monospace => monospace(widget, value),
         Prop::Wrap => wrap(widget, node, value),
         Prop::Ellipsize => ellipsize(widget, value),
-        Prop::Variant | Prop::Tone | Prop::Scale | Prop::Size | Prop::Color => crate::style::mark(widget, prop, value),
+        Prop::Variant | Prop::Tone | Prop::Scale | Prop::Size | Prop::Color => {
+            crate::style::mark(widget, prop, value);
+            if prop == Prop::Tone {
+                feedback::tone(widget, node, value);
+            }
+        }
         Prop::Gap => gap(widget, value),
         Prop::Pad => pad(widget, value),
         Prop::Grow => grow(widget, value),

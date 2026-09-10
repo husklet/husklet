@@ -253,6 +253,10 @@ mod unix {
             assert!(has_label(&root, "Technical details"));
             assert!(!has_label(&root, "This view could not be completed."));
             assert!(!find_expander(&root, "Technical details").is_expanded());
+            assert_inline_message(
+                &root,
+                "Network inventory is unavailable. Check that the workspace is running, then retry.",
+            );
         }
         if fixture == "populated" && name == "extensions" {
             assert!(
@@ -652,6 +656,7 @@ mod unix {
                 capture(&window, &format!("post-success-networks-{width_name}"), width, 800);
             }
             assert!(has_label(&success_root, &success));
+            assert_inline_message(&success_root, &success);
             assert!(has_label(&success_root, "Connected containers · 1"));
             assert!(has_label(
                 &success_root,
@@ -1148,6 +1153,33 @@ mod unix {
             }
         }
         false
+    }
+
+    fn assert_inline_message(root: &gtk::Widget, wanted: &str) {
+        let message =
+            find_inline_message(root, wanted).unwrap_or_else(|| panic!("no InlineMessage labelled {wanted:?}"));
+        assert_eq!(message.accessible_role(), gtk::AccessibleRole::Alert);
+        let emblem = message.first_child().expect("inline message has a non-color cue");
+        let emblem = emblem.downcast::<gtk::Image>().expect("inline message cue is an image");
+        assert!(emblem.icon_name().is_some(), "inline message cue has no symbol");
+        assert_eq!(emblem.accessible_role(), gtk::AccessibleRole::Presentation);
+        assert!(!emblem.can_focus(), "decorative message cue entered keyboard order");
+    }
+
+    fn find_inline_message(root: &gtk::Widget, wanted: &str) -> Option<gtk::Box> {
+        if let Some(message) = root.downcast_ref::<gtk::Box>().filter(|candidate| {
+            candidate.has_css_class("hl-inlinemessage") && has_label(candidate.upcast_ref(), wanted)
+        }) {
+            return Some(message.clone());
+        }
+        let mut child = root.first_child();
+        while let Some(current) = child {
+            child = current.next_sibling();
+            if let Some(message) = find_inline_message(&current, wanted) {
+                return Some(message);
+            }
+        }
+        None
     }
 
     fn find_column_view(root: &gtk::Widget) -> Option<gtk::ColumnView> {

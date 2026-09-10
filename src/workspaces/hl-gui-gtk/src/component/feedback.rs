@@ -1,7 +1,7 @@
 //! Progress, emptiness, figures and messages.
 
 use gtk::prelude::*;
-use hl_gui::Tag;
+use hl_gui::{Node, Prop, PropValue, Tag, Tone};
 
 use super::{axis, slot};
 
@@ -127,13 +127,53 @@ fn title() -> gtk::Label {
 /// A message that stands beside what it is about, without dismissal.
 fn strip() -> gtk::Box {
     let widget = axis::row(8);
-    widget.append(&slot::emblem_image());
+    widget.set_hexpand(true);
+    widget.set_accessible_role(gtk::AccessibleRole::Alert);
+    let emblem = slot::emblem_image();
+    emblem.set_accessible_role(gtk::AccessibleRole::Presentation);
+    emblem.set_can_focus(false);
+    default_emblem(&emblem, Tone::Neutral);
+    widget.append(&emblem);
     let caption = slot::caption_label();
     caption.set_wrap(true);
+    caption.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+    caption.set_max_width_chars(56);
     caption.set_xalign(0.0);
     caption.set_hexpand(true);
     widget.append(&caption);
     widget
+}
+
+/// Keeps status meaning visible without colour. A producer-authored icon wins;
+/// otherwise the tone selects one stable decorative symbol.
+pub(crate) fn tone(widget: &gtk::Widget, node: &Node, value: &PropValue) {
+    if node.tag != Tag::InlineMessage
+        || node
+            .prop(Prop::Icon)
+            .and_then(PropValue::as_text)
+            .is_some_and(|icon| !icon.is_empty())
+    {
+        return;
+    }
+    let tone = match value {
+        PropValue::Tone(tone) => *tone,
+        _ => Tone::Neutral,
+    };
+    if let Some(emblem) = slot::emblem(widget) {
+        default_emblem(&emblem, tone);
+    }
+}
+
+fn default_emblem(emblem: &gtk::Image, tone: Tone) {
+    let icon = match tone {
+        Tone::Neutral => "dialog-information-symbolic",
+        Tone::Accent => "emblem-important-symbolic",
+        Tone::Positive => "object-select-symbolic",
+        Tone::Warning => "dialog-warning-symbolic",
+        Tone::Danger => "dialog-error-symbolic",
+    };
+    emblem.set_icon_name(Some(icon));
+    emblem.set_visible(true);
 }
 
 /// The message surface behind Toast and Banner: an icon and a message column,

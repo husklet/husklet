@@ -540,4 +540,29 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn semantic_status_colors_remain_readable_on_the_dark_surface() {
+        let theme = Theme::dark();
+        for foreground in [
+            Token::Text,
+            Token::Accent,
+            Token::Positive,
+            Token::Warning,
+            Token::Danger,
+        ] {
+            let ink = theme.color(foreground);
+            let ground = theme.color(Token::Ground);
+            let blend = |front: u8, back: u8| ((u16::from(front) * 8 + u16::from(back) * 92) / 100) as u8;
+            let subtle_surface = Rgb::new(
+                blend(ink.red, ground.red),
+                blend(ink.green, ground.green),
+                blend(ink.blue, ground.blue),
+            );
+            assert!(
+                contrast(ink, subtle_surface) >= 4.5,
+                "{foreground:?} cannot carry inline status text"
+            );
+        }
+    }
 }

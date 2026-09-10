@@ -631,10 +631,10 @@ function OperationStatus({
   if (operation.state === 'success' && request)
     return (
       <Column gap={1} align="start" width="fill">
-        <Text
+        <InlineMessage
           label={`${request.verb === 'connect' ? 'Connected' : 'Disconnected'} ${request.containerName} ${request.verb === 'connect' ? 'to' : 'from'} ${request.networkName}`}
-          color="positive"
-          wrap
+          tone="positive"
+          width="fill"
         />
         <Row gap={1} wrap>
           <Badge label={`Container · ${shortId(request.container)}`} />

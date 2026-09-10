@@ -29,6 +29,7 @@ mod unix {
         "Slider",
         "Heading",
         "Expander",
+        "InlineMessage",
         "Extension acquisition",
         "Validated settings form",
         "Keyboard and semantic actions",
@@ -225,6 +226,7 @@ mod unix {
                 | "Slider"
                 | "Heading"
                 | "Expander"
+                | "InlineMessage"
                 | "Switch"
                 | "DataTable"
         );
@@ -898,6 +900,74 @@ mod unix {
             assert_eq!(view.columns().n_items(), 2, "property/value schema was not rendered");
             assert!(view.model().is_some(), "inspector has no virtualized selection model");
             assert_ne!(view.accessible_role(), gtk::AccessibleRole::Generic);
+        }
+        if story == "InlineMessage" {
+            for (tone, label, icon) in [
+                ("neutral", "No changes to apply.", "dialog-information-symbolic"),
+                ("accent", "A newer image is available.", "emblem-important-symbolic"),
+                ("positive", "Workspace settings saved.", "object-select-symbolic"),
+                ("warning", "Two containers will restart.", "dialog-warning-symbolic"),
+                ("danger", "Network inventory is unavailable.", "dialog-error-symbolic"),
+            ] {
+                let message = find::<gtk::Box>(&root, |candidate| {
+                    candidate.has_css_class("hl-inlinemessage")
+                        && candidate.has_css_class(&format!("tone-{tone}"))
+                        && descendants::<gtk::Label>(candidate.upcast_ref())
+                            .iter()
+                            .any(|caption| caption.text() == label)
+                });
+                assert_eq!(message.accessible_role(), gtk::AccessibleRole::Alert);
+                assert!(
+                    message.height() >= 28,
+                    "{tone} message is only {}px tall",
+                    message.height()
+                );
+                let emblem = find::<gtk::Image>(message.upcast_ref(), |_| true);
+                assert_eq!(emblem.icon_name().as_deref(), Some(icon));
+                assert!(emblem.is_visible(), "{tone} cue is hidden");
+                assert_eq!(emblem.accessible_role(), gtk::AccessibleRole::Presentation);
+                assert!(!emblem.can_focus(), "decorative {tone} icon entered keyboard order");
+            }
+            let override_message = find::<gtk::Box>(&root, |candidate| {
+                candidate.has_css_class("hl-inlinemessage")
+                    && descendants::<gtk::Label>(candidate.upcast_ref())
+                        .iter()
+                        .any(|caption| caption.text() == "Connected through the workspace network.")
+            });
+            assert_eq!(
+                find::<gtk::Image>(override_message.upcast_ref(), |_| true)
+                    .icon_name()
+                    .as_deref(),
+                Some("network-workgroup-symbolic"),
+                "explicit icon did not override the tone default"
+            );
+            let long = find::<gtk::Box>(&root, |candidate| {
+                candidate.has_css_class("hl-inlinemessage")
+                    && descendants::<gtk::Label>(candidate.upcast_ref()).iter().any(|caption| {
+                        caption.text()
+                            == "Network inventory is unavailable. Check that the workspace is running, then retry."
+                    })
+            });
+            assert!(long.width() <= root.width(), "long message overflowed its page");
+            assert!(
+                descendants::<gtk::Label>(long.upcast_ref())
+                    .iter()
+                    .any(gtk::Label::wraps),
+                "long message caption does not wrap"
+            );
+
+            root.measure(gtk::Orientation::Horizontal, -1);
+            root.measure(gtk::Orientation::Vertical, 300);
+            allocate(&root, 300, 1_600);
+            assert_contained(&root, story);
+            let (status, stderr) = child.stop();
+            assert!(stderr.is_empty(), "{story} wrote warnings/errors: {stderr}");
+            assert!(
+                !status.success(),
+                "the long-running entrypoint should only end when killed"
+            );
+            std::fs::remove_file(socket).expect("test socket is removed");
+            return;
         }
 
         let event = emit_representative(story, &root, &surface, &tree);

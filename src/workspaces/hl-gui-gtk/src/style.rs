@@ -116,7 +116,8 @@ fn tones(css: &mut String, theme: &Theme) {
             // the tone above every single-class component rule, which is what a
             // producer means when it tones a component.
             ".tone-{name}.tone-{name} {{ color: {color}; }}\n\
-             .hl-badge.tone-{name} {{ color: {color}; border: 1px solid {color}; }}",
+             .hl-badge.tone-{name} {{ color: {color}; border: 1px solid {color}; }}\n\
+             .hl-inlinemessage.tone-{name} {{ color: {color}; border-color: alpha({color}, .55); background: alpha({color}, .08); }}",
             name = tone.as_str(),
         );
     }
@@ -223,6 +224,8 @@ fn components(css: &mut String, theme: &Theme) {
     let _ = writeln!(
         css,
         ".hl-badge {{ background: {raised}; color: {dim}; border-radius: {pill}px; padding: 2px 8px; font-size: 11px; font-weight: 600; }}\n\
+         .hl-inlinemessage {{ min-height: 28px; padding: 4px 10px; border: 1px solid {line}; border-radius: 6px; background: {surface}; }}\n\
+         .hl-inlinemessage image {{ -gtk-icon-size: 16px; }}\n\
          .hl-avatar {{ background: {accent}; color: {ground}; border-radius: 18px; font-weight: 700; }}\n\
          .hl-banner, .hl-toast {{ background: {raised}; border: 1px solid {line}; border-radius: {radius}px; padding: 8px 12px; }}\n\
          .hl-card {{ box-shadow: none; }}\n\
@@ -404,5 +407,18 @@ mod tests {
         assert!(css.contains(".hl-table { background: #0f1115; border: 1px solid #323843;"));
         assert!(css.contains(".hl-tablehead .hl-tablecell { background: #21252d;"));
         assert!(css.contains(".hl-tablecell { min-height: 32px; padding: 6px 8px; border-bottom: 1px solid #323843;"));
+    }
+
+    #[test]
+    fn inline_messages_have_compact_non_color_status_chrome() {
+        let css = super::sheet(&Theme::dark());
+        assert!(css.contains(
+            ".hl-inlinemessage { min-height: 28px; padding: 4px 10px; border: 1px solid #323843; border-radius: 6px;"
+        ));
+        assert!(css.contains(".hl-inlinemessage image { -gtk-icon-size: 16px;"));
+        for tone in Tone::ALL {
+            let selector = format!(".hl-inlinemessage.tone-{}", tone.as_str());
+            assert!(css.contains(&selector), "missing message surface {selector}");
+        }
     }
 }
