@@ -2062,6 +2062,37 @@ test('pre-aborted streaming execution never starts a container command', async (
   stage.server.close();
 });
 
+test('real Unix streaming execution rejects unusable cleanup configuration before starting', async () => {
+  const stage = await pair();
+  const next = frames(stage.host);
+  await next();
+  const api = workspace(stage.session);
+  const container = 'c'.repeat(64);
+  for (const options of [
+    { command: ['psql'], pageLimit: 17 },
+    { command: ['psql'], pollIntervalMs: 9 },
+    { command: ['psql'], cancelSignal: 'SIG TERM' },
+    { command: ['psql'], cancelTimeoutMs: 0 },
+  ]) {
+    await assert.rejects(api.containers.execStreaming(container, 7, options, () => {}));
+  }
+
+  const listing = api.containers.list();
+  const frame = await next();
+  assert.equal(
+    frame.payload.call,
+    'container_list',
+    'invalid static options must emit no execution mutation frame',
+  );
+  stage.host.write(
+    encode({ channel: 2, kind: KIND.response, payload: { reply: 'containers', with: [] } }),
+  );
+  assert.deepEqual(await listing, []);
+  stage.session.close();
+  stage.host.destroy();
+  stage.server.close();
+});
+
 test('abort while streaming execution starts cancels its returned identity before I/O', async () => {
   const stage = await pair();
   await frames(stage.host)();

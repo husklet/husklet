@@ -128,6 +128,39 @@ function requireOutputActive(signal) {
   if (signal?.aborted) throw outputAbort(signal);
 }
 
+function exactExecutionSignal(signal: string) {
+  if (
+    typeof signal !== 'string' ||
+    signal.length < 1 ||
+    signal.length > 32 ||
+    !/^[A-Za-z0-9+-]+$/.test(signal)
+  ) {
+    throw new TypeError('execution signal must be a 1..32 byte ASCII signal name or number');
+  }
+  return signal;
+}
+
+function exactExecutionCancellation(timeoutMs: number) {
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
+    throw new RangeError('execution cancellation timeout must be between 1 and 30000ms');
+  }
+  return timeoutMs;
+}
+
+function exactExecutionPageLimit(limit: number) {
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 16) {
+    throw new RangeError('execution output limit must be between 1 and 16');
+  }
+  return limit;
+}
+
+function exactExecutionPollInterval(pollIntervalMs: number) {
+  if (!Number.isSafeInteger(pollIntervalMs) || pollIntervalMs < 10 || pollIntervalMs > 60_000) {
+    throw new RangeError('execution output poll interval must be between 10 and 60000ms');
+  }
+  return pollIntervalMs;
+}
+
 function outputPoll(ms, signal) {
   requireOutputActive(signal);
   return new Promise<void>((resolve, reject) => {
@@ -1060,8 +1093,7 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
       executionOutput: async (id, { after = 0, limit = 16 } = {}) => {
         if (!Number.isSafeInteger(after) || after < 0)
           throw new RangeError('execution output cursor must be a nonnegative safe integer');
-        if (!Number.isSafeInteger(limit) || limit < 1 || limit > 16)
-          throw new RangeError('execution output limit must be between 1 and 16');
+        exactExecutionPageLimit(limit);
         return expect(
           await session.call('execution_output', {
             id: immutableIdentity(id, [32], 'execution'),
@@ -1085,8 +1117,7 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
           signal?: AbortSignal;
         } = {},
       ) {
-        if (!Number.isSafeInteger(pollIntervalMs) || pollIntervalMs < 10 || pollIntervalMs > 60_000)
-          throw new RangeError('execution output poll interval must be between 10 and 60000ms');
+        exactExecutionPollInterval(pollIntervalMs);
         const executionId = immutableIdentity(id, [32], 'execution');
         let cursor = after;
         for (;;) {
@@ -1124,15 +1155,15 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
           'execution',
         ),
       signalExecution: (id, signal) =>
-        done('execution_kill', { id: immutableIdentity(id, [32], 'execution'), signal }),
+        done('execution_kill', {
+          id: immutableIdentity(id, [32], 'execution'),
+          signal: exactExecutionSignal(signal),
+        }),
       cancelExecution: (id, { signal = 'SIGTERM', timeoutMs = 1_000 } = {}) => {
-        if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
-          throw new RangeError('execution cancellation timeout must be between 1 and 30000ms');
-        }
         return done('execution_cancel', {
           id: immutableIdentity(id, [32], 'execution'),
-          signal,
-          timeout_ms: timeoutMs,
+          signal: exactExecutionSignal(signal),
+          timeout_ms: exactExecutionCancellation(timeoutMs),
         });
       },
       removeExecution: (id) =>
@@ -1335,6 +1366,10 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
           throw new TypeError('streaming execution requires an output callback');
         if (onStarted !== undefined && typeof onStarted !== 'function')
           throw new TypeError('streaming execution onStarted must be a function');
+        exactExecutionPageLimit(pageLimit);
+        exactExecutionPollInterval(pollIntervalMs);
+        exactExecutionSignal(cancelSignal);
+        exactExecutionCancellation(cancelTimeoutMs);
         requireOutputActive(signal);
         const executionId = credentials?.length
           ? await api.containers.execWithCredentials(id, generation, {
@@ -3783,14 +3818,7 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
     { state = 'exited', timeoutMs = 30_000 } = {},
   ) => {
     const executionId = immutableIdentity(id, [32], 'execution');
-    if (
-      typeof signal !== 'string' ||
-      signal.length < 1 ||
-      signal.length > 32 ||
-      !/^[A-Za-z0-9+-]+$/.test(signal)
-    ) {
-      throw new TypeError('execution signal must be a 1..32 byte ASCII signal name or number');
-    }
+    exactExecutionSignal(signal);
     if (
       after == null ||
       typeof after.running !== 'boolean' ||

@@ -966,6 +966,7 @@ export interface WorkspaceApi {
         /**
          * Execute while concurrently writing bounded stdin and delivering bounded live output pages
          * with callback backpressure, so a full pipe cannot deadlock the opposite direction.
+         * Static paging and cancellation policy is validated before execution authority is invoked.
          * Abort interrupts callback/input backpressure and cancels the owned execution. A helper EOF
          * also releases a still-idle dynamic input source; its record is never auto-removed.
          */
