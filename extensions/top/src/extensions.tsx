@@ -773,22 +773,20 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
             },
       );
     } catch (cause) {
-      if (action === 'remove') {
-        try {
-          const listing = await api.extensions.list();
-          const current = listing.find((item) => item.name === extension.name);
-          if (!current || current.image_digest !== extension.image_digest) {
-            setInstalled(listing);
-            setLifecycleFailure(null);
-            setNotice({
-              label: `${extension.name} removed, but the confirmation reply was lost. Current extension state was verified by refresh.`,
-              uncertain: false,
-            });
-            return;
-          }
-        } catch {
-          // Preserve the original operation failure when reconciliation is also unavailable.
+      try {
+        const listing = await api.extensions.list();
+        const current = listing.find((item) => item.name === extension.name);
+        if (lifecycleStateObserved(action, extension, current)) {
+          setInstalled(listing);
+          setLifecycleFailure(null);
+          setNotice({
+            label: `${extension.name} ${lifecycleResult(action)}, but the confirmation reply was lost. Current extension state was verified by refresh.`,
+            uncertain: false,
+          });
+          return;
         }
+      } catch {
+        // Preserve the original operation failure when reconciliation is also unavailable.
       }
       setLifecycleFailure({ ...operation, detail: message(cause) });
     } finally {
@@ -2125,6 +2123,20 @@ function lifecycleResult(action: LifecycleAction): string {
       : action === 'retry'
         ? 'recovered'
         : 'removed';
+}
+
+function lifecycleStateObserved(
+  action: LifecycleAction,
+  expected: ExtensionSummary,
+  current: ExtensionSummary | undefined,
+): boolean {
+  if (action === 'remove') {
+    return !current || current.image_digest !== expected.image_digest;
+  }
+  if (!current || current.image_digest !== expected.image_digest) return false;
+  if (action === 'disable') return current.enabled !== true;
+  if (action === 'enable') return current.enabled === true;
+  return current.enabled === true && current.status === 'duty';
 }
 
 function lifecyclePending(action: LifecycleAction): string {

@@ -2546,6 +2546,59 @@ test('installed extension removal requires final consent and a failure remains r
   );
 });
 
+test('installed extension lifecycle reconciles a lost reply without masking a real failure', async () => {
+  const calls = [];
+  let attempts = 0;
+  let extension = {
+    name: 'assistant',
+    image_digest: `sha256:${'c'.repeat(64)}`,
+    version: '1.2.0',
+    enabled: false,
+    status: 'standby',
+  };
+  const stage = host();
+  stage.render(
+    h(Extensions, {
+      api: {
+        extensions: {
+          list: async () => [extension],
+          enableAndWait: async (name, digest) => {
+            calls.push([name, digest]);
+            attempts += 1;
+            if (attempts === 1) throw new Error('extension host rejected enable');
+            extension = { ...extension, enabled: true, status: 'starting' };
+            throw new Error('connection closed before enable reply');
+          },
+        },
+        watchExtensions: async () => () => {},
+      },
+    }),
+  );
+  await settled();
+
+  invoke(stage, 'Enable');
+  await settled();
+  await settled();
+  assert.ok(labelled(stage, 'Enable extension could not be completed.'));
+  assert.ok(labelled(stage, 'extension host rejected enable'));
+  assert.ok(labelled(stage, 'Enable'), 'an unchanged authoritative state remains retryable');
+
+  invoke(stage, 'Enable');
+  await settled();
+  await settled();
+  assert.equal(calls.length, 2);
+  assert.ok(
+    labelled(
+      stage,
+      'assistant enabled, but the confirmation reply was lost. Current extension state was verified by refresh.',
+    ),
+  );
+  assert.ok(
+    labelled(stage, 'Starting'),
+    'the reconciled inventory replaces the stale disabled card',
+  );
+});
+
 test('Top is visibly required and offers no self-disable or self-removal trap', async () => {
   const stage = host();
   stage.render(
