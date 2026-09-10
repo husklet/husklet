@@ -45,6 +45,7 @@ fn controls(css: &mut String, theme: &Theme) {
          .hl-select:disabled, .hl-select button:disabled {{ border-color: {faint}; }}\n\
          entry:hover, spinbutton:hover, dropdown:hover > button {{ border-color: {dim}; }}\n\
          entry:focus-within, spinbutton:focus-within, textview:focus-within {{ border-color: {accent}; box-shadow: 0 0 0 1px {accent}; }}\n\
+         entry:disabled, spinbutton:disabled, textview:disabled, dropdown:disabled, .hl-select:disabled {{ opacity: .62; background: {surface}; }}\n\
          entry.tone-danger, .hl-entry.tone-danger {{ border-color: {danger}; box-shadow: 0 0 0 1px {danger}; }}\n\
          scrolledwindow, viewport, listview, columnview, notebook, frame, paned, expander {{ \
            background: transparent; color: {text}; }}\n\
@@ -399,6 +400,9 @@ mod tests {
         assert!(css.contains("min-height: 30px; padding: 2px 9px;"));
         assert!(css.contains(".hl-select:focus-within { border-color: #559df7; box-shadow: 0 0 0 1px #559df7;"));
         assert!(css.contains(".hl-select:disabled, .hl-select button:disabled { border-color: #87909f;"));
+        assert!(css.contains(
+            "entry:disabled, spinbutton:disabled, textview:disabled, dropdown:disabled, .hl-select:disabled { opacity: .62; background:"
+        ));
         assert!(css.contains("switch:disabled { opacity: .55;"));
         assert!(css.contains(
             "scale:focus slider, scale:focus-visible slider { outline: 2px solid #559df7; outline-offset: 2px;"
