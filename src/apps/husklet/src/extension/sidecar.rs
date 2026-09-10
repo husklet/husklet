@@ -437,6 +437,7 @@ impl Sidecar {
             || !sandbox_matches(spec, &container.host_config)
             || !mounts_match(spec, &container.details.metadata.mounts)
             || !process_matches(spec, &container.path, &container.args)
+            || !lifecycle_matches(&container.config, &container.network_settings)
         {
             let target = replacement_target(spec, &container.config.labels, &container.details.metadata.id)?;
             self.remove(target)?;
@@ -607,6 +608,14 @@ fn process_matches(spec: &SidecarSpec, program: &str, arguments: &[String]) -> b
             .iter()
             .map(String::as_str)
             .eq(expected_arguments.map(String::as_str))
+}
+
+fn lifecycle_matches(config: &hl_daemon::api::ContainerConfig, network: &hl_daemon::api::NetworkSettings) -> bool {
+    config.exposed_ports.is_empty()
+        && config.stop_signal == "SIGTERM"
+        && config.stop_timeout == 10
+        && network.ports.is_empty()
+        && network.networks.is_empty()
 }
 
 fn replacement_target<'a>(
@@ -1081,6 +1090,47 @@ mod tests {
             vec![
                 "GET /v1.43/containers/extension%2Dsample/json?size=false",
                 "DELETE /v1.43/containers/redirected%2Did?force=true&v=false",
+                "POST /v1.43/containers/create?name=extension%2Dsample",
+                "POST /v1.43/containers/extension%2Dsample/start",
+            ]
+        );
+    }
+
+    #[test]
+    fn ensure_replaces_a_matching_signature_with_a_destructive_stop_signal() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let socket = temporary.path().join("docker.sock");
+        let listener = UnixListener::bind(&socket).expect("mock Docker socket");
+        let wanted = spec().generation(42);
+        let signature = wanted.signature();
+        let served = std::thread::spawn(move || {
+            let labels =
+                format!(r#"{{"{SIGNATURE_LABEL}":"{signature}","{NAME_LABEL}":"sample","{GENERATION_LABEL}":"42"}}"#);
+            let destructive = inspection("destructive-id", &labels).replace("SIGTERM", "SIGKILL");
+            let responses = [
+                ("200 OK", destructive.into_bytes()),
+                ("204 No Content", Vec::new()),
+                ("201 Created", br#"{"Id":"fresh-id","Warnings":[]}"#.to_vec()),
+                ("204 No Content", Vec::new()),
+            ];
+            responses
+                .into_iter()
+                .map(|(status, body)| {
+                    let mut stream = accept_bounded(&listener);
+                    let request = read_request(&mut stream).expect("Docker request");
+                    respond_close(&mut stream, status, &body);
+                    request
+                })
+                .collect::<Vec<_>>()
+        });
+        let bridge = Arc::new(super::super::Bridge::new(socket).expect("bridge"));
+
+        assert_eq!(Sidecar::new(bridge).ensure(&wanted), Ok(super::Outcome::Creation));
+        assert_eq!(
+            served.join().expect("daemon joined"),
+            vec![
+                "GET /v1.43/containers/extension%2Dsample/json?size=false",
+                "DELETE /v1.43/containers/destructive%2Did?force=true&v=false",
                 "POST /v1.43/containers/create?name=extension%2Dsample",
                 "POST /v1.43/containers/extension%2Dsample/start",
             ]
