@@ -1308,6 +1308,10 @@ mod unix {
         if root
             .downcast_ref::<gtk::Entry>()
             .and_then(gtk::Entry::placeholder_text)
+            .or_else(|| {
+                root.downcast_ref::<gtk::SearchEntry>()
+                    .and_then(gtk::SearchEntry::placeholder_text)
+            })
             .is_some_and(|placeholder| placeholder == wanted)
         {
             return true;
@@ -1356,7 +1360,7 @@ mod unix {
     }
 
     fn assert_installed_density(root: &gtk::Widget, cards: &[gtk::Widget], width: i32, case: &str) {
-        let search = find_entry_with_placeholder(root, "Search installed");
+        let search = find_search_with_placeholder(root, "Search installed");
         assert!(!cards.is_empty(), "Installed renders cards");
         let first = ancestor_with_class(&find_mapped_labelled(root, "faulted-agent"), "hl-card")
             .expect("faulted installed extension belongs to a card");
@@ -1390,10 +1394,10 @@ mod unix {
         );
     }
 
-    fn find_entry_with_placeholder(root: &gtk::Widget, wanted: &str) -> gtk::Entry {
-        fn find(root: &gtk::Widget, wanted: &str) -> Option<gtk::Entry> {
+    fn find_search_with_placeholder(root: &gtk::Widget, wanted: &str) -> gtk::SearchEntry {
+        fn find(root: &gtk::Widget, wanted: &str) -> Option<gtk::SearchEntry> {
             if let Some(entry) = root
-                .downcast_ref::<gtk::Entry>()
+                .downcast_ref::<gtk::SearchEntry>()
                 .filter(|entry| entry.is_mapped() && entry.placeholder_text().as_deref() == Some(wanted))
             {
                 return Some(entry.clone());
@@ -1456,7 +1460,7 @@ mod unix {
             }
         }
 
-        let query = find_entry_with_placeholder(root, placeholder).upcast::<gtk::Widget>();
+        let query = find_search_with_placeholder(root, placeholder).upcast::<gtk::Widget>();
         let choice = find_choice(root, selected)
             .unwrap_or_else(|| panic!("{case} selected filter {selected:?} was not rendered"));
         let selected_label = find_selected_label(&choice, selected)

@@ -17,6 +17,7 @@ import {
   IconButton,
   InlineMessage,
   RecoveryState,
+  Search,
   ResourceState,
   Row,
   Scroll,
@@ -970,7 +971,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                     <Column gap={1} width="fill">
                       <Text label="Find extensions" color="text-dim" />
                       <Row gap={1} width="fill" wrap align="center" justify="start">
-                        <Entry
+                        <Search
                           grow
                           value={catalogueQuery}
                           placeholder="Search extensions"
@@ -1694,7 +1695,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                 <Column gap={1} width="fill">
                   <Text label="Find installed extensions" color="text-dim" />
                   <Row gap={1} width="fill" wrap align="center" justify="start">
-                    <Entry
+                    <Search
                       grow
                       value={installedQuery}
                       placeholder="Search installed"

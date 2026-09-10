@@ -1162,6 +1162,7 @@ test('extension modes isolate collections and reset controls in deterministic ke
   assert.ok(
     labels.indexOf('Find installed extensions') < labels.indexOf('2 of 2 installed extensions'),
   );
+  assert.equal(placeholderTag(stage, 'Search installed'), 'Search');
   change(stage, 'Search installed', 'database');
   changeByTooltip(stage, 'Filter installed extensions by status', 'updates');
   await settled();
@@ -1174,6 +1175,7 @@ test('extension modes isolate collections and reset controls in deterministic ke
   assert.ok(labels.indexOf('Discover') < labels.indexOf('Find extensions'));
   assert.ok(labels.indexOf('Find extensions') < labels.indexOf('19 of 20 extensions'));
   assert.equal(fieldValue(stage, 'Search extensions'), '');
+  assert.equal(placeholderTag(stage, 'Search extensions'), 'Search');
   assert.equal(fieldValueByTooltip(stage, 'Filter extension catalogue by status'), 'discover');
 
   change(stage, 'Search extensions', 'future');
@@ -7428,6 +7430,16 @@ function placeholderProperty(stage, placeholder, prop) {
     .at(-1)?.SetProp.id;
   return patches.filter((patch) => patch.SetProp?.id === node && patch.SetProp.prop === prop).at(-1)
     ?.SetProp.value;
+}
+
+function placeholderTag(stage, placeholder) {
+  const patches = stage.frames.flatMap((frame) => frame.patches);
+  const node = patches
+    .filter(
+      (patch) => patch.SetProp?.prop === 'Placeholder' && patch.SetProp.value?.Text === placeholder,
+    )
+    .at(-1)?.SetProp.id;
+  return patches.find((patch) => patch.Create?.id === node)?.Create.tag;
 }
 
 function ancestorTags(stage, label) {

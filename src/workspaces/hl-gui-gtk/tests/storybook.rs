@@ -20,6 +20,7 @@ mod unix {
         "Card",
         "IconButton",
         "Entry",
+        "Search",
         "Select",
         "Switch",
         "ToggleButton",
@@ -517,6 +518,35 @@ mod unix {
             );
             live.emit_clicked();
             settle_toolkit();
+        }
+        if story == "Search" {
+            let search = find::<gtk::SearchEntry>(&root, |entry| {
+                entry.tooltip_text().as_deref() == Some("Find extensions")
+            });
+            assert_eq!(search.accessible_role(), gtk::AccessibleRole::SearchBox);
+            assert_eq!(search.placeholder_text().as_deref(), Some("Name, status, or provider"));
+            assert!(
+                (28..=36).contains(&search.height()),
+                "Search is {}px tall",
+                search.height()
+            );
+            assert!(search.grab_focus(), "Search accepts keyboard focus");
+            let focus = gtk::prelude::RootExt::focus(&realized_window)
+                .expect("Search delegates focus to its native editable");
+            assert!(
+                focus == search.clone().upcast::<gtk::Widget>() || focus.is_ancestor(&search),
+                "Search does not own the focused native editable"
+            );
+            capture_story(&realized_window, "Search before wide");
+            realized_window.set_size_request(600, 800);
+            realized_window.set_default_size(600, 800);
+            settle_window_width(&realized_window, 600);
+            assert_contained(&root, "Search before narrow");
+            assert!(search.width() <= 552, "Search escaped 16px narrow insets");
+            capture_story(&realized_window, "Search before narrow");
+            realized_window.set_size_request(1_200, 800);
+            realized_window.set_default_size(1_200, 800);
+            settle_window_width(&realized_window, 1_200);
         }
         let toggle_before = if story == "ToggleButton" {
             let toggle =
@@ -1077,6 +1107,20 @@ mod unix {
             assert!(disclosure.is_expanded(), "controlled state survives its rerender");
             assert!(disclosure.has_focus(), "controlled rerender preserves summary focus");
         }
+        if story == "Search" {
+            let search = find::<gtk::SearchEntry>(&root, |entry| {
+                entry.tooltip_text().as_deref() == Some("Find extensions")
+            });
+            assert_eq!(search.text(), "runtime");
+            find::<gtk::Label>(&root, |label| label.text() == "Filtering by “runtime”.");
+            capture_story(&realized_window, "Search changed wide");
+            realized_window.set_size_request(600, 800);
+            realized_window.set_default_size(600, 800);
+            settle_window_width(&realized_window, 600);
+            assert_contained(&root, "Search changed narrow");
+            assert!(search.width() <= 552);
+            capture_story(&realized_window, "Search changed narrow");
+        }
         if let Some(before) = toggle_before {
             settle_toolkit();
             let toggle =
@@ -1469,6 +1513,11 @@ mod unix {
                 let entry = find::<gtk::Entry>(root, |entry| entry.tooltip_text().as_deref() == Some("Extension name"));
                 entry.set_text("rendered-entry");
             }
+            "Search" => {
+                let search =
+                    find::<gtk::SearchEntry>(root, |entry| entry.tooltip_text().as_deref() == Some("Find extensions"));
+                search.set_text("runtime");
+            }
             "FormControl" => {
                 let entry = find::<gtk::Entry>(root, |entry| entry.tooltip_text().as_deref() == Some("Extension name"));
                 entry.set_text("rendered-form-control");
@@ -1638,9 +1687,28 @@ mod unix {
                     )
                 })
                 .expect("Radio reports its newly selected option")
+        } else if story == "Search" {
+            reports
+                .into_iter()
+                .find(|event| {
+                    matches!(
+                        event,
+                        hl_gui::Event::Change {
+                            value: hl_gui::PropValue::Text(value),
+                            ..
+                        } if value == "runtime"
+                    )
+                })
+                .expect("Search reports its final native edit value")
         } else {
             reports.into_iter().next().expect("one report")
         };
+        if story == "Search" {
+            let hl_gui::Event::Change { value, .. } = &event else {
+                panic!("Search did not emit its typed Change interaction: {event:?}")
+            };
+            assert_eq!(value, &hl_gui::PropValue::text("runtime"));
+        }
         if story == "Extension acquisition" {
             let hl_gui::Event::Invoke { node, id } = &event else {
                 panic!("native cancellation did not emit its typed Invoke interaction: {event:?}")
