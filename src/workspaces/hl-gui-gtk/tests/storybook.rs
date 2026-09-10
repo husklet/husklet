@@ -319,8 +319,7 @@ mod unix {
             }
             realized_window.set_size_request(1_200, 800);
             realized_window.set_default_size(1_200, 800);
-            root.allocate(1_200, 800, -1, None);
-            settle_toolkit();
+            settle_window_width(&realized_window, 1_200);
         }
         if story == "Button" {
             let search = find::<gtk::Entry>(&root, |entry| {
@@ -328,7 +327,7 @@ mod unix {
             });
             let width = search.width();
             search.set_text("Se");
-            root.allocate(1_200, 800, -1, None);
+            allocate(&root, 1_200, 800);
             settle_toolkit();
             assert!(width >= 200, "Storybook search started at only {width}px");
             assert_eq!(
@@ -397,6 +396,7 @@ mod unix {
             });
             assert!(focus.grab_focus(), "Entry accepts deterministic keyboard focus");
             settle_toolkit();
+            assert_document_horizontally_contained(&root, "focused Entry");
             let _ = surface.reports().drain();
         }
         if story == "FormControl" {
@@ -534,6 +534,18 @@ mod unix {
         } else {
             None
         };
+        if matches!(story, "Button" | "Entry" | "Heading" | "DataTable") {
+            let paned = descendants::<gtk::Paned>(&root)
+                .into_iter()
+                .next()
+                .expect("wide component document owns a responsive pane");
+            assert!(
+                (238..=242).contains(&paned.position()),
+                "{story} relayout collapsed its authored 240px navigation to {}px",
+                paned.position(),
+            );
+            assert_document_horizontally_contained(&root, story);
+        }
         capture_story(&realized_window, story);
         if story == "Heading" {
             let specimens = descendants::<gtk::Label>(&root)
@@ -541,12 +553,7 @@ mod unix {
                 .filter(|label| label.text() == "Build, inspect, and ship with confidence")
                 .collect::<Vec<_>>();
             assert_eq!(specimens.len(), 4, "Heading renders every semantic scale exactly once");
-            for class in [
-                "scale-caption",
-                "scale-body",
-                "scale-title",
-                "scale-display",
-            ] {
+            for class in ["scale-caption", "scale-body", "scale-title", "scale-display"] {
                 assert!(
                     specimens.iter().any(|label| label.has_css_class(class)),
                     "Heading specimen omitted {class}"
@@ -630,13 +637,13 @@ mod unix {
             capture_story(&realized_window, "Checkbox API wide");
             realized_window.set_size_request(600, 800);
             realized_window.set_default_size(600, 800);
-            root.allocate(600, 800, -1, None);
+            allocate(&root, 600, 800);
             settle_toolkit();
             assert_contained(&root, "Checkbox API narrow");
             capture_story(&realized_window, "Checkbox API narrow");
             realized_window.set_size_request(1_200, 800);
             realized_window.set_default_size(1_200, 800);
-            root.allocate(1_200, 800, -1, None);
+            allocate(&root, 1_200, 800);
             adjustment.set_value(0.0);
             settle_toolkit();
         }
@@ -994,7 +1001,7 @@ mod unix {
             capture_story(&realized_window, "Slider code expanded");
             realized_window.set_size_request(600, 800);
             realized_window.set_default_size(600, 800);
-            root.allocate(600, 800, -1, None);
+            allocate(&root, 600, 800);
             settle_toolkit();
             assert_contained(&root, "Slider expanded code");
             capture_story(&realized_window, "Slider code expanded narrow");
@@ -1119,7 +1126,7 @@ mod unix {
         }
         root.measure(gtk::Orientation::Horizontal, -1);
         root.measure(gtk::Orientation::Vertical, 300);
-        root.allocate(300, 1_600, -1, None);
+        allocate(&root, 300, 1_600);
         assert_contained(&root, story);
         assert!(
             readable_heading(&root),
@@ -1334,10 +1341,7 @@ mod unix {
                 })
                 .set_expanded(true);
                 settle_toolkit();
-                find::<gtk::Button>(root, |button| {
-                    button_caption(button).as_deref() == Some("display")
-                })
-                .emit_clicked();
+                find::<gtk::Button>(root, |button| button_caption(button).as_deref() == Some("display")).emit_clicked();
             }
             "Expander" => {
                 let disclosure = find::<gtk::Expander>(root, |expander| {
@@ -1614,6 +1618,17 @@ mod unix {
         }
     }
 
+    fn settle_window_width(window: &gtk::Window, expected: i32) {
+        for _ in 0..50 {
+            settle_toolkit();
+            if window.width() == expected {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        panic!("window remained {}px wide, expected {expected}px", window.width());
+    }
+
     fn assert_contained(parent: &gtk::Widget, story: &str) {
         if parent.is::<gtk::ScrolledWindow>() || parent.width() <= 0 {
             return;
@@ -1658,6 +1673,32 @@ mod unix {
             }
         }
         false
+    }
+
+    fn allocate(root: &gtk::Widget, width: i32, height: i32) {
+        root.measure(gtk::Orientation::Horizontal, -1);
+        root.measure(gtk::Orientation::Vertical, width);
+        root.allocate(width, height, -1, None);
+    }
+
+    fn assert_document_horizontally_contained(root: &gtk::Widget, context: &str) {
+        let document = descendants::<gtk::ScrolledWindow>(root)
+            .into_iter()
+            .filter(|scroll| scroll.has_css_class("hl-scroll"))
+            .max_by(|left, right| left.vadjustment().upper().total_cmp(&right.vadjustment().upper()))
+            .unwrap_or_else(|| panic!("{context} owns a scrolling document viewport"));
+        let horizontal = document.hadjustment();
+        assert_eq!(
+            horizontal.value(),
+            0.0,
+            "{context} shifted its outer document horizontally"
+        );
+        assert!(
+            horizontal.upper() <= horizontal.page_size() + 1.0,
+            "{context} widened its outer document to {}px for a {}px viewport",
+            horizontal.upper(),
+            horizontal.page_size(),
+        );
     }
 
     fn repository() -> PathBuf {

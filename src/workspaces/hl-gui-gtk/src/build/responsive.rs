@@ -11,6 +11,7 @@ use hl_gui::PropValue;
 pub(super) struct Pane {
     breakpoint: Cell<i32>,
     wide_position: Cell<i32>,
+    allocating: Cell<bool>,
     layout: OnceCell<gtk::Box>,
     paned: OnceCell<gtk::Paned>,
 }
@@ -20,6 +21,7 @@ impl Default for Pane {
         Self {
             breakpoint: Cell::new(640),
             wide_position: Cell::new(160),
+            allocating: Cell::new(false),
             layout: OnceCell::new(),
             paned: OnceCell::new(),
         }
@@ -37,14 +39,12 @@ impl ObjectImpl for Pane {
     fn properties() -> &'static [glib::ParamSpec] {
         static PROPERTIES: OnceLock<Vec<glib::ParamSpec>> = OnceLock::new();
         PROPERTIES.get_or_init(|| {
-            vec![
-                glib::ParamSpecInt::builder("breakpoint")
-                    .minimum(240)
-                    .maximum(4096)
-                    .default_value(640)
-                    .read_only()
-                    .build(),
-            ]
+            vec![glib::ParamSpecInt::builder("breakpoint")
+                .minimum(240)
+                .maximum(4096)
+                .default_value(640)
+                .read_only()
+                .build()]
         })
     }
 
@@ -59,6 +59,11 @@ impl ObjectImpl for Pane {
         self.parent_constructed();
         let layout = gtk::Box::new(gtk::Orientation::Vertical, 0);
         let paned = gtk::Paned::new(gtk::Orientation::Horizontal);
+        paned.set_resize_start_child(false);
+        paned.set_shrink_start_child(false);
+        paned.set_resize_end_child(true);
+        paned.set_shrink_end_child(true);
+        paned.set_visible(false);
         layout.append(&paned);
         layout.set_parent(&*self.obj());
         self.layout.set(layout).expect("responsive layout constructed once");
@@ -82,12 +87,11 @@ impl WidgetImpl for Pane {
     }
 
     fn size_allocate(&self, width: i32, height: i32, baseline: i32) {
+        self.allocating.set(true);
         let layout = self.layout();
         let paned = self.paned();
         let expanded = width >= self.breakpoint.get();
-        if expanded {
-            paned.set_position(self.wide_position.get());
-        }
+        let wide_position = self.wide_position.get();
         if let Some(compact) = layout.first_child().filter(|child| !child.eq(paned)) {
             compact.set_visible(!expanded);
         }
@@ -97,6 +101,7 @@ impl WidgetImpl for Pane {
                 paned.set_end_child(Some(&body));
             }
             paned.set_visible(true);
+            paned.set_position(wide_position);
         } else if let Some(body) = paned.end_child() {
             paned.set_end_child(gtk::Widget::NONE);
             layout.append(&body);
@@ -108,6 +113,7 @@ impl WidgetImpl for Pane {
         layout.measure(gtk::Orientation::Horizontal, -1);
         layout.measure(gtk::Orientation::Vertical, width);
         layout.allocate(width, height, baseline, None);
+        self.allocating.set(false);
     }
 }
 
@@ -175,7 +181,10 @@ pub(crate) fn set_position(widget: &gtk::Widget, position: i32) -> bool {
 
 pub(crate) fn remember_position(widget: &gtk::Widget, position: i32) {
     if let Some(pane) = widget.downcast_ref::<ResponsivePane>() {
-        if pane.imp().paned().is_visible() && pane.imp().paned().start_child().is_some_and(|child| child.is_visible()) {
+        if !pane.imp().allocating.get()
+            && pane.imp().paned().is_visible()
+            && pane.imp().paned().start_child().is_some_and(|child| child.is_visible())
+        {
             pane.imp().wide_position.set(position);
         }
     }
