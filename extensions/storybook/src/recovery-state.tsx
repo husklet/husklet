@@ -16,6 +16,12 @@ export function RecoveryStateStory() {
         onRetry={() => setAttempt((current) => current + 1)}
       />
       <Button label={`Attempt ${attempt}`} enabled={false} variant="plain" />
+      <Text label="Partial result" scale="title" />
+      <RecoveryState
+        summary="1 container snapshot unavailable; available rows remain visible."
+        tone="warning"
+        error="worker: process endpoint did not respond"
+      />
     </Column>
   );
 }

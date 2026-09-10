@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import React from 'react';
-import { RESOURCE_STATE_TEXT_BYTE_LIMIT, ResourceState, Text } from '../dist/index.js';
+import {
+  RECOVERY_DIAGNOSTIC_BYTE_LIMIT,
+  RecoveryState,
+  RESOURCE_STATE_TEXT_BYTE_LIMIT,
+  ResourceState,
+  Text,
+} from '../dist/index.js';
 import { Surface, reconciler } from '../dist/reconciler.js';
 
 const h = React.createElement;
@@ -101,6 +107,39 @@ test('frame failures lead with recovery and disclose bounded diagnostics separat
   assert(visible.includes('Technical details'));
   assert(visible.includes('expected frame 8, received frame 10'));
   assert(patches.some((patch) => patch.Create?.tag === 'Expander'));
+});
+
+test('partial failures accept an exact warning summary without fabricating a retry', () => {
+  const view = stage();
+  view.render(
+    h(RecoveryState, {
+      summary: '1 container snapshot unavailable; available rows remain visible.',
+      tone: 'warning',
+      error: `worker: ${'é'.repeat(1000)}`,
+    }),
+  );
+  const patches = view.frames.flatMap((frame) => frame.patches);
+  const summary = patches.find(
+    (patch) =>
+      patch.SetProp?.prop === 'Label' &&
+      patch.SetProp.value.Text ===
+        '1 container snapshot unavailable; available rows remain visible.',
+  )?.SetProp.id;
+  assert.ok(summary, 'the caller-authored partial-result summary is retained');
+  assert.deepEqual(
+    patches.findLast(
+      (patch) => patch.SetProp?.id === summary && patch.SetProp.prop === 'Tone',
+    )?.SetProp.value,
+    { Tone: 'Warning' },
+  );
+  assert.equal(
+    patches.some((patch) => patch.Create?.tag === 'Button'),
+    false,
+    'disclosure-only failures do not invent a retry authority',
+  );
+  assert(patches.some((patch) => patch.Create?.tag === 'Expander'));
+  const diagnostic = labels(view.frames).find((label) => label.startsWith('worker:'));
+  assert(new TextEncoder().encode(diagnostic).byteLength <= RECOVERY_DIAGNOSTIC_BYTE_LIMIT);
 });
 
 test('invalid state and retry contracts fail closed', () => {

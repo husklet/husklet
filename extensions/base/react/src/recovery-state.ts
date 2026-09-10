@@ -30,6 +30,8 @@ export function recoverySummary(error: unknown, operation = 'This view'): string
 export interface RecoveryStateProps extends Record<string, unknown> {
   error?: unknown;
   operation?: string;
+  summary?: string;
+  tone?: 'warning' | 'danger';
   retryLabel?: string;
   onRetry?: () => void;
 }
@@ -38,6 +40,8 @@ export interface RecoveryStateProps extends Record<string, unknown> {
 export function RecoveryState({
   error,
   operation = 'This view',
+  summary,
+  tone = 'danger',
   retryLabel = 'Retry',
   onRetry,
   ...props
@@ -50,8 +54,8 @@ export function RecoveryState({
     Column,
     { ...props, gap: 1 },
     React.createElement(InlineMessage, {
-      label: recoverySummary(diagnostic, operation),
-      tone: 'danger',
+      label: bounded(summary ?? recoverySummary(diagnostic, operation)),
+      tone,
     }),
     onRetry
       ? React.createElement(

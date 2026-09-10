@@ -3881,7 +3881,21 @@ test('one unavailable container does not hide healthy process snapshots', async 
       '1 container process snapshot unavailable; available containers remain visible.',
     ),
   );
+  assert.deepEqual(
+    property(
+      stage,
+      '1 container process snapshot unavailable; available containers remain visible.',
+      'Tone',
+    ),
+    { Tone: 'Warning' },
+    'partial process loss is a non-color warning rather than raw body text',
+  );
+  assert.ok(labelled(stage, 'Technical details'));
   assert.ok(labelled(stage, 'worker: container is stopped'));
+  assert.ok(
+    ancestorTags(stage, 'worker: container is stopped').includes('Expander'),
+    'the failing container diagnostic is disclosed on request',
+  );
   assert.equal(
     labelled(stage, 'Retry processes'),
     undefined,

@@ -4,6 +4,7 @@ import {
   Column,
   DataTable,
   Entry,
+  RecoveryState,
   Heading,
   ResourceState,
   Row,
@@ -127,6 +128,16 @@ export function Processes({
         : view.records.length === 0
           ? 'empty'
           : 'ready';
+  const partialFailureSummary = `${failures.length} container process snapshot${failures.length === 1 ? '' : 's'} unavailable; available containers remain visible.`;
+  const partialFailureDiagnostic = [
+    ...failures
+      .slice(0, 8)
+      .map(
+        ({ container, error: cause }) =>
+          `${container.name || shortId(container.id)}: ${boundedMessage(cause, 256)}`,
+      ),
+    ...(failures.length > 8 ? [`${failures.length - 8} more failures omitted.`] : []),
+  ].join('\n');
   return (
     <Page
       title="Processes"
@@ -142,6 +153,13 @@ export function Processes({
         retryLabel="Retry processes"
         onRetry={resource.error ? resource.reload : load}
       >
+        {snapshots.length > 0 && failures.length > 0 ? (
+          <RecoveryState
+            summary={partialFailureSummary}
+            tone="warning"
+            error={partialFailureDiagnostic}
+          />
+        ) : null}
         <Text
           label={
             completeNamespace
@@ -187,26 +205,6 @@ export function Processes({
         <Row width="fill" justify="center">
           <Button label="Open containers" onInvoke={onOpenContainers} />
         </Row>
-      ) : null}
-      {snapshots.length > 0 && failures.length > 0 ? (
-        <Column gap={1}>
-          <Text
-            label={`${failures.length} container process snapshot${failures.length === 1 ? '' : 's'} unavailable; available containers remain visible.`}
-            color="warning"
-            wrap
-          />
-          {failures.slice(0, 8).map(({ container, error: cause }) => (
-            <Text
-              key={container.id}
-              label={`${container.name || shortId(container.id)}: ${boundedMessage(cause, 256)}`}
-              color="text-dim"
-              wrap
-            />
-          ))}
-          {failures.length > 8 ? (
-            <Text label={`${failures.length - 8} more failures omitted.`} color="text-dim" />
-          ) : null}
-        </Column>
       ) : null}
     </Page>
   );

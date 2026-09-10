@@ -42,7 +42,9 @@ const [{ render, Text, workspace }, { Top }, models] = await Promise.all([
   import('./app.js'),
   import('./model.js'),
 ]);
-const fixture = ['populated', 'error'].includes(process.env.HUSKLET_TOP_FIXTURE ?? '')
+const fixture = ['populated', 'error', 'partial-processes'].includes(
+  process.env.HUSKLET_TOP_FIXTURE ?? '',
+)
   ? process.env.HUSKLET_TOP_FIXTURE
   : undefined;
 const fixtureModule = fixture ? await import('./fixture.js') : null;
@@ -69,7 +71,9 @@ surface.update(
     initial={
       fixture === 'error'
         ? { ...fixtureModule?.populatedFixture, networks: undefined }
-        : fixtureModule?.populatedFixture
+        : fixture === 'partial-processes'
+          ? fixtureModule?.partialProcessFixture
+          : fixtureModule?.populatedFixture
     }
     initialSection={
       SECTIONS.includes(process.env.HUSKLET_TOP_SECTION as (typeof SECTIONS)[number])

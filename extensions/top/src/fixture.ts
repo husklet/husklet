@@ -9,6 +9,7 @@ import type {
 } from '@husklet/react';
 
 const containerId = 'a'.repeat(64);
+const unavailableProcessContainerId = 'd'.repeat(64);
 
 export const populatedFixture = {
   containers: [
@@ -72,9 +73,25 @@ export const populatedFixture = {
   ],
 };
 
+export const partialProcessFixture = {
+  ...populatedFixture,
+  containers: [
+    ...populatedFixture.containers,
+    {
+      id: unavailableProcessContainerId,
+      name: 'job-worker',
+      image: 'alpine:3.20',
+      state: 'running',
+      created: 1_725_000_100,
+      generation: 4,
+    } satisfies ContainerSummary,
+  ],
+};
+
 /** Adds deterministic process data while all mutations still cross the real host connection. */
 export function fixtureApi(api: WorkspaceApi, mode = 'populated'): WorkspaceApi {
   const unavailable = mode === 'error';
+  const partialProcesses = mode === 'partial-processes';
   let catalogueAttempts = 0;
   return {
     ...api,
@@ -98,18 +115,23 @@ export function fixtureApi(api: WorkspaceApi, mode = 'populated'): WorkspaceApi 
       : api.networks,
     containers: {
       ...api.containers,
-      processes: async () => ({
-        container_id: containerId,
-        titles: ['PID', 'USER', 'CPU', 'MEMORY', 'COMMAND'],
-        processes: [['412', 'developer', '2.4', '64 MiB', 'npm test']],
-        snapshot: 'f'.repeat(64),
-        next: null,
-        more: false,
-        observed_at_ms: 1_725_000_000_000,
-        scope: 'namespace',
-        pid_identity: 'snapshot',
-        truncated: false,
-      }),
+      processes: async (id) => {
+        if (partialProcesses && id === unavailableProcessContainerId) {
+          throw new Error('container process endpoint did not respond');
+        }
+        return {
+          container_id: containerId,
+          titles: ['PID', 'USER', 'CPU', 'MEMORY', 'COMMAND'],
+          processes: [['412', 'developer', '2.4', '64 MiB', 'npm test']],
+          snapshot: 'f'.repeat(64),
+          next: null,
+          more: false,
+          observed_at_ms: 1_725_000_000_000,
+          scope: 'namespace',
+          pid_identity: 'snapshot',
+          truncated: false,
+        };
+      },
     },
     terminal: {
       ...api.terminal,

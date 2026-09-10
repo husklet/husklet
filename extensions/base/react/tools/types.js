@@ -286,6 +286,8 @@ export const RESOURCE_STATE_TEXT_BYTE_LIMIT: 1024;
 export interface RecoveryStateProps extends NodeProps {
   error?: unknown;
   operation?: string;
+  summary?: string;
+  tone?: 'warning' | 'danger';
   retryLabel?: string;
   onRetry?: () => void;
 }

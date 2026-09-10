@@ -1349,9 +1349,24 @@ mod unix {
         }
         if story == "RecoveryState" {
             find::<gtk::Label>(&root, |label| label.text() == "Attempt 2");
-            let disclosure = find::<gtk::Expander>(&root, |expander| {
-                expander.label().as_deref() == Some("Technical details")
+            let mut disclosures = descendants::<gtk::Expander>(&root)
+                .into_iter()
+                .filter(|expander| expander.label().as_deref() == Some("Technical details"))
+                .collect::<Vec<_>>();
+            disclosures.sort_by(|left, right| {
+                left.compute_bounds(&root)
+                    .expect("disclosure belongs to RecoveryState document")
+                    .y()
+                    .total_cmp(
+                        &right
+                            .compute_bounds(&root)
+                            .expect("disclosure belongs to RecoveryState document")
+                            .y(),
+                    )
             });
+            assert_eq!(disclosures.len(), 2, "RecoveryState page owns exactly two variants");
+            let disclosure = disclosures[0].clone();
+            let partial = disclosures[1].clone();
             assert!(
                 disclosure.grab_focus(),
                 "RecoveryState disclosure accepts keyboard focus"
@@ -1359,7 +1374,20 @@ mod unix {
             disclosure.emit_by_name::<()>("activate", &[]);
             settle_toolkit();
             assert!(disclosure.is_expanded(), "RecoveryState reveals its bounded diagnostic");
+            find::<gtk::Label>(&root, |label| label.text() == "socket closed during attempt 2");
             capture_story(&realized_window, "RecoveryState expanded");
+            disclosure.emit_by_name::<()>("activate", &[]);
+            partial.emit_by_name::<()>("activate", &[]);
+            settle_toolkit();
+            assert!(!disclosure.is_expanded(), "the complete failure diagnostic closes");
+            assert!(
+                partial.is_expanded(),
+                "the partial-result diagnostic opens independently"
+            );
+            find::<gtk::Label>(&root, |label| {
+                label.text() == "worker: process endpoint did not respond"
+            });
+            capture_story(&realized_window, "RecoveryState partial expanded");
         }
         if story == "Search" {
             let search = find::<gtk::SearchEntry>(&root, |entry| {
@@ -2244,6 +2272,50 @@ mod unix {
         assert!(
             message_bounds.x() >= 0.0 && message_bounds.x() + message_bounds.width() <= root.width() as f32,
             "{case} RecoveryState summary escapes the component document"
+        );
+
+        let partial_summary = "1 container snapshot unavailable; available rows remain visible.";
+        let partial_message = find::<gtk::Box>(root, |candidate| {
+            candidate.has_css_class("hl-inlinemessage")
+                && descendants::<gtk::Label>(candidate.upcast_ref())
+                    .iter()
+                    .any(|label| label.text() == partial_summary)
+        });
+        assert_eq!(partial_message.accessible_role(), gtk::AccessibleRole::Alert);
+        assert!(partial_message.has_css_class("tone-warning"));
+        let mut disclosures = descendants::<gtk::Expander>(root)
+            .into_iter()
+            .filter(|expander| expander.label().as_deref() == Some("Technical details"))
+            .collect::<Vec<_>>();
+        disclosures.sort_by(|left, right| {
+            left.compute_bounds(root)
+                .expect("disclosure belongs to RecoveryState document")
+                .y()
+                .total_cmp(
+                    &right
+                        .compute_bounds(root)
+                        .expect("disclosure belongs to RecoveryState document")
+                        .y(),
+                )
+        });
+        assert_eq!(disclosures.len(), 2, "RecoveryState documents both variants");
+        let partial_disclosure = disclosures[1].clone();
+        assert_eq!(partial_disclosure.accessible_role(), gtk::AccessibleRole::Button);
+        assert!(partial_disclosure.is_focusable());
+        assert!(!partial_disclosure.is_expanded());
+        let partial_bounds = partial_message
+            .compute_bounds(root)
+            .expect("partial RecoveryState message belongs to its document");
+        let partial_disclosure_bounds = partial_disclosure
+            .compute_bounds(root)
+            .expect("partial RecoveryState disclosure belongs to its document");
+        assert!(
+            partial_bounds.y() + partial_bounds.height() <= partial_disclosure_bounds.y(),
+            "{case} partial RecoveryState disclosure overlaps its warning"
+        );
+        assert!(
+            partial_bounds.x() >= 0.0 && partial_bounds.x() + partial_bounds.width() <= root.width() as f32,
+            "{case} partial RecoveryState summary escapes the component document"
         );
     }
 

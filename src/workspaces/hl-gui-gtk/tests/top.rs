@@ -74,6 +74,13 @@ mod unix {
                 render_case(&repository, fixture, name, section, false);
             }
         }
+        render_case(
+            repository.as_path(),
+            "partial-processes",
+            "processes",
+            "processes",
+            false,
+        );
         render_case(&repository, "populated", "extensions", "extensions", true);
     }
 
@@ -385,7 +392,7 @@ mod unix {
                 assert!(create.allocation().x() < refresh.allocation().x());
                 assert!(vertical_end(&root, refresh.upcast_ref()) <= 240);
             }
-            if fixture == "populated" && name == "processes" && width == 1_200 {
+            if fixture != "error" && name == "processes" && width == 1_200 {
                 settle_toolkit();
                 let request = surface
                     .requests(1)
@@ -593,7 +600,7 @@ mod unix {
                 let cards = widgets_with_class(&root, "hl-card");
                 assert_installed_density(&root, &cards, width, width_name);
             }
-            if fixture == "populated" && name == "processes" {
+            if fixture != "error" && name == "processes" {
                 let view = find_column_view(&root).expect("Processes renders its DataTable");
                 let table = view
                     .ancestor(gtk::ScrolledWindow::static_type())
@@ -619,6 +626,47 @@ mod unix {
                 } else {
                     assert_eq!(visible, ["container", "pid", "user", "cpu", "memory", "command"]);
                 }
+            }
+            if fixture == "partial-processes" && name == "processes" {
+                let summary = "1 container process snapshot unavailable; available containers remain visible.";
+                assert_inline_message(&root, summary);
+                let message = find_inline_message(&root, summary).expect("partial process warning");
+                assert!(message.has_css_class("tone-warning"));
+                let disclosure = find_expander(&root, "Technical details");
+                assert_eq!(disclosure.accessible_role(), gtk::AccessibleRole::Button);
+                assert!(
+                    disclosure.is_focusable(),
+                    "{width_name} partial diagnostic is keyboard reachable"
+                );
+                assert!(
+                    !disclosure.is_expanded(),
+                    "{width_name} partial diagnostic starts collapsed"
+                );
+                let table = find_column_view(&root).expect("available process rows remain visible");
+                let message_bounds = message.compute_bounds(&root).expect("warning belongs to Top root");
+                let table_bounds = table.compute_bounds(&root).expect("process table belongs to Top root");
+                assert!(
+                    message_bounds.y() + message_bounds.height() <= table_bounds.y(),
+                    "{width_name} partial warning follows the table instead of preceding it"
+                );
+                assert!(
+                    vertical_end(&root, &message.clone().upcast()) <= 240,
+                    "{width_name} partial warning fell below the first 240px"
+                );
+                assert!(disclosure.grab_focus(), "{width_name} partial diagnostic accepts focus");
+                disclosure.emit_by_name::<()>("activate", &[]);
+                settle_toolkit();
+                assert!(disclosure.is_expanded(), "{width_name} partial diagnostic opens");
+                find_mapped_labelled(&root, "job-worker: container process endpoint did not respond");
+                capture(
+                    &window,
+                    &format!("partial-processes-processes-details-{width_name}"),
+                    width,
+                    800,
+                );
+                disclosure.emit_by_name::<()>("activate", &[]);
+                settle_toolkit();
+                assert!(!disclosure.is_expanded(), "{width_name} partial diagnostic closes");
             }
         }
         if fixture == "populated" && name == "extensions" {
