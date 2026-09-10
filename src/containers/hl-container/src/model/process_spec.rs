@@ -97,6 +97,9 @@ pub struct ContainerSpec {
     #[serde(default)]
     pub execution: Execution,
     pub process: Process,
+    /// User expression requested at container creation, retained for inspection
+    /// independently from the resolved numeric process credentials.
+    pub user: String,
     pub hostname: Option<String>,
     pub hosts: BTreeMap<String, IpAddr>,
     #[serde(default)]
@@ -133,6 +136,7 @@ impl ContainerSpec {
             guest: Guest::default(),
             execution: Execution::default(),
             process,
+            user: String::new(),
             hostname: None,
             hosts: BTreeMap::new(),
             resolver: Resolver::default(),
@@ -148,6 +152,14 @@ impl ContainerSpec {
             ports: BTreeSet::new(),
             publish: Vec::new(),
         }
+    }
+
+    /// Retains the requested container user while execution uses the resolved
+    /// numeric credentials stored on [`Process`].
+    #[must_use]
+    pub fn user(mut self, user: impl Into<String>) -> Self {
+        self.user = user.into();
+        self
     }
 
     /// Creates a container from an unmanaged host directory.
@@ -166,6 +178,7 @@ impl ContainerSpec {
             guest: Guest::default(),
             execution: Execution::default(),
             process,
+            user: String::new(),
             hostname: None,
             hosts: BTreeMap::new(),
             resolver: Resolver::default(),
@@ -484,6 +497,17 @@ mod tests {
         stored.as_object_mut().unwrap().remove("stop_timeout_seconds");
         let legacy: ContainerSpec = serde_json::from_value(stored).unwrap();
         assert_eq!(legacy.stop_timeout_seconds, 10);
+    }
+
+    #[test]
+    fn requested_user_is_durable_and_missing_identity_is_not_invented() {
+        let spec = ContainerSpec::from_directory("/rootfs", Process::new("/bin/true")).user("worker:staff");
+        let mut stored = serde_json::to_value(&spec).unwrap();
+        assert_eq!(stored["user"], "worker:staff");
+        assert_eq!(serde_json::from_value::<ContainerSpec>(stored.clone()).unwrap().user, "worker:staff");
+
+        stored.as_object_mut().unwrap().remove("user");
+        assert!(serde_json::from_value::<ContainerSpec>(stored).is_err());
     }
 
     #[test]

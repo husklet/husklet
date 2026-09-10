@@ -150,6 +150,7 @@ impl Containers {
         let mut spec = configure(
             ContainerSpec::new(rootfs.clone(), process)
                 .image(image.image().name.clone())
+                .user(runtime.user)
                 .guest(crate::Guest::for_platform(image.platform())?),
         );
         if spec.rootfs != crate::Rootfs::Image(rootfs.clone()) {

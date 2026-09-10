@@ -19,7 +19,7 @@ use hl_client::model::{CreateContainer, CreateExecution, DockerMount, HostConfig
 use hl_extension::port::HostError;
 use hl_extension::{Grant, Manifest, Resources};
 
-use super::{failure, Bridge};
+use super::{Bridge, failure};
 
 /// The only environment variable an extension's container is given.
 ///
@@ -438,6 +438,7 @@ impl Sidecar {
             || !mounts_match(spec, &container.details.metadata.mounts)
             || !process_matches(spec, &container.path, &container.args)
             || !environment_matches(spec, &container.config.env)
+            || container.config.user != spec.image.user
             || !lifecycle_matches(&container.config, &container.network_settings)
             || container.execution != CreateExecution::Interpreted
         {
@@ -674,9 +675,9 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        ensure_transaction, image_matches, removal_target, replacement_target, stop_target, Image, Sidecar,
-        SidecarSpec, DATA_TARGET, DATA_VARIABLE, GENERATION_LABEL, NAME_LABEL, NODE_OPTIONS, SIGNATURE_LABEL,
-        SOCKET_TARGET, SOCKET_VARIABLE,
+        DATA_TARGET, DATA_VARIABLE, GENERATION_LABEL, Image, NAME_LABEL, NODE_OPTIONS, SIGNATURE_LABEL, SOCKET_TARGET,
+        SOCKET_VARIABLE, Sidecar, SidecarSpec, ensure_transaction, image_matches, removal_target, replacement_target,
+        stop_target,
     };
     use hl_extension::{Capability, ExtensionName, Grant, Manifest, Resources};
 
@@ -1107,6 +1108,47 @@ mod tests {
     }
 
     #[test]
+    fn ensure_replaces_a_matching_signature_running_as_a_different_user() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let socket = temporary.path().join("docker.sock");
+        let listener = UnixListener::bind(&socket).expect("mock Docker socket");
+        let wanted = spec().generation(42);
+        let signature = wanted.signature();
+        let served = std::thread::spawn(move || {
+            let labels =
+                format!(r#"{{"{SIGNATURE_LABEL}":"{signature}","{NAME_LABEL}":"sample","{GENERATION_LABEL}":"42"}}"#);
+            let root = inspection("root-user-id", &labels).replace("\"User\":\"1000:1000\"", "\"User\":\"root\"");
+            let responses = [
+                ("200 OK", root.into_bytes()),
+                ("204 No Content", Vec::new()),
+                ("201 Created", br#"{"Id":"fresh-id","Warnings":[]}"#.to_vec()),
+                ("204 No Content", Vec::new()),
+            ];
+            responses
+                .into_iter()
+                .map(|(status, body)| {
+                    let mut stream = accept_bounded(&listener);
+                    let request = read_request(&mut stream).expect("Docker request");
+                    respond_close(&mut stream, status, &body);
+                    request
+                })
+                .collect::<Vec<_>>()
+        });
+        let bridge = Arc::new(super::super::Bridge::new(socket).expect("bridge"));
+
+        assert_eq!(Sidecar::new(bridge).ensure(&wanted), Ok(super::Outcome::Creation));
+        assert_eq!(
+            served.join().expect("daemon joined"),
+            vec![
+                "GET /v1.43/containers/extension%2Dsample/json?size=false",
+                "DELETE /v1.43/containers/root%2Duser%2Did?force=true&v=false",
+                "POST /v1.43/containers/create?name=extension%2Dsample",
+                "POST /v1.43/containers/extension%2Dsample/start",
+            ]
+        );
+    }
+
+    #[test]
     fn ensure_replaces_a_matching_signature_running_a_different_program() {
         let temporary = tempfile::tempdir().expect("temporary directory");
         let socket = temporary.path().join("docker.sock");
@@ -1436,6 +1478,7 @@ mod tests {
             "HUSKLET_EXTENSION_SOCKET=/run/husklet/extension.sock",
             "NODE_OPTIONS=--jitless",
         ]);
+        inspection["Config"]["User"] = serde_json::json!("1000:1000");
         inspection.to_string()
     }
 
