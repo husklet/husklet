@@ -635,6 +635,63 @@ test('real Unix container inventory preserves a published PostgreSQL port', asyn
   }
 });
 
+test('real Unix container inventory rejects duplicate identities and preserves session health', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-container-identities-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const calls = [];
+  const connections = new Set();
+  const first = {
+    id: 'a'.repeat(64),
+    name: 'postgres-primary',
+    image: 'postgres:17',
+    state: 'running',
+    created: 1,
+    generation: 4,
+    ports: [{ container: 5432, host: 15432, protocol: 'tcp' }],
+  };
+  const server = net.createServer((socket) => {
+    connections.add(socket);
+    socket.on('close', () => connections.delete(socket));
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.kind !== KIND.request || frame.channel !== 2) continue;
+        calls.push(frame.payload.call);
+        const containers =
+          calls.length === 1 ? [first, { ...first, name: 'postgres-replica' }] : [first];
+        socket.write(
+          encode({
+            channel: 2,
+            kind: KIND.response,
+            payload: { reply: 'containers', with: containers },
+          }),
+        );
+      }
+    });
+    socket.write(
+      encode({
+        channel: CONTROL,
+        kind: KIND.open,
+        payload: { protocol: 1, peer: 'container-identities', granted: ['containers:read'] },
+      }),
+    );
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    const containers = workspace(session).containers;
+    await assert.rejects(containers.list(), /duplicate immutable container identities/);
+    assert.deepEqual(calls, ['container_list']);
+    assert.deepEqual(await containers.list(), [first]);
+    assert.deepEqual(calls, ['container_list', 'container_list']);
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('real Unix observed inspection rejects a replacement before publishing its endpoint', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-observed-preview-'));
   const socketPath = path.join(directory, 'host.sock');

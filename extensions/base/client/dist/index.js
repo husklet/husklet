@@ -799,7 +799,13 @@ export function workspace(session, { signal } = {}) {
             }), 'extension'),
         },
         containers: {
-            list: async () => expect(await session.call('container_list'), 'containers'),
+            list: async () => {
+                const containers = expect(await session.call('container_list'), 'containers');
+                if (new Set(containers.map(({ id }) => id)).size !== containers.length) {
+                    throw new TypeError('host returned duplicate immutable container identities; no container selection was assumed');
+                }
+                return containers;
+            },
             inspect: async (id) => expect(await session.call('container_inspect', { id }), 'container'),
             inspectObserved: async (id, generation) => {
                 const observedGeneration = containerMutation(id, generation).generation;
