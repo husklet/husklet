@@ -1358,6 +1358,113 @@ test('filesystem watcher preserves bounded completeness and coalescing metadata'
   stage.server.close();
 });
 
+test('real Unix filesystem snapshots reject journal replacement before delivery', async () => {
+  const stage = await pair();
+  const next = frames(stage.host);
+  await next();
+  const seen = [];
+  const opening = workspace(stage.session).watchFilesystem((inventory) => seen.push(inventory));
+  assert.deepEqual((await next()).payload, {
+    call: 'event_subscribe',
+    with: { topic: 'filesystem' },
+  });
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  await opening;
+  const inventory = (journal, revision) => ({
+    journal,
+    entries: [],
+    complete: true,
+    coalesced: 0,
+    revision,
+  });
+  stage.host.write(
+    encode({
+      channel: 17,
+      kind: KIND.event,
+      payload: { snapshot: 'filesystem', of: inventory(FILE_JOURNAL, 9) },
+    }),
+  );
+  assert.equal((await next()).kind, KIND.credit);
+  assert.equal(seen.length, 1);
+
+  stage.host.write(
+    encode({
+      channel: 17,
+      kind: KIND.event,
+      payload: { snapshot: 'filesystem', of: inventory(NEXT_FILE_JOURNAL, 0) },
+    }),
+  );
+  const closed = await stage.session.closed;
+  assert.match(closed.message, /journal changed within one host session/);
+  assert.equal(seen.length, 1, 'the invalid replacement is never delivered');
+  await assert.rejects(workspace(stage.session).info(), /closed|journal changed/);
+  stage.host.destroy();
+  stage.server.close();
+});
+
+test('real Unix filesystem snapshots reject a regressing revision', async () => {
+  const stage = await pair();
+  const next = frames(stage.host);
+  await next();
+  const opening = workspace(stage.session).watchFilesystem(() => {});
+  await next();
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  await opening;
+  for (const revision of [9, 8]) {
+    stage.host.write(
+      encode({
+        channel: 18,
+        kind: KIND.event,
+        payload: {
+          snapshot: 'filesystem',
+          of: {
+            journal: FILE_JOURNAL,
+            entries: [],
+            complete: true,
+            coalesced: 0,
+            revision,
+          },
+        },
+      }),
+    );
+    if (revision === 9) assert.equal((await next()).kind, KIND.credit);
+  }
+  assert.match((await stage.session.closed).message, /revision moved backwards/);
+  stage.host.destroy();
+  stage.server.close();
+});
+
+test('real Unix filesystem snapshots reject malformed journal identity without credit', async () => {
+  const stage = await pair();
+  const next = frames(stage.host);
+  await next();
+  const opening = workspace(stage.session).watchFilesystem(() => {
+    assert.fail('malformed snapshot must not be delivered');
+  });
+  await next();
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  await opening;
+  stage.host.write(
+    encode({
+      channel: 19,
+      kind: KIND.event,
+      payload: {
+        snapshot: 'filesystem',
+        of: {
+          journal: 'not-a-journal',
+          entries: [],
+          complete: true,
+          coalesced: 0,
+          revision: 0,
+        },
+      },
+    }),
+  );
+  assert.match((await stage.session.closed).message, /32 hexadecimal characters/);
+  stage.host.destroy();
+  stage.server.close();
+});
+
 test('filesystem change watcher advances opaque pages and exposes truncation', async () => {
   const calls = [];
   const pages = [

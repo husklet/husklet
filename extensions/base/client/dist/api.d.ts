@@ -1626,6 +1626,7 @@ export interface WorkspaceApi {
     watchExtensionAcquisitions(listener: (change: ExtensionAcquisitionChange) => void): Promise<() => Promise<void>>;
     watchWorkspaceLifecycle(listener: (change: WorkspaceLifecycleChange) => void): Promise<() => Promise<void>>;
     watchWorkspaceEvents(listener: (batch: WorkspaceEventBatch) => void): Promise<() => Promise<void>>;
+    /** Watch bounded inventories; malformed, replaced, or regressing journal cursors close the session. */
     watchFilesystem(listener: (inventory: FileInventory) => void): Promise<() => Promise<void>>;
 }
 export type WatchHandle = (() => Promise<void>) & {

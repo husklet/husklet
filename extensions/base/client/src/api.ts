@@ -1605,6 +1605,7 @@ export interface WorkspaceApi {
   watchWorkspaceEvents(
     listener: (batch: WorkspaceEventBatch) => void,
   ): Promise<() => Promise<void>>;
+  /** Watch bounded inventories; malformed, replaced, or regressing journal cursors close the session. */
   watchFilesystem(listener: (inventory: FileInventory) => void): Promise<() => Promise<void>>;
 }
 

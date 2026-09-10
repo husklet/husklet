@@ -12,7 +12,7 @@ import {
   validateSnapshot,
   validateUiEvent as validateCurrentUiEvent,
 } from './generated-protocol.js';
-import type { CallOptions, ConnectOptions, HostEvent, RowRequest } from './api.js';
+import type { CallOptions, ConnectOptions, FileInventory, HostEvent, RowRequest } from './api.js';
 
 /** The protocol this package speaks. The host refuses anything else. */
 export const PROTOCOL = PROTOCOL_VERSION;
@@ -329,6 +329,7 @@ export class Session {
   #deferredCredits = new Map<number, number>();
   #eventDelivery = Promise.resolve();
   #eventBacklog = 0;
+  #filesystemJournal?: { identity: string; revision: number };
   #closing;
   #dataListener = (chunk) => this.#receive(chunk);
   #endListener = () => this.#ended();
@@ -742,6 +743,7 @@ export class Session {
       let payload = frame.payload;
       if (typeof payload?.snapshot === 'string') {
         payload = validateSnapshot(payload);
+        if (payload.snapshot === 'filesystem') this.#validateFilesystemJournal(payload.of);
         const topic = SNAPSHOT_TOPICS.get(payload.snapshot);
         const pendingSubscription = this.#pending.some(
           (pending) => pending.name === 'event_subscribe' && pending.topic === topic,
@@ -797,6 +799,21 @@ export class Session {
       return;
     }
     throw new Error(`unexpected ${frame.kind} frame on channel ${frame.channel}`);
+  }
+
+  #validateFilesystemJournal(inventory: FileInventory) {
+    const { journal, revision } = inventory;
+    if (typeof journal !== 'string' || !/^[0-9a-fA-F]{32}$/.test(journal)) {
+      throw new TypeError('filesystem snapshot journal must be 32 hexadecimal characters');
+    }
+    const prior = this.#filesystemJournal;
+    if (prior && prior.identity !== journal) {
+      throw new TypeError('filesystem snapshot journal changed within one host session');
+    }
+    if (prior && revision < prior.revision) {
+      throw new TypeError('filesystem snapshot revision moved backwards');
+    }
+    this.#filesystemJournal = { identity: journal, revision };
   }
 
   #write(frame) {

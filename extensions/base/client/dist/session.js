@@ -277,6 +277,7 @@ export class Session {
     #deferredCredits = new Map();
     #eventDelivery = Promise.resolve();
     #eventBacklog = 0;
+    #filesystemJournal;
     #closing;
     #dataListener = (chunk) => this.#receive(chunk);
     #endListener = () => this.#ended();
@@ -685,6 +686,8 @@ export class Session {
             let payload = frame.payload;
             if (typeof payload?.snapshot === 'string') {
                 payload = validateSnapshot(payload);
+                if (payload.snapshot === 'filesystem')
+                    this.#validateFilesystemJournal(payload.of);
                 const topic = SNAPSHOT_TOPICS.get(payload.snapshot);
                 const pendingSubscription = this.#pending.some((pending) => pending.name === 'event_subscribe' && pending.topic === topic);
                 if (!topic || (!this.#topics.has(topic) && !pendingSubscription))
@@ -739,6 +742,20 @@ export class Session {
             return;
         }
         throw new Error(`unexpected ${frame.kind} frame on channel ${frame.channel}`);
+    }
+    #validateFilesystemJournal(inventory) {
+        const { journal, revision } = inventory;
+        if (typeof journal !== 'string' || !/^[0-9a-fA-F]{32}$/.test(journal)) {
+            throw new TypeError('filesystem snapshot journal must be 32 hexadecimal characters');
+        }
+        const prior = this.#filesystemJournal;
+        if (prior && prior.identity !== journal) {
+            throw new TypeError('filesystem snapshot journal changed within one host session');
+        }
+        if (prior && revision < prior.revision) {
+            throw new TypeError('filesystem snapshot revision moved backwards');
+        }
+        this.#filesystemJournal = { identity: journal, revision };
     }
     #write(frame) {
         if (this.#closed && frame.kind !== KIND.close)
