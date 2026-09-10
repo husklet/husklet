@@ -276,6 +276,10 @@ fn components(css: &mut String, theme: &Theme) {
          .hl-togglebutton {{ background: transparent; border-color: {line}; }}\n\
          .hl-togglebutton:checked, .hl-togglebutton:checked:hover {{ background: {raised}; color: {text}; border-color: {accent}; box-shadow: inset 0 -3px 0 {accent}; font-weight: 700; }}\n\
          .hl-togglebutton:checked:focus-visible {{ outline: 2px solid {accent}; outline-offset: 2px; box-shadow: inset 0 -3px 0 {accent}; }}\n\
+         .hl-expander > title, .hl-accordion > title {{ min-height: 28px; padding: 2px 4px; border: 1px solid transparent; border-radius: {radius}px; }}\n\
+         .hl-expander > title > arrow, .hl-accordion > title > arrow {{ margin-right: 6px; -gtk-icon-size: 12px; }}\n\
+         .hl-expander > title:hover, .hl-accordion > title:hover {{ background: {raised}; border-color: {line}; }}\n\
+         .hl-expander:focus > title, .hl-expander:focus-visible > title, .hl-accordion:focus > title, .hl-accordion:focus-visible > title {{ background: {raised}; border-color: {accent}; box-shadow: inset 0 0 0 1px {accent}; }}\n\
          .hl-chip {{ min-height: 24px; padding: 1px 8px; border-radius: {pill}px; background: {raised}; border-color: {line}; }}\n\
          .hl-separator {{ background: {line}; min-height: 1px; min-width: 1px; }}\n\
          .hl-datatable, .hl-list {{ background: {surface}; border: 1px solid {line}; border-radius: {radius}px; }}\n\
@@ -411,6 +415,15 @@ mod tests {
             ".hl-listsubheader { color: #a7aeba; min-height: 16px; padding: 2px 4px 0; font-size: 11px; font-weight: 600; letter-spacing: .04em; }"
         ));
         assert!(css.contains(".hl-card > box { padding: 10px"));
+        assert!(css.contains(
+            ".hl-expander > title, .hl-accordion > title { min-height: 28px; padding: 2px 4px; border: 1px solid transparent; border-radius: 8px;"
+        ));
+        assert!(css.contains(
+            ".hl-expander > title > arrow, .hl-accordion > title > arrow { margin-right: 6px; -gtk-icon-size: 12px;"
+        ));
+        assert!(css.contains(
+            ".hl-expander:focus > title, .hl-expander:focus-visible > title, .hl-accordion:focus > title, .hl-accordion:focus-visible > title { background: #21252d; border-color: #559df7; box-shadow: inset 0 0 0 1px #559df7;"
+        ));
         assert!(css.contains(".hl-card { background: #171a20; border: 1px solid #323843;"));
         assert!(css.contains("box-shadow: 0 1px 2px rgba(0,0,0,.22), inset 0 1px rgba(255,255,255,.035);"));
         assert!(!css.contains(".hl-card { box-shadow: none;"));

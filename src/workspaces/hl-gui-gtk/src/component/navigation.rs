@@ -26,8 +26,15 @@ pub(crate) fn widget(tag: Tag) -> gtk::Widget {
         // Accordion and Expander are the last navigation tags routed here: both
         // are one disclosure, and an accordion is the disclosure that names its
         // summary and its details as parts.
-        _ => gtk::Expander::new(None).upcast(),
+        _ => disclosure().upcast(),
     }
+}
+
+/// One compact control row remains clickable even before it reveals a body.
+fn disclosure() -> gtk::Expander {
+    let widget = gtk::Expander::new(None);
+    widget.set_size_request(-1, 28);
+    widget
 }
 
 fn menu() -> gtk::Box {

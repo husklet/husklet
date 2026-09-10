@@ -826,12 +826,21 @@ mod unix {
             });
             assert_eq!(controlled.label().as_deref(), Some("Runtime diagnostics"));
             assert_eq!(controlled.accessible_role(), gtk::AccessibleRole::Button);
+            assert!(controlled.has_css_class("hl-expander"));
             assert!(!controlled.is_expanded(), "controlled Expander starts collapsed");
+            assert_eq!(
+                controlled.height(),
+                28,
+                "collapsed disclosure owns one compact control row"
+            );
             assert!(
                 controlled.can_focus(),
                 "the labelled disclosure participates in keyboard focus"
             );
             assert!(controlled.grab_focus(), "Expander summary owns keyboard focus");
+            settle_toolkit();
+            assert!(controlled.state_flags().contains(gtk::StateFlags::FOCUSED));
+            capture_story(&realized_window, "Expander focused collapsed");
             // GTK's native Enter and Space bindings both dispatch this action signal.
             // Exercising it in both directions proves each binding's common path
             // changes state and reports once without installing a synthetic handler.
@@ -846,6 +855,13 @@ mod unix {
                 assert_eq!(value, &hl_gui::PropValue::Flag(expected));
                 assert_eq!(controlled.is_expanded(), expected);
                 assert!(controlled.has_focus(), "toggle preserves focus on the summary");
+                if expected {
+                    assert!(
+                        controlled.height() > 28,
+                        "expanded disclosure allocates its body below the 28px summary"
+                    );
+                    capture_story(&realized_window, "Expander focused expanded");
+                }
             }
 
             let mut states = descendants::<gtk::Expander>(&root)
