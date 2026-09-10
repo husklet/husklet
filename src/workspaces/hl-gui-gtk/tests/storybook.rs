@@ -21,6 +21,7 @@ mod unix {
         "IconButton",
         "Entry",
         "Search",
+        "TextArea",
         "Select",
         "Switch",
         "ToggleButton",
@@ -544,6 +545,31 @@ mod unix {
             assert_contained(&root, "Search before narrow");
             assert!(search.width() <= 552, "Search escaped 16px narrow insets");
             capture_story(&realized_window, "Search before narrow");
+            realized_window.set_size_request(1_200, 800);
+            realized_window.set_default_size(1_200, 800);
+            settle_window_width(&realized_window, 1_200);
+        }
+        if story == "TextArea" {
+            let editor = find::<gtk::ScrolledWindow>(&root, |window| {
+                window.tooltip_text().as_deref() == Some("Task manifest")
+            });
+            let view = editor
+                .child()
+                .and_then(|child| child.downcast::<gtk::TextView>().ok())
+                .expect("TextArea owns a native multi-line editor");
+            assert_eq!(view.accessible_role(), gtk::AccessibleRole::TextBox);
+            assert!(view.is_editable());
+            assert!(view.is_monospace());
+            assert_eq!(view.wrap_mode(), gtk::WrapMode::WordChar);
+            assert!((104..=120).contains(&editor.height()), "TextArea is {}px tall", editor.height());
+            assert!(view.grab_focus(), "TextArea accepts keyboard focus");
+            capture_story(&realized_window, "TextArea before wide");
+            realized_window.set_size_request(600, 800);
+            realized_window.set_default_size(600, 800);
+            settle_window_width(&realized_window, 600);
+            assert_contained(&root, "TextArea before narrow");
+            assert!(editor.width() <= 552);
+            capture_story(&realized_window, "TextArea before narrow");
             realized_window.set_size_request(1_200, 800);
             realized_window.set_default_size(1_200, 800);
             settle_window_width(&realized_window, 1_200);
@@ -1121,6 +1147,27 @@ mod unix {
             assert!(search.width() <= 552);
             capture_story(&realized_window, "Search changed narrow");
         }
+        if story == "TextArea" {
+            let editor = find::<gtk::ScrolledWindow>(&root, |window| {
+                window.tooltip_text().as_deref() == Some("Task manifest")
+            });
+            let view = editor
+                .child()
+                .and_then(|child| child.downcast::<gtk::TextView>().ok())
+                .expect("controlled TextArea retains its native editor");
+            let buffer = view.buffer();
+            assert_eq!(
+                buffer.text(&buffer.start_iter(), &buffer.end_iter(), false),
+                "name: compile\ncommand: cargo test"
+            );
+            find::<gtk::Label>(&root, |label| label.text() == "2 lines · 33 characters");
+            capture_story(&realized_window, "TextArea changed wide");
+            realized_window.set_size_request(600, 800);
+            realized_window.set_default_size(600, 800);
+            settle_window_width(&realized_window, 600);
+            assert_contained(&root, "TextArea changed narrow");
+            capture_story(&realized_window, "TextArea changed narrow");
+        }
         if let Some(before) = toggle_before {
             settle_toolkit();
             let toggle =
@@ -1518,6 +1565,16 @@ mod unix {
                     find::<gtk::SearchEntry>(root, |entry| entry.tooltip_text().as_deref() == Some("Find extensions"));
                 search.set_text("runtime");
             }
+            "TextArea" => {
+                let editor = find::<gtk::ScrolledWindow>(root, |window| {
+                    window.tooltip_text().as_deref() == Some("Task manifest")
+                });
+                let view = editor
+                    .child()
+                    .and_then(|child| child.downcast::<gtk::TextView>().ok())
+                    .expect("TextArea owns its native editor");
+                view.buffer().set_text("name: compile\ncommand: cargo test");
+            }
             "FormControl" => {
                 let entry = find::<gtk::Entry>(root, |entry| entry.tooltip_text().as_deref() == Some("Extension name"));
                 entry.set_text("rendered-form-control");
@@ -1700,6 +1757,19 @@ mod unix {
                     )
                 })
                 .expect("Search reports its final native edit value")
+        } else if story == "TextArea" {
+            reports
+                .into_iter()
+                .find(|event| {
+                    matches!(
+                        event,
+                        hl_gui::Event::Change {
+                            value: hl_gui::PropValue::Text(value),
+                            ..
+                        } if value == "name: compile\ncommand: cargo test"
+                    )
+                })
+                .expect("TextArea reports its final native edit value")
         } else {
             reports.into_iter().next().expect("one report")
         };
@@ -1708,6 +1778,15 @@ mod unix {
                 panic!("Search did not emit its typed Change interaction: {event:?}")
             };
             assert_eq!(value, &hl_gui::PropValue::text("runtime"));
+        }
+        if story == "TextArea" {
+            let hl_gui::Event::Change { value, .. } = &event else {
+                panic!("TextArea did not emit its typed Change interaction: {event:?}")
+            };
+            assert_eq!(
+                value,
+                &hl_gui::PropValue::text("name: compile\ncommand: cargo test")
+            );
         }
         if story == "Extension acquisition" {
             let hl_gui::Event::Invoke { node, id } = &event else {

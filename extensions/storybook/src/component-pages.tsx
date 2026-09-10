@@ -25,6 +25,7 @@ import { ResourceStateStory } from './resource-state.js';
 import { SelectWorkbench } from './select.js';
 import { SliderWorkbench } from './slider.js';
 import { SwitchWorkbench } from './switch.js';
+import { TextAreaWorkbench } from './text-area.js';
 import { TerminalTranscriptStory } from './terminal-transcript.js';
 import { ToggleButtonWorkbench } from './toggle-button.js';
 import { ComponentDocument, DocumentationSection } from './component-document.js';
@@ -46,6 +47,7 @@ type NativeWorkbenchName =
   | 'Select'
   | 'Slider'
   | 'Switch'
+  | 'TextArea'
   | 'ToggleButton';
 
 const compositeExamples = {
@@ -99,6 +101,7 @@ const nativeWorkbenchPages = {
   Select: SelectWorkbench,
   Slider: SliderWorkbench,
   Switch: SwitchWorkbench,
+  TextArea: TextAreaWorkbench,
   ToggleButton: ToggleButtonWorkbench,
 } satisfies Record<NativeWorkbenchName, Page>;
 
