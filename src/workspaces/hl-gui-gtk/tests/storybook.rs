@@ -22,6 +22,7 @@ mod unix {
         "Entry",
         "Search",
         "NumberEntry",
+        "PasswordEntry",
         "TextArea",
         "Select",
         "Switch",
@@ -599,6 +600,28 @@ mod unix {
             assert_contained(&root, "NumberEntry before narrow");
             assert!(counter.width() <= 196, "NumberEntry expanded to {}px", counter.width());
             capture_story(&realized_window, "NumberEntry before narrow");
+            realized_window.set_size_request(1_200, 800);
+            realized_window.set_default_size(1_200, 800);
+            settle_window_width(&realized_window, 1_200);
+        }
+        if story == "PasswordEntry" {
+            let field = find::<gtk::PasswordEntry>(&root, |entry| {
+                entry.tooltip_text().as_deref() == Some("Registry token")
+            });
+            assert_eq!(field.accessible_role(), gtk::AccessibleRole::TextBox);
+            assert_eq!(field.text(), "local-token");
+            assert!(field.shows_peek_icon(), "documented reveal policy exposes native peek");
+            assert!((28..=36).contains(&field.height()));
+            let withheld = find::<gtk::PasswordEntry>(&root, |entry| entry.text() == "never-reveal");
+            assert!(!withheld.shows_peek_icon(), "secret=true withholds native peek");
+            assert!(field.grab_focus(), "PasswordEntry accepts keyboard focus");
+            capture_story(&realized_window, "PasswordEntry before wide");
+            realized_window.set_size_request(600, 800);
+            realized_window.set_default_size(600, 800);
+            settle_window_width(&realized_window, 600);
+            assert_contained(&root, "PasswordEntry before narrow");
+            assert!(field.width() <= 360);
+            capture_story(&realized_window, "PasswordEntry before narrow");
             realized_window.set_size_request(1_200, 800);
             realized_window.set_default_size(1_200, 800);
             settle_window_width(&realized_window, 1_200);
@@ -1210,6 +1233,25 @@ mod unix {
             assert_contained(&root, "NumberEntry changed narrow");
             capture_story(&realized_window, "NumberEntry changed narrow");
         }
+        if story == "PasswordEntry" {
+            let field = find::<gtk::PasswordEntry>(&root, |entry| {
+                entry.tooltip_text().as_deref() == Some("Registry token")
+            });
+            assert_eq!(field.text(), "rotated-token");
+            find::<gtk::Label>(&root, |label| label.text() == "13 characters · concealed");
+            assert!(
+                descendants::<gtk::Label>(&root)
+                    .iter()
+                    .all(|label| label.text() != "rotated-token"),
+                "secret leaked into visible feedback"
+            );
+            capture_story(&realized_window, "PasswordEntry changed wide");
+            realized_window.set_size_request(600, 800);
+            realized_window.set_default_size(600, 800);
+            settle_window_width(&realized_window, 600);
+            assert_contained(&root, "PasswordEntry changed narrow");
+            capture_story(&realized_window, "PasswordEntry changed narrow");
+        }
         if let Some(before) = toggle_before {
             settle_toolkit();
             let toggle =
@@ -1613,6 +1655,12 @@ mod unix {
                 })
                 .set_value(6.0);
             }
+            "PasswordEntry" => {
+                find::<gtk::PasswordEntry>(root, |entry| {
+                    entry.tooltip_text().as_deref() == Some("Registry token")
+                })
+                .set_text("rotated-token");
+            }
             "TextArea" => {
                 let editor = find::<gtk::ScrolledWindow>(root, |window| {
                     window.tooltip_text().as_deref() == Some("Task manifest")
@@ -1818,6 +1866,19 @@ mod unix {
                     )
                 })
                 .expect("TextArea reports its final native edit value")
+        } else if story == "PasswordEntry" {
+            reports
+                .into_iter()
+                .find(|event| {
+                    matches!(
+                        event,
+                        hl_gui::Event::Change {
+                            value: hl_gui::PropValue::Text(value),
+                            ..
+                        } if value == "rotated-token"
+                    )
+                })
+                .expect("PasswordEntry reports its final native edit value")
         } else {
             reports.into_iter().next().expect("one report")
         };
@@ -1832,6 +1893,12 @@ mod unix {
                 panic!("NumberEntry did not emit its typed Change interaction: {event:?}")
             };
             assert_eq!(value, &hl_gui::PropValue::Number(6.0));
+        }
+        if story == "PasswordEntry" {
+            let hl_gui::Event::Change { value, .. } = &event else {
+                panic!("PasswordEntry did not emit its typed Change interaction: {event:?}")
+            };
+            assert_eq!(value, &hl_gui::PropValue::text("rotated-token"));
         }
         if story == "TextArea" {
             let hl_gui::Event::Change { value, .. } = &event else {
