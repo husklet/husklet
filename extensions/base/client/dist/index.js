@@ -1358,7 +1358,13 @@ export function workspace(session, { signal } = {}) {
         volumes: {
             inventory: async () => expect(await session.call('volume_list'), 'volumes'),
             list: async () => (await api.volumes.inventory()).volumes,
-            inspect: async (name) => expect(await session.call('volume_inspect', { name }), 'volume'),
+            inspect: async (name) => {
+                const volume = expect(await session.call('volume_inspect', { name }), 'volume');
+                if (volume.name !== name) {
+                    throw new TypeError(`host returned volume ${volume.name}, expected ${name}; no volume state was assumed`);
+                }
+                return volume;
+            },
             create: async (name) => expect(await session.call('volume_create', { name }), 'volume'),
             remove: (name, generation) => done('volume_remove', {
                 name,

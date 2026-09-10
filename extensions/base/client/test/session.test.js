@@ -548,6 +548,59 @@ test('real Unix network inspection rejects another immutable identity and preser
   }
 });
 
+test('real Unix volume inspection rejects another name and preserves session health', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-volume-inspect-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const calls = [];
+  const connections = new Set();
+  const server = net.createServer((socket) => {
+    connections.add(socket);
+    socket.on('close', () => connections.delete(socket));
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.kind !== KIND.request || frame.channel !== 2) continue;
+        calls.push(frame.payload.call);
+        socket.write(
+          encode({
+            channel: 2,
+            kind: KIND.response,
+            payload: {
+              reply: 'volume',
+              with: {
+                name: calls.length === 1 ? 'other-cache' : 'index-cache',
+                driver: 'local',
+                generation: 'a'.repeat(32),
+              },
+            },
+          }),
+        );
+      }
+    });
+    socket.write(
+      encode({
+        channel: CONTROL,
+        kind: KIND.open,
+        payload: { protocol: 1, peer: 'volume-inspect', granted: ['volumes:read'] },
+      }),
+    );
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    const volumes = workspace(session).volumes;
+    await assert.rejects(volumes.inspect('index-cache'), /host returned volume other-cache/);
+    assert.deepEqual(calls, ['volume_inspect'], 'rejection emits no follow-up or mutation');
+    assert.equal((await volumes.inspect('index-cache')).name, 'index-cache');
+    assert.deepEqual(calls, ['volume_inspect', 'volume_inspect']);
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('real Unix execution reads reject another identity and preserve session health', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-execution-identity-'));
   const socketPath = path.join(directory, 'host.sock');
