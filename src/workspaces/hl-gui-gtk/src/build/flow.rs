@@ -162,10 +162,7 @@ impl Weave {
             let (main, cross) = size(&child, vertical, room);
             let line = lines.last_mut().expect("a line is always open");
             let advance = if line.children.is_empty() { main } else { main + spacing };
-            if room >= 0
-                && !line.children.is_empty()
-                && (compact_cards || line.main + advance > room)
-            {
+            if room >= 0 && !line.children.is_empty() && (compact_cards || line.main + advance > room) {
                 lines.push(Line::open(child, main, cross));
                 continue;
             }
@@ -244,6 +241,12 @@ fn size(child: &gtk::Widget, vertical: bool, room: i32) -> (i32, i32) {
     let (minimum, natural, _, _) = child.measure(main, -1);
     let along = if room < 0 {
         natural
+    } else if !vertical && child.hexpands() {
+        // An expanding child has already said that its authored floor is the
+        // amount needed to enter a line; `line` gives it a share of everything
+        // left. Packing from its intrinsic natural width would let optional
+        // content such as a status icon silently change the column count.
+        minimum.min(room)
     } else {
         natural.min(room).max(minimum)
     };
@@ -346,5 +349,51 @@ mod tests {
             .map(|child| child.width())
             .collect::<Vec<_>>();
         assert_eq!(widths, vec![600, 600, 600]);
+    }
+
+    #[test]
+    fn expanding_cards_pack_from_their_floor_before_sharing_spare_width() {
+        if !crate::test_support::on_the_toolkit_thread(expanding_card_floor_scenario) {
+            eprintln!("skipped: no display connection");
+            return;
+        }
+    }
+
+    fn expanding_card_floor_scenario() {
+        let container = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        let flow = Flow::new(gtk::Orientation::Horizontal);
+        flow.set_spacing(4);
+        container.set_layout_manager(Some(flow.clone()));
+
+        let status = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        status.set_size_request(250, 40);
+        status.set_hexpand(true);
+        let emblem = gtk::Image::from_icon_name("dialog-error-symbolic");
+        status.append(&emblem);
+        let caption = gtk::Label::new(Some("Extension could not be completed."));
+        caption.set_wrap(true);
+        caption.set_max_width_chars(56);
+        status.append(&caption);
+        container.append(&status);
+
+        for width in [346, 272] {
+            let card = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            card.set_size_request(width, 40);
+            card.set_hexpand(true);
+            container.append(&card);
+        }
+
+        let (minimum, natural, _, _) = status.measure(gtk::Orientation::Horizontal, -1);
+        assert!(
+            natural > minimum,
+            "fixture needs intrinsic width above its authored floor"
+        );
+        assert_eq!(flow.imp().lines(container.upcast_ref(), 880).len(), 1);
+        container.allocate(880, 40, -1, None);
+        let cards = children(container.upcast_ref());
+        assert!(cards
+            .windows(2)
+            .all(|pair| pair[0].allocation().y() == pair[1].allocation().y()));
+        assert_eq!(cards.iter().map(gtk::Widget::width).sum::<i32>() + 8, 880);
     }
 }
