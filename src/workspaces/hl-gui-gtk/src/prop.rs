@@ -414,11 +414,26 @@ fn range(widget: &gtk::Widget, prop: Prop, value: &PropValue) {
     };
     if let Some(spin) = widget.downcast_ref::<gtk::SpinButton>() {
         bound(&spin.adjustment(), prop, number);
+        if prop == Prop::Step {
+            spin.set_digits(decimal_digits(number));
+        }
         return;
     }
     if let Some(scale) = widget.downcast_ref::<gtk::Scale>() {
         bound(&scale.adjustment(), prop, number);
     }
+}
+
+fn decimal_digits(step: f64) -> u32 {
+    if !step.is_finite() || step <= 0.0 {
+        return 0;
+    }
+    (0..=6)
+        .find(|digits| {
+            let scaled = step * 10_f64.powi(*digits as i32);
+            (scaled - scaled.round()).abs() <= 1e-9
+        })
+        .unwrap_or(6)
 }
 
 fn bound(adjustment: &gtk::Adjustment, prop: Prop, number: f64) {
@@ -480,9 +495,18 @@ fn select_value(widget: &gtk::Widget, node: &Node) {
 
 #[cfg(test)]
 mod tests {
-    use super::{grow, height};
+    use super::{decimal_digits, grow, height};
     use gtk::prelude::*;
     use hl_gui::{Length, PropValue};
+
+    #[test]
+    fn number_entry_precision_follows_its_declared_step() {
+        assert_eq!(decimal_digits(1.0), 0);
+        assert_eq!(decimal_digits(0.5), 1);
+        assert_eq!(decimal_digits(0.25), 2);
+        assert_eq!(decimal_digits(0.001), 3);
+        assert_eq!(decimal_digits(0.0), 0);
+    }
 
     #[test]
     fn data_table_height_and_growth_follow_latest_expansion_property() {

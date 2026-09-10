@@ -21,6 +21,7 @@ mod unix {
         "IconButton",
         "Entry",
         "Search",
+        "NumberEntry",
         "TextArea",
         "Select",
         "Switch",
@@ -570,6 +571,34 @@ mod unix {
             assert_contained(&root, "TextArea before narrow");
             assert!(editor.width() <= 552);
             capture_story(&realized_window, "TextArea before narrow");
+            realized_window.set_size_request(1_200, 800);
+            realized_window.set_default_size(1_200, 800);
+            settle_window_width(&realized_window, 1_200);
+        }
+        if story == "NumberEntry" {
+            let counter = find::<gtk::SpinButton>(&root, |spin| {
+                spin.tooltip_text().as_deref() == Some("Build workers")
+            });
+            assert_eq!(counter.accessible_role(), gtk::AccessibleRole::SpinButton);
+            assert_eq!(counter.value(), 4.0);
+            assert_eq!(counter.adjustment().lower(), 1.0);
+            assert_eq!(counter.adjustment().upper(), 16.0);
+            assert_eq!(counter.adjustment().step_increment(), 1.0);
+            assert!((28..=36).contains(&counter.height()));
+            let fractional = find::<gtk::SpinButton>(&root, |spin| {
+                (spin.adjustment().step_increment() - 0.25).abs() < f64::EPSILON
+            });
+            assert_eq!(fractional.digits(), 2);
+            assert_eq!(fractional.value(), 1.5);
+            assert_eq!(fractional.text(), "1.50");
+            assert!(counter.grab_focus(), "NumberEntry accepts keyboard focus");
+            capture_story(&realized_window, "NumberEntry before wide");
+            realized_window.set_size_request(600, 800);
+            realized_window.set_default_size(600, 800);
+            settle_window_width(&realized_window, 600);
+            assert_contained(&root, "NumberEntry before narrow");
+            assert!(counter.width() <= 196, "NumberEntry expanded to {}px", counter.width());
+            capture_story(&realized_window, "NumberEntry before narrow");
             realized_window.set_size_request(1_200, 800);
             realized_window.set_default_size(1_200, 800);
             settle_window_width(&realized_window, 1_200);
@@ -1168,6 +1197,19 @@ mod unix {
             assert_contained(&root, "TextArea changed narrow");
             capture_story(&realized_window, "TextArea changed narrow");
         }
+        if story == "NumberEntry" {
+            let counter = find::<gtk::SpinButton>(&root, |spin| {
+                spin.tooltip_text().as_deref() == Some("Build workers")
+            });
+            assert_eq!(counter.value(), 6.0);
+            find::<gtk::Label>(&root, |label| label.text() == "6 concurrent workers");
+            capture_story(&realized_window, "NumberEntry changed wide");
+            realized_window.set_size_request(600, 800);
+            realized_window.set_default_size(600, 800);
+            settle_window_width(&realized_window, 600);
+            assert_contained(&root, "NumberEntry changed narrow");
+            capture_story(&realized_window, "NumberEntry changed narrow");
+        }
         if let Some(before) = toggle_before {
             settle_toolkit();
             let toggle =
@@ -1565,6 +1607,12 @@ mod unix {
                     find::<gtk::SearchEntry>(root, |entry| entry.tooltip_text().as_deref() == Some("Find extensions"));
                 search.set_text("runtime");
             }
+            "NumberEntry" => {
+                find::<gtk::SpinButton>(root, |spin| {
+                    spin.tooltip_text().as_deref() == Some("Build workers")
+                })
+                .set_value(6.0);
+            }
             "TextArea" => {
                 let editor = find::<gtk::ScrolledWindow>(root, |window| {
                     window.tooltip_text().as_deref() == Some("Task manifest")
@@ -1778,6 +1826,12 @@ mod unix {
                 panic!("Search did not emit its typed Change interaction: {event:?}")
             };
             assert_eq!(value, &hl_gui::PropValue::text("runtime"));
+        }
+        if story == "NumberEntry" {
+            let hl_gui::Event::Change { value, .. } = &event else {
+                panic!("NumberEntry did not emit its typed Change interaction: {event:?}")
+            };
+            assert_eq!(value, &hl_gui::PropValue::Number(6.0));
         }
         if story == "TextArea" {
             let hl_gui::Event::Change { value, .. } = &event else {

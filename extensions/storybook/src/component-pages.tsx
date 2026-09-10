@@ -19,6 +19,7 @@ import { InlineMessageWorkbench } from './inline-message.js';
 import { JsonTreeStory } from './json-tree.js';
 import { RadioWorkbench } from './radio.js';
 import { RadioGroupWorkbench } from './radio-group.js';
+import { NumberEntryWorkbench } from './number-entry.js';
 import { SearchWorkbench } from './search.js';
 import { RecoveryStateStory } from './recovery-state.js';
 import { ResourceStateStory } from './resource-state.js';
@@ -41,6 +42,7 @@ type NativeWorkbenchName =
   | 'Heading'
   | 'IconButton'
   | 'InlineMessage'
+  | 'NumberEntry'
   | 'Radio'
   | 'RadioGroup'
   | 'Search'
@@ -95,6 +97,7 @@ const nativeWorkbenchPages = {
   Heading: HeadingWorkbench,
   IconButton: IconButtonWorkbench,
   InlineMessage: InlineMessageWorkbench,
+  NumberEntry: NumberEntryWorkbench,
   Radio: RadioWorkbench,
   RadioGroup: RadioGroupWorkbench,
   Search: SearchWorkbench,
