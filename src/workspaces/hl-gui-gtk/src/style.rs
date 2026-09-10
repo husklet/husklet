@@ -73,9 +73,11 @@ fn controls(css: &mut String, theme: &Theme) {
          scale:disabled {{ opacity: .55; }}\n\
          progressbar trough {{ background: {line}; }}\n\
          progressbar progress {{ background: {accent}; }}\n\
-         checkbutton check {{ background: {ground}; border: 1px solid {line}; }}\n\
-         checkbutton check:checked {{ background: {accent}; }}\n\
-         checkbutton:focus, checkbutton:focus-visible {{ outline: 2px solid {accent}; outline-offset: 2px; }}\n\
+         checkbutton check, checkbutton radio {{ min-width: 16px; min-height: 16px; background: {ground}; border: 1px solid {line}; }}\n\
+         checkbutton check {{ border-radius: 4px; }}\n\
+         checkbutton radio {{ border-radius: 50%; }}\n\
+         checkbutton check:checked, checkbutton radio:checked {{ background: {accent}; border-color: {accent}; }}\n\
+         checkbutton:focus check, checkbutton:focus-visible check, checkbutton:focus radio, checkbutton:focus-visible radio {{ outline: 2px solid {accent}; outline-offset: 2px; }}\n\
          .hl-table {{ background: {ground}; border: 1px solid {line}; border-radius: {radius}px; }}\n\
          .hl-tablehead .hl-tablecell {{ background: {raised}; color: {text}; font-weight: 600; }}\n\
          .hl-tablecell {{ min-height: 32px; padding: 6px 8px; border-bottom: 1px solid {line}; }}\n\
@@ -445,8 +447,17 @@ mod tests {
         ));
         assert!(css.contains("scale:disabled { opacity: .55;"));
         assert!(css.contains(
-            "checkbutton:focus, checkbutton:focus-visible { outline: 2px solid #559df7; outline-offset: 2px;"
+            "checkbutton check, checkbutton radio { min-width: 16px; min-height: 16px; background: #0f1115; border: 1px solid #323843;"
         ));
+        assert!(css.contains("checkbutton check { border-radius: 4px;"));
+        assert!(css.contains("checkbutton radio { border-radius: 50%;"));
+        assert!(css.contains(
+            "checkbutton check:checked, checkbutton radio:checked { background: #559df7; border-color: #559df7;"
+        ));
+        assert!(css.contains(
+            "checkbutton:focus check, checkbutton:focus-visible check, checkbutton:focus radio, checkbutton:focus-visible radio { outline: 2px solid #559df7; outline-offset: 2px;"
+        ));
+        assert!(!css.contains("checkbutton:focus, checkbutton:focus-visible {"));
         assert!(css.contains(
             "entry.tone-danger, .hl-entry.tone-danger { border-color: #e55353; box-shadow: 0 0 0 1px #e55353;"
         ));

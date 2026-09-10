@@ -432,6 +432,13 @@ mod unix {
             assert!(checkbox.is_inconsistent(), "parent Checkbox exposes native mixed state");
             assert!(checkbox.grab_focus(), "mixed Checkbox accepts native keyboard focus");
             settle_toolkit();
+            assert_eq!(checkbox.accessible_role(), gtk::AccessibleRole::Checkbox);
+            assert_eq!(checkbox.height(), 18, "Checkbox keeps its compact 16px indicator row");
+            assert!(
+                checkbox.width() >= 900,
+                "wide Checkbox fixture did not exercise an expanding row: {}px",
+                checkbox.width()
+            );
             capture_story(&realized_window, "Checkbox focused mixed");
             let _ = surface.reports().drain();
         }
@@ -1503,6 +1510,13 @@ mod unix {
             assert!(bash.is_active(), "controlled Radio did not retain native selection");
             assert!(bash.grab_focus(), "controlled Radio restores native focus");
             assert!(bash.has_focus(), "controlled Radio exposes focus-visible state");
+            assert_eq!(bash.accessible_role(), gtk::AccessibleRole::Radio);
+            assert_eq!(bash.height(), 18, "Radio keeps its compact 16px indicator row");
+            assert!(
+                bash.width() >= 900,
+                "wide Radio fixture did not exercise an expanding row: {}px",
+                bash.width()
+            );
             capture_story(&realized_window, "Radio focused bash");
         }
         if story == "RadioGroup" {
