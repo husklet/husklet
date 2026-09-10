@@ -823,6 +823,14 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
     }
     return networks;
   };
+  const exactVolumes = <Volumes extends { name: string }[]>(volumes: Volumes) => {
+    if (new Set(volumes.map(({ name }) => name)).size !== volumes.length) {
+      throw new TypeError(
+        'host returned duplicate volume identities; no volume selection was assumed',
+      );
+    }
+    return volumes;
+  };
   const exactWorkspaceConfiguration = <Configuration extends { name: string }>(
     configuration: Configuration,
     name: string,
@@ -1799,7 +1807,11 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
       prune: async () => expect(await session.call('image_prune'), 'image_prune'),
     },
     volumes: {
-      inventory: async () => expect(await session.call('volume_list'), 'volumes'),
+      inventory: async () => {
+        const inventory = expect(await session.call('volume_list'), 'volumes');
+        exactVolumes(inventory.volumes);
+        return inventory;
+      },
       list: async () => (await api.volumes.inventory()).volumes,
       inspect: async (name) => {
         const volume = expect(await session.call('volume_inspect', { name }), 'volume');
