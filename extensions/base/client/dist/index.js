@@ -793,7 +793,13 @@ export function workspace(session, { signal } = {}) {
                     throw new IncompleteCatalogueError(catalogue.entries.length);
                 return catalogue;
             },
-            inspect: async (name) => expect(await session.call('extension_inspect', { name }), 'extension'),
+            inspect: async (name) => {
+                const extension = expect(await session.call('extension_inspect', { name }), 'extension');
+                if (extension.name !== name) {
+                    throw new TypeError(`host returned extension ${extension.name}, expected ${name}; no extension state was assumed`);
+                }
+                return extension;
+            },
             enable: (name, imageDigest) => done('extension_enable', {
                 name,
                 image_digest: immutableDigest(imageDigest, 'extension image'),
