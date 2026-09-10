@@ -133,6 +133,14 @@ fn base(css: &mut String, theme: &Theme) {
 }
 
 fn tones(css: &mut String, theme: &Theme) {
+    for token in Token::ALL {
+        let _ = writeln!(
+            css,
+            ".tone-{name}.tone-{name} {{ color: {color}; }}",
+            name = token.as_str(),
+            color = theme.color(*token).hex(),
+        );
+    }
     for tone in Tone::ALL {
         let color = theme.color(token(*tone)).hex();
         // Component rules and tone rules have equal specificity, so a toned
@@ -359,6 +367,10 @@ mod tests {
     #[test]
     fn the_sheet_covers_every_variant_and_tone_pair() {
         let css = super::sheet(&Theme::dark());
+        for token in hl_gui::Token::ALL {
+            let selector = format!(".tone-{0}.tone-{0}", token.as_str());
+            assert!(css.contains(&selector), "missing rule {selector}");
+        }
         for variant in Variant::ALL {
             for tone in Tone::ALL {
                 let selector = format!(".variant-{}.tone-{}", variant.as_str(), tone.as_str());
@@ -366,7 +378,7 @@ mod tests {
             }
         }
         assert!(
-            css.contains(".variant-outline:disabled") && css.contains("color: #87909f; border-color: #323843"),
+            css.contains(".variant-outline:disabled") && css.contains("color: #a9b0bc; border-color: #323843"),
             "semantic variants must not override disabled affordance"
         );
     }
@@ -415,7 +427,7 @@ mod tests {
             ".hl-listitembutton:focus, .hl-listitembutton:focus-visible { outline: none; background: #21252d; color: #f0f2f5; border-color: #559df7; box-shadow: inset 0 0 0 1px #559df7;"
         ));
         assert!(css.contains(
-            ".hl-listsubheader { color: #a7aeba; min-height: 16px; padding: 2px 4px 0; font-size: 11px; font-weight: 600; letter-spacing: .04em; }"
+            ".hl-listsubheader { color: #bec5cf; min-height: 16px; padding: 2px 4px 0; font-size: 11px; font-weight: 600; letter-spacing: .04em; }"
         ));
         assert!(css.contains(".hl-card > box { padding: 10px"));
         assert!(css.contains(
@@ -461,7 +473,7 @@ mod tests {
             "switch:focus, switch:focus-visible { outline: 2px solid #559df7; outline-offset: 2px; box-shadow: 0 0 0 3px #0f1115;"
         ));
         assert!(css.contains(
-            "switch { background: #323843; border: 1px solid #a7aeba; border-radius: 999px; min-width: 44px; min-height: 22px; padding: 1px;"
+            "switch { background: #323843; border: 1px solid #bec5cf; border-radius: 999px; min-width: 44px; min-height: 22px; padding: 1px;"
         ));
         assert!(css.contains(
             "switch slider { background: #f0f2f5; border: 1px solid #f0f2f5; border-radius: 999px; min-width: 18px; min-height: 18px;"
@@ -471,7 +483,7 @@ mod tests {
         assert!(css.contains(".hl-select { background: #0f1115; border: 1px solid #323843;"));
         assert!(css.contains("min-height: 30px; padding: 2px 9px;"));
         assert!(css.contains(".hl-select:focus-within { border-color: #559df7; box-shadow: 0 0 0 1px #559df7;"));
-        assert!(css.contains(".hl-select:disabled, .hl-select button:disabled { border-color: #87909f;"));
+        assert!(css.contains(".hl-select:disabled, .hl-select button:disabled { border-color: #a9b0bc;"));
         assert!(css.contains(
             "entry:disabled, spinbutton:disabled, textview:disabled, dropdown:disabled, .hl-select:disabled { opacity: .62; background:"
         ));
@@ -505,7 +517,7 @@ mod tests {
         let css = super::sheet(&Theme::dark());
         assert!(css.contains(".hl-select-options { padding: 4px;"));
         assert!(css.contains(
-            ".hl-select-option { min-height: 22px; min-width: 120px; padding: 2px 10px; background: transparent; color: #a7aeba; border: 1px solid transparent; border-radius: 8px; box-shadow: none;"
+            ".hl-select-option { min-height: 22px; min-width: 120px; padding: 2px 10px; background: transparent; color: #bec5cf; border: 1px solid transparent; border-radius: 8px; box-shadow: none;"
         ));
         assert!(css.contains(
             ".hl-select-option:hover { background: #21252d; color: #f0f2f5; border-color: #323843;"
@@ -533,7 +545,7 @@ mod tests {
         ));
         assert!(
             css.contains(
-                ".hl-menu-item:disabled { background: transparent; color: #87909f; border-color: transparent;"
+                ".hl-menu-item:disabled { background: transparent; color: #a9b0bc; border-color: transparent;"
             )
         );
     }
@@ -543,7 +555,7 @@ mod tests {
         let css = super::sheet(&Theme::dark());
         assert!(css.contains("paned.hl-responsive-divider.horizontal > separator { min-width: 8px; min-height: 28px;"));
         assert!(css.contains(
-            "background-image: linear-gradient(to right, transparent 3px, #a7aeba 3px, #a7aeba 5px, transparent 5px);"
+            "background-image: linear-gradient(to right, transparent 3px, #bec5cf 3px, #bec5cf 5px, transparent 5px);"
         ));
         assert!(
             css.contains(

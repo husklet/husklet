@@ -432,8 +432,8 @@ impl Theme {
             (Token::Raised, Rgb::new(0x21, 0x25, 0x2d)),
             (Token::Line, Rgb::new(0x32, 0x38, 0x43)),
             (Token::Text, Rgb::new(0xf0, 0xf2, 0xf5)),
-            (Token::TextDim, Rgb::new(0xa7, 0xae, 0xba)),
-            (Token::TextFaint, Rgb::new(0x87, 0x90, 0x9f)),
+            (Token::TextDim, Rgb::new(0xbe, 0xc5, 0xcf)),
+            (Token::TextFaint, Rgb::new(0xa9, 0xb0, 0xbc)),
             (Token::Accent, Rgb::new(0x55, 0x9d, 0xf7)),
             (Token::Positive, Rgb::new(0x3f, 0xb9, 0x50)),
             (Token::Warning, Rgb::new(0xd2, 0x9a, 0x2c)),
@@ -529,16 +529,18 @@ mod tests {
     }
 
     #[test]
-    fn dark_theme_text_remains_readable_on_every_application_surface() {
+    fn dark_theme_text_meets_aaa_on_every_application_surface() {
         let theme = Theme::dark();
         for foreground in [Token::Text, Token::TextDim, Token::TextFaint] {
             for background in [Token::Ground, Token::Surface, Token::Raised] {
                 assert!(
-                    contrast(theme.color(foreground), theme.color(background)) >= 4.5,
-                    "{foreground:?} is unreadable on {background:?}"
+                    contrast(theme.color(foreground), theme.color(background)) >= 7.0,
+                    "{foreground:?} does not meet 7:1 AAA contrast on {background:?}"
                 );
             }
         }
+        assert_eq!(theme.color(Token::TextDim), Rgb::new(0xbe, 0xc5, 0xcf));
+        assert_eq!(theme.color(Token::TextFaint), Rgb::new(0xa9, 0xb0, 0xbc));
     }
 
     #[test]

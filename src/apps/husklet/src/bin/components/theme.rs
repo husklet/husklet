@@ -6,8 +6,8 @@ const LINE: &str = "#2b2f39";
 const LINE_S: &str = "#20232b";
 const CONTROL_LINE: &str = "#606878";
 const TXT: &str = "#e7e9ee";
-const DIM: &str = "#878e9c";
-const FAINT: &str = "#818896";
+const DIM: &str = "#bec5cf";
+const FAINT: &str = "#a9b0bc";
 pub(crate) const ACCENT: &str = "#2f80ff";
 const ACCENT_FILL: &str = "#2a6eca";
 const ACCENT_FILL_HOVER: &str = "#3275d4";
@@ -172,7 +172,7 @@ vte-terminal.copymode, terminal.copymode {{ box-shadow: inset 0 0 0 1px {ACCENT}
 
 #[cfg(test)]
 mod tests {
-    use super::{ACCENT_FILL, ACCENT_FILL_HOVER, BG0, BG1, BG2, CONTROL_LINE, FAINT, css};
+    use super::{ACCENT_FILL, ACCENT_FILL_HOVER, BG0, BG1, BG2, CONTROL_LINE, DIM, FAINT, css};
 
     fn channel(value: u8) -> f64 {
         let value = f64::from(value) / 255.0;
@@ -205,10 +205,17 @@ mod tests {
     }
 
     #[test]
-    fn faint_normal_text_meets_contrast_on_application_surfaces() {
-        for background in [BG0, BG1, BG2] {
-            assert!(contrast(FAINT, background) >= 4.5);
+    fn secondary_normal_text_meets_aaa_on_application_surfaces() {
+        for foreground in [DIM, FAINT] {
+            for background in [BG0, BG1, BG2] {
+                assert!(
+                    contrast(foreground, background) >= 7.0,
+                    "{foreground} does not meet 7:1 AAA contrast on {background}"
+                );
+            }
         }
+        assert_eq!(DIM, "#bec5cf");
+        assert_eq!(FAINT, "#a9b0bc");
     }
 
     #[test]

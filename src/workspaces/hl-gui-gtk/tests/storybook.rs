@@ -407,6 +407,21 @@ mod unix {
             let focus = find::<gtk::Entry>(&root, |entry| {
                 entry.tooltip_text().as_deref() == Some("Focused extension name")
             });
+            let guidance = find::<gtk::Label>(&root, |label| {
+                label.text() == "Choose width from expected content, not from the current value."
+            });
+            let guidance_color = guidance.color();
+            assert_eq!(guidance.accessible_role(), gtk::AccessibleRole::Label);
+            assert!((14..=18).contains(&guidance.height()));
+            assert_eq!(
+                [
+                    (guidance_color.red() * 255.0).round() as u8,
+                    (guidance_color.green() * 255.0).round() as u8,
+                    (guidance_color.blue() * 255.0).round() as u8,
+                ],
+                [0xbe, 0xc5, 0xcf],
+                "Text color=text-dim resolves the shared AAA secondary text token"
+            );
             assert!(focus.grab_focus(), "Entry accepts deterministic keyboard focus");
             settle_toolkit();
             assert_document_horizontally_contained(&root, "focused Entry");
@@ -421,7 +436,13 @@ mod unix {
                 Some(entry.clone().upcast()),
                 "FormLabel identifies its sibling Entry"
             );
+            assert_eq!(helper.accessible_role(), gtk::AccessibleRole::Label);
             assert!(helper.is_visible(), "FormHelperText remains visible beside its Entry");
+            assert!(
+                (14..=18).contains(&helper.height()),
+                "FormHelperText is {}px tall",
+                helper.height()
+            );
             assert!(entry.grab_focus(), "FormControl Entry accepts deterministic focus");
             settle_toolkit();
             let _ = surface.reports().drain();
