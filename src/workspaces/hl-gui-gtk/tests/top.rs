@@ -426,6 +426,37 @@ mod unix {
                 settle_toolkit();
             }
             if fixture == "populated" && name == "workspace" && width == 1_200 {
+                let navigation_headers = widgets_with_class(&root, "hl-listsubheader");
+                assert_eq!(
+                    navigation_headers.len(),
+                    4,
+                    "Top renders one semantic heading for each navigation group"
+                );
+                assert_eq!(
+                    navigation_headers
+                        .iter()
+                        .filter_map(|header| header.downcast_ref::<gtk::Label>())
+                        .map(|header| header.text().to_string())
+                        .collect::<Vec<_>>(),
+                    ["Manage", "Runtime", "Resources", "Interface"]
+                );
+                for header in &navigation_headers {
+                    assert_eq!(header.accessible_role(), gtk::AccessibleRole::Heading);
+                    assert_eq!(header.height(), 16, "Top group headings remain compact");
+                    let description = header
+                        .pango_context()
+                        .font_description()
+                        .expect("Top group heading has computed typography");
+                    assert_eq!(description.size(), 11 * gtk::pango::SCALE);
+                    assert_eq!(description.weight(), gtk::pango::Weight::Semibold);
+                    let bounds = header
+                        .compute_bounds(&root)
+                        .expect("Top group heading belongs to the desktop rail");
+                    assert!(
+                        bounds.x() >= 4.0 && bounds.x() + bounds.width() <= 156.0,
+                        "Top group heading escaped the 4px inset of the 160px rail: {bounds:?}"
+                    );
+                }
                 let destinations = widgets_with_class(&root, "hl-navigationmenuitem");
                 assert_eq!(destinations.len(), 10, "Top renders every desktop destination once");
                 let heights = destinations.iter().map(gtk::Widget::height).collect::<Vec<_>>();

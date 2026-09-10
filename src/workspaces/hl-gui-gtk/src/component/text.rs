@@ -13,7 +13,8 @@ const GALLERY_COLUMNS: u32 = 4;
 /// Non-interactive presentation widgets.
 pub(crate) fn widget(tag: Tag) -> gtk::Widget {
     match tag {
-        Tag::Text | Tag::ListSubheader | Tag::FormLabel => axis::label().upcast(),
+        Tag::Text | Tag::FormLabel => axis::label().upcast(),
+        Tag::ListSubheader => subheader().upcast(),
         Tag::Heading => heading().upcast(),
         Tag::Code => code().upcast(),
         Tag::Link => gtk::LinkButton::new("").upcast(),
@@ -26,6 +27,14 @@ pub(crate) fn widget(tag: Tag) -> gtk::Widget {
         // ImageList is the last display tag routed here.
         _ => gallery().upcast(),
     }
+}
+
+/// A navigation/list group title, distinct from both body copy and the
+/// destinations it organizes.
+fn subheader() -> gtk::Label {
+    let widget = axis::label();
+    widget.set_accessible_role(gtk::AccessibleRole::Heading);
+    widget
 }
 
 fn heading() -> gtk::Label {

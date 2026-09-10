@@ -316,6 +316,11 @@ test('Top presents workspace, extensions, and every resource navigation choice',
   assert.equal(new Set(icons).size, 10, 'every destination has a distinguishable icon');
   for (const group of ['Manage', 'Runtime', 'Resources', 'Interface'])
     assert.ok(labels.includes(group), group);
+  assert.equal(
+    frame.patches.filter((patch) => patch.Create?.tag === 'ListSubheader').length,
+    4,
+    'navigation groups use semantic list headings instead of body text',
+  );
   assert.ok(
     labels.includes('0 enabled'),
     'the overview exposes extension inventory alongside the other workspace resources',

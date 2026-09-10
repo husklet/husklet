@@ -7,6 +7,7 @@ import {
   Heading,
   Icon,
   IconButton,
+  ListSubheader,
   NavigationMenu,
   NavigationMenuItem,
   Row,
@@ -65,7 +66,7 @@ export function Navigation({
         <Column gap={1}>
           {groups.map((group) => (
             <Column key={group.label} gap={0}>
-              <Text label={group.label} color="text-dim" />
+              <ListSubheader label={group.label} />
               <NavigationMenu gap={0}>
                 {group.sections.map((name) => (
                   <NavigationMenuItem

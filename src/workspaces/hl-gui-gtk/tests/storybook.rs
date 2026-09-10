@@ -882,6 +882,42 @@ mod unix {
             let navigation = paned
                 .start_child()
                 .expect("wide Button documentation retains its rail");
+            let navigation_headers = descendants::<gtk::Label>(&navigation)
+                .into_iter()
+                .filter(|label| label.has_css_class("hl-listsubheader"))
+                .collect::<Vec<_>>();
+            assert_eq!(
+                navigation_headers.len(),
+                4,
+                "Storybook renders one semantic heading for each visible navigation group"
+            );
+            let mut header_labels = navigation_headers
+                .iter()
+                .map(|header| header.text().to_string())
+                .collect::<Vec<_>>();
+            header_labels.sort();
+            assert_eq!(
+                header_labels,
+                ["Browse", "Buttons", "Component family", "Components"]
+            );
+            for header in &navigation_headers {
+                assert_eq!(header.accessible_role(), gtk::AccessibleRole::Heading);
+                assert_eq!(header.height(), 16, "Storybook group headings remain compact");
+                let description = header
+                    .pango_context()
+                    .font_description()
+                    .expect("Storybook group heading has computed typography");
+                assert_eq!(description.size(), 11 * gtk::pango::SCALE);
+                assert_eq!(description.weight(), gtk::pango::Weight::Semibold);
+                let bounds = header
+                    .compute_bounds(&navigation)
+                    .expect("Storybook group heading belongs to the desktop rail");
+                assert!(
+                    bounds.x() >= 4.0
+                        && bounds.x() + bounds.width() <= (navigation.width() - 4) as f32,
+                    "Storybook group heading escaped the rail's clipping-safe inset: {bounds:?}"
+                );
+            }
             let destinations = descendants::<gtk::Button>(&navigation)
                 .into_iter()
                 .filter(|button| button.has_css_class("hl-listitembutton"))
