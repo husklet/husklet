@@ -432,7 +432,9 @@ impl Sidecar {
             Ok(container) => container,
             Err(error) => return absence(&error),
         };
-        if container.config.labels.get(SIGNATURE_LABEL) != Some(&spec.signature()) {
+        if container.config.labels.get(SIGNATURE_LABEL) != Some(&spec.signature())
+            || !image_matches(spec, &container.details.metadata.image)
+        {
             let target = replacement_target(spec, &container.config.labels, &container.details.metadata.id)?;
             self.remove(target)?;
             return Ok(None);
@@ -532,6 +534,10 @@ fn ensure_transaction<T>(work: impl FnOnce() -> T) -> T {
     work()
 }
 
+fn image_matches(spec: &SidecarSpec, image: &str) -> bool {
+    image == spec.image.digest
+}
+
 fn replacement_target<'a>(
     spec: &SidecarSpec,
     labels: &BTreeMap<String, String>,
@@ -581,8 +587,9 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        ensure_transaction, removal_target, replacement_target, stop_target, Image, Sidecar, SidecarSpec, DATA_TARGET,
-        DATA_VARIABLE, GENERATION_LABEL, NAME_LABEL, NODE_OPTIONS, SIGNATURE_LABEL, SOCKET_TARGET, SOCKET_VARIABLE,
+        ensure_transaction, image_matches, removal_target, replacement_target, stop_target, Image, Sidecar,
+        SidecarSpec, DATA_TARGET, DATA_VARIABLE, GENERATION_LABEL, NAME_LABEL, NODE_OPTIONS, SIGNATURE_LABEL,
+        SOCKET_TARGET, SOCKET_VARIABLE,
     };
     use hl_extension::{Capability, ExtensionName, Grant, Manifest, Resources};
 
@@ -630,6 +637,13 @@ mod tests {
     #[test]
     fn an_unchanged_specification_signs_the_same_every_time() {
         assert_eq!(spec().signature(), spec().signature());
+    }
+
+    #[test]
+    fn a_matching_public_signature_cannot_reuse_a_different_image() {
+        let wanted = spec();
+        assert!(image_matches(&wanted, "sha256:aaaa"));
+        assert!(!image_matches(&wanted, "sha256:forged"));
     }
 
     #[test]
@@ -760,6 +774,47 @@ mod tests {
                 "GET /v1.43/containers/extension%2Dsample/json?size=false",
             ],
             "one create/start wins and the other caller only reuses it"
+        );
+    }
+
+    #[test]
+    fn ensure_replaces_a_matching_signature_backed_by_a_different_image() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let socket = temporary.path().join("docker.sock");
+        let listener = UnixListener::bind(&socket).expect("mock Docker socket");
+        let wanted = spec().generation(42);
+        let signature = wanted.signature();
+        let served = std::thread::spawn(move || {
+            let labels =
+                format!(r#"{{"{SIGNATURE_LABEL}":"{signature}","{NAME_LABEL}":"sample","{GENERATION_LABEL}":"42"}}"#);
+            let forged = inspection("stale-id", &labels).replace("sha256:aaaa", "sha256:forged");
+            let responses = [
+                ("200 OK", forged.into_bytes()),
+                ("204 No Content", Vec::new()),
+                ("201 Created", br#"{"Id":"fresh-id","Warnings":[]}"#.to_vec()),
+                ("204 No Content", Vec::new()),
+            ];
+            responses
+                .into_iter()
+                .map(|(status, body)| {
+                    let mut stream = accept_bounded(&listener);
+                    let request = read_request(&mut stream).expect("Docker request");
+                    respond_close(&mut stream, status, &body);
+                    request
+                })
+                .collect::<Vec<_>>()
+        });
+        let bridge = Arc::new(super::super::Bridge::new(socket).expect("bridge"));
+
+        assert_eq!(Sidecar::new(bridge).ensure(&wanted), Ok(super::Outcome::Creation));
+        assert_eq!(
+            served.join().expect("daemon joined"),
+            vec![
+                "GET /v1.43/containers/extension%2Dsample/json?size=false",
+                "DELETE /v1.43/containers/stale%2Did?force=true&v=false",
+                "POST /v1.43/containers/create?name=extension%2Dsample",
+                "POST /v1.43/containers/extension%2Dsample/start",
+            ]
         );
     }
 
@@ -959,7 +1014,7 @@ mod tests {
 
     fn inspection(id: &str, labels: &str) -> String {
         format!(
-            r#"{{"Id":"{id}","Image":"sha256:image","Mounts":[],"Path":"/extension","Args":[],"Name":"sidecar","Created":"","State":{{"Status":"running","Running":true,"Paused":false,"Restarting":false,"OOMKilled":false,"Dead":false,"Pid":1,"ExitCode":0,"Error":"","StartedAt":"","FinishedAt":""}},"RestartCount":0,"Config":{{"ExposedPorts":{{}},"Labels":{labels},"StopSignal":"SIGTERM","StopTimeout":10}},"HostConfig":{{"NetworkMode":"none","AutoRemove":false,"RestartPolicy":{{"Name":"no","MaximumRetryCount":0}}}},"NetworkSettings":{{"Ports":{{}},"Networks":{{}}}}}}"#
+            r#"{{"Id":"{id}","Image":"sha256:aaaa","Mounts":[],"Path":"/extension","Args":[],"Name":"sidecar","Created":"","State":{{"Status":"running","Running":true,"Paused":false,"Restarting":false,"OOMKilled":false,"Dead":false,"Pid":1,"ExitCode":0,"Error":"","StartedAt":"","FinishedAt":""}},"RestartCount":0,"Config":{{"ExposedPorts":{{}},"Labels":{labels},"StopSignal":"SIGTERM","StopTimeout":10}},"HostConfig":{{"NetworkMode":"none","AutoRemove":false,"RestartPolicy":{{"Name":"no","MaximumRetryCount":0}}}},"NetworkSettings":{{"Ports":{{}},"Networks":{{}}}}}}"#
         )
     }
 
