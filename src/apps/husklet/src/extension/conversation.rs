@@ -1398,7 +1398,7 @@ mod tests {
             self.ledger.note("executions.list");
             Ok(hl_extension::port::ExecutionList {
                 executions: vec![hl_extension::port::ExecutionSummary {
-                    id: "e1".into(),
+                    id: "e".repeat(32),
                     container_id: "c1".into(),
                     running: false,
                     exit_code: 7,
@@ -1407,6 +1407,19 @@ mod tests {
                     user: "root".into(),
                 }],
                 truncated: false,
+            })
+        }
+
+        fn execution(&self, id: &str) -> Result<hl_extension::port::ExecutionSummary, HostError> {
+            self.ledger.note("executions.inspect");
+            Ok(hl_extension::port::ExecutionSummary {
+                id: id.into(),
+                container_id: "c1".into(),
+                running: false,
+                exit_code: 7,
+                pid: 42,
+                command: vec!["worker".into()],
+                user: "root".into(),
             })
         }
 
@@ -2596,7 +2609,10 @@ mod tests {
         );
         assert!(matches!(codec::read_reply(&answer), Ok(Reply::ExecutionOutput(page))
             if page.next == 42 && !page.eof && !page.gap && page.entries[0].bytes == b"row-42\n"));
-        assert_eq!(ledger.reached(), vec!["executions.output"]);
+        assert_eq!(
+            ledger.reached(),
+            vec!["executions.inspect", "containers.list", "executions.output"]
+        );
         drop(wire);
         assert_eq!(served.join().expect("joined"), Ok(()));
     }
@@ -3259,7 +3275,7 @@ mod tests {
         let event = Wire::new(theirs).receive().expect("execution snapshot");
         let snapshot: Snapshot = serde_json::from_slice(&event.payload).expect("typed snapshot");
         assert!(
-            matches!(snapshot, Snapshot::Executions(list) if list.executions[0].id == "e1" && !list.executions[0].running)
+            matches!(snapshot, Snapshot::Executions(list) if list.executions[0].id == "e".repeat(32) && !list.executions[0].running)
         );
     }
 
