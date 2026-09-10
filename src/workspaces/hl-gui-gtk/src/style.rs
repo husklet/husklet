@@ -73,8 +73,11 @@ fn controls(css: &mut String, theme: &Theme) {
            background-image: linear-gradient(to bottom, transparent 3px, {accent} 3px, {accent} 5px, transparent 5px); }}\n\
          notebook header, notebook tab {{ background: {surface}; color: {dim}; }}\n\
          notebook tab:checked {{ color: {text}; }}\n\
-         switch {{ background: {line}; }}\n\
-         switch:checked {{ background: {accent}; }}\n\
+         switch {{ background: {line}; border: 1px solid {dim}; border-radius: 999px; min-width: 44px; min-height: 22px; padding: 1px; box-shadow: inset 0 1px 2px rgba(0,0,0,.28); transition: 120ms ease; }}\n\
+         switch:hover {{ border-color: {text}; }}\n\
+         switch slider {{ background: {text}; border: 1px solid {text}; border-radius: 999px; min-width: 18px; min-height: 18px; box-shadow: 0 1px 2px rgba(0,0,0,.35); }}\n\
+         switch:checked {{ background: {accent}; border-color: {accent}; }}\n\
+         switch:checked slider {{ background: {ground}; border-color: {ground}; }}\n\
          switch:focus, switch:focus-visible {{ outline: 2px solid {accent}; outline-offset: 2px; box-shadow: 0 0 0 3px {ground}; }}\n\
          switch:disabled {{ opacity: .55; }}\n\
          scale trough {{ background: {line}; }}\n\
@@ -457,6 +460,14 @@ mod tests {
         assert!(css.contains(
             "switch:focus, switch:focus-visible { outline: 2px solid #559df7; outline-offset: 2px; box-shadow: 0 0 0 3px #0f1115;"
         ));
+        assert!(css.contains(
+            "switch { background: #323843; border: 1px solid #a7aeba; border-radius: 999px; min-width: 44px; min-height: 22px; padding: 1px;"
+        ));
+        assert!(css.contains(
+            "switch slider { background: #f0f2f5; border: 1px solid #f0f2f5; border-radius: 999px; min-width: 18px; min-height: 18px;"
+        ));
+        assert!(css.contains("switch:checked { background: #559df7; border-color: #559df7; }"));
+        assert!(css.contains("switch:checked slider { background: #0f1115; border-color: #0f1115; }"));
         assert!(css.contains(".hl-select { background: #0f1115; border: 1px solid #323843;"));
         assert!(css.contains("min-height: 30px; padding: 2px 9px;"));
         assert!(css.contains(".hl-select:focus-within { border-color: #559df7; box-shadow: 0 0 0 1px #559df7;"));

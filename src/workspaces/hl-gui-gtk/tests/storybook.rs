@@ -462,6 +462,13 @@ mod unix {
         if story == "Switch" {
             let focus = labelled_switch(&root, "Restore panes on launch");
             let caption = find::<gtk::Label>(&root, |label| label.text() == "Restore panes on launch");
+            assert_eq!(focus.accessible_role(), gtk::AccessibleRole::Switch);
+            assert_eq!(
+                (focus.width(), focus.height()),
+                (44, 22),
+                "Switch keeps a compact exact track geometry inside its 44px label row"
+            );
+            assert!(focus.is_active(), "Switch story begins in its authored on state");
             assert_eq!(
                 focus.tooltip_text(),
                 None,
@@ -486,7 +493,16 @@ mod unix {
                 ],
             );
             settle_toolkit();
-            assert_eq!(surface.reports().drain().len(), 1, "caption click reports exactly once");
+            assert!(
+                matches!(
+                    surface.reports().drain().as_slice(),
+                    [hl_gui::Event::Toggle {
+                        value: hl_gui::PropValue::Flag(false),
+                        ..
+                    }]
+                ),
+                "caption click reports exactly one request for the controlled off state"
+            );
             assert!(focus.grab_focus(), "Switch accepts deterministic keyboard focus");
             let keyboard = focus
                 .observe_controllers()
@@ -499,15 +515,35 @@ mod unix {
                 &[&gtk::gdk::Key::Return, &36_u32, &gtk::gdk::ModifierType::empty()],
             );
             settle_toolkit();
-            assert_eq!(surface.reports().drain().len(), 1, "Enter reports exactly once");
+            assert!(
+                matches!(
+                    surface.reports().drain().as_slice(),
+                    [hl_gui::Event::Toggle {
+                        value: hl_gui::PropValue::Flag(false),
+                        ..
+                    }]
+                ),
+                "Enter reports exactly one request for the controlled off state"
+            );
             keyboard.emit_by_name::<bool>(
                 "key-pressed",
                 &[&gtk::gdk::Key::space, &65_u32, &gtk::gdk::ModifierType::empty()],
             );
             settle_toolkit();
-            assert_eq!(surface.reports().drain().len(), 1, "Space reports exactly once");
+            assert!(
+                matches!(
+                    surface.reports().drain().as_slice(),
+                    [hl_gui::Event::Toggle {
+                        value: hl_gui::PropValue::Flag(false),
+                        ..
+                    }]
+                ),
+                "Space reports exactly one request for the controlled off state"
+            );
+            assert!(focus.is_active(), "controlled Switch waits for its next authored frame");
             focus.set_state_flags(gtk::StateFlags::FOCUSED, false);
             settle_toolkit();
+            capture_story(&realized_window, "Switch focused on");
         }
         if story == "Select" {
             let focus = find::<gtk::ToggleButton>(&root, |button| {
