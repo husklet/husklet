@@ -734,6 +734,18 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
       throw new Error(`host replied ${reply?.reply ?? 'without a tag'}, expected ${kind}`);
     return ('with' in reply ? reply.with : undefined) as ReplyPayload<K>;
   };
+  const exactPane = <Snapshot extends { slot: string }>(
+    snapshot: Snapshot,
+    slot: string,
+    description: string,
+  ): Snapshot => {
+    if (snapshot.slot !== slot) {
+      throw new Error(
+        `host returned ${description} for pane ${snapshot.slot}, expected ${slot}; no pane state was assumed`,
+      );
+    }
+    return snapshot;
+  };
   const done = async (name, argument) => expect(await session.call(name, argument), 'done');
   const subscription = (call, topic) => {
     if (!SNAPSHOT_TOPICS.includes(topic))
@@ -1673,9 +1685,17 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
         });
       },
       read: async (slot, lines) =>
-        expect(await session.call('terminal_read_pane', { slot, lines }), 'text'),
+        exactPane(
+          expect(await session.call('terminal_read_pane', { slot, lines }), 'text'),
+          slot,
+          'terminal text',
+        ),
       semantics: async (slot) =>
-        expect(await session.call('pane_semantic_read', { slot }), 'semantics'),
+        exactPane(
+          expect(await session.call('pane_semantic_read', { slot }), 'semantics'),
+          slot,
+          'pane semantics',
+        ),
       /** Converts either a terminal or a native UI pane into bounded agent-readable text. */
       toText: async (slot, { lines }: { lines?: number } = {}) => {
         const inventory = expect(await session.call('pane_list'), 'panes');
@@ -1687,13 +1707,18 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
           throw new Error(`${detail}: ${slot}`);
         }
         if (pane.kind === 'terminal') {
-          const snapshot = expect(
-            await session.call('terminal_read_pane', { slot, lines }),
-            'text',
+          const snapshot = exactPane(
+            expect(await session.call('terminal_read_pane', { slot, lines }), 'text'),
+            slot,
+            'terminal text',
           );
           return { kind: 'terminal', text: snapshot.lines.join('\n'), snapshot };
         }
-        const snapshot = expect(await session.call('pane_semantic_read', { slot }), 'semantics');
+        const snapshot = exactPane(
+          expect(await session.call('pane_semantic_read', { slot }), 'semantics'),
+          slot,
+          'pane semantics',
+        );
         return { kind: 'ui', text: semanticXml(snapshot), snapshot };
       },
       readAll: async ({ lines }: { lines?: number } = {}) => {

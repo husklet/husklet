@@ -6536,6 +6536,204 @@ test('real Unix inspectAndAct validates live semantic authority before revision-
   }
 });
 
+function semanticTree(slot, revision = 4) {
+  return {
+    slot,
+    generation: 2,
+    revision,
+    truncated: false,
+    root: {
+      id: 0,
+      role: 'page',
+      label: 'Settings',
+      value: null,
+      disabled: false,
+      destructive: false,
+      actions: [],
+      children: [
+        {
+          id: 7,
+          role: 'button',
+          label: 'Apply',
+          value: null,
+          disabled: false,
+          destructive: false,
+          actions: ['invoke'],
+          children: [],
+        },
+      ],
+    },
+  };
+}
+
+async function withPaneIdentityHost(granted, respond, exercise) {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-pane-identity-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const calls = [];
+  const connections = new Set();
+  const server = net.createServer((socket) => {
+    connections.add(socket);
+    socket.on('close', () => connections.delete(socket));
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.channel !== 2) continue;
+        calls.push(frame.payload);
+        respond(frame.payload, socket);
+      }
+    });
+    socket.write(
+      encode({
+        channel: CONTROL,
+        kind: KIND.open,
+        payload: { protocol: 1, peer: 'pane-identity', granted },
+      }),
+    );
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    await exercise(session, calls);
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
+test('real Unix inspectAndAct rejects wrong pre-action pane identity before mutation', async () => {
+  await withPaneIdentityHost(
+    ['panes:observe', 'panes:semantic-read', 'panes:semantic-control', 'terminals:read'],
+    (request, socket) => {
+      let payload;
+      if (request.call === 'pane_semantic_read') {
+        payload = { reply: 'semantics', with: semanticTree('pane-b') };
+      } else if (request.call === 'pane_list') {
+        payload = { reply: 'panes', with: { panes: [], truncated: false } };
+      } else {
+        payload = { reply: 'done' };
+      }
+      socket.write(encode({ channel: 2, kind: KIND.response, payload }));
+    },
+    async (session, calls) => {
+      const terminal = workspace(session).terminal;
+      await assert.rejects(
+        terminal.inspectAndAct('pane-a', { node: 7, action: 'invoke' }),
+        /pane semantics for pane pane-b, expected pane-a; no pane state was assumed/,
+      );
+      assert.equal(
+        calls.some(({ call }) => call === 'pane_semantic_action'),
+        false,
+        'mismatched inspected authority must never mutate the requested pane',
+      );
+      assert.deepEqual(await terminal.panes(), { panes: [], truncated: false });
+    },
+  );
+});
+
+test('real Unix inspectAndAct rejects a wrong post-action pane identity', async () => {
+  let reads = 0;
+  await withPaneIdentityHost(
+    ['panes:observe', 'panes:semantic-read', 'panes:semantic-control'],
+    (request, socket) => {
+      if (request.call === 'pane_semantic_read') {
+        reads += 1;
+        socket.write(
+          encode({
+            channel: 2,
+            kind: KIND.response,
+            payload: {
+              reply: 'semantics',
+              with: semanticTree(reads === 1 ? 'pane-a' : 'pane-b', reads === 1 ? 4 : 5),
+            },
+          }),
+        );
+      } else if (request.call === 'pane_semantic_action') {
+        socket.write(
+          encode({
+            channel: 91,
+            kind: KIND.event,
+            payload: {
+              snapshot: 'pane_changes',
+              of: {
+                slot: 'pane-a',
+                kind: 'native',
+                generation: 2,
+                revision: 5,
+                coalesced: 0,
+              },
+            },
+          }),
+        );
+        socket.write(
+          encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }),
+        );
+      } else {
+        socket.write(
+          encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }),
+        );
+      }
+    },
+    async (session, calls) => {
+      await assert.rejects(
+        workspace(session).terminal.inspectAndAct('pane-a', { node: 7, action: 'invoke' }),
+        /pane semantics for pane pane-b, expected pane-a; no pane state was assumed/,
+      );
+      assert.equal(calls.filter(({ call }) => call === 'pane_semantic_action').length, 1);
+    },
+  );
+});
+
+test('real Unix terminal-to-text rejects text carrying another pane identity', async () => {
+  await withPaneIdentityHost(
+    ['panes:observe', 'terminals:output'],
+    (request, socket) => {
+      const payload =
+        request.call === 'pane_list'
+          ? {
+              reply: 'panes',
+              with: {
+                panes: [
+                  {
+                    slot: 'pane-a',
+                    generation: 3,
+                    revision: 8,
+                    kind: 'terminal',
+                    provider: null,
+                    tab: null,
+                    title: 'Shell',
+                    focused: true,
+                  },
+                ],
+                truncated: false,
+              },
+            }
+          : {
+              reply: 'text',
+              with: {
+                slot: 'pane-b',
+                generation: 3,
+                revision: 8,
+                columns: 80,
+                rows: 24,
+                lines: ['$ unsafe'],
+                cursor_column: 8,
+                cursor_row: 0,
+                truncated: false,
+              },
+            };
+      socket.write(encode({ channel: 2, kind: KIND.response, payload }));
+    },
+    async (session) => {
+      await assert.rejects(
+        workspace(session).terminal.toText('pane-a'),
+        /terminal text for pane pane-b, expected pane-a; no pane state was assumed/,
+      );
+    },
+  );
+});
+
 test('real Unix execAndWait prevalidates then executes, waits, and reads bounded output in order', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-exec-and-wait-'));
   const socketPath = path.join(directory, 'host.sock');
