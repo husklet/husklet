@@ -794,6 +794,16 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
     }
     return snapshot;
   };
+  const exactPaneInventory = <Inventory extends { panes: { slot: string }[] }>(
+    inventory: Inventory,
+  ) => {
+    if (new Set(inventory.panes.map(({ slot }) => slot)).size !== inventory.panes.length) {
+      throw new TypeError(
+        'host returned duplicate pane slot identities; no pane selection was assumed',
+      );
+    }
+    return inventory;
+  };
   const exactExecution = (execution: ExecutionSummary, id: string, operation: string) => {
     if (execution.id !== id) {
       throw new TypeError(
@@ -1716,7 +1726,7 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
         }),
     },
     terminal: {
-      panes: async () => expect(await session.call('pane_list'), 'panes'),
+      panes: async () => exactPaneInventory(expect(await session.call('pane_list'), 'panes')),
       tabs: async () => expect(await session.call('terminal_tabs'), 'tabs'),
       topology: async () => expect(await session.call('terminal_topology'), 'topology'),
       openTab: async (title) =>
@@ -1815,7 +1825,7 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
         ),
       /** Converts either a terminal or a native UI pane into bounded agent-readable text. */
       toText: async (slot, { lines }: { lines?: number } = {}) => {
-        const inventory = expect(await session.call('pane_list'), 'panes');
+        const inventory = exactPaneInventory(expect(await session.call('pane_list'), 'panes'));
         const pane = inventory.panes.find((candidate) => candidate.slot === slot);
         if (!pane) {
           const detail = inventory.truncated
@@ -1845,7 +1855,7 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
         return { kind: 'ui', text: semanticXml(snapshot), snapshot };
       },
       readAll: async ({ lines }: { lines?: number } = {}) => {
-        const inventory = expect(await session.call('pane_list'), 'panes');
+        const inventory = exactPaneInventory(expect(await session.call('pane_list'), 'panes'));
         const panes = [];
         for (const pane of inventory.panes) {
           if (pane.kind === 'terminal') {

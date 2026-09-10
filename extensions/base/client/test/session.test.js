@@ -7217,6 +7217,66 @@ test('real Unix terminal-to-text rejects text carrying another pane identity', a
   );
 });
 
+test('real Unix pane inventory rejects duplicate slots and preserves session health', async () => {
+  let inventories = 0;
+  await withPaneIdentityHost(
+    ['panes:observe'],
+    (request, socket) => {
+      inventories += 1;
+      const pane = {
+        slot: 'pane-a',
+        generation: 3,
+        revision: 8,
+        kind: 'terminal',
+        provider: null,
+        tab: null,
+        title: 'Shell',
+        focused: true,
+      };
+      socket.write(
+        encode({
+          channel: 2,
+          kind: KIND.response,
+          payload: {
+            reply: 'panes',
+            with: {
+              panes: inventories === 1 ? [pane, { ...pane, kind: 'native' }] : [pane],
+              truncated: false,
+            },
+          },
+        }),
+      );
+    },
+    async (session, calls) => {
+      const terminal = workspace(session).terminal;
+      await assert.rejects(terminal.panes(), /duplicate pane slot identities/);
+      assert.deepEqual(
+        calls.map(({ call }) => call),
+        ['pane_list'],
+      );
+      assert.deepEqual(await terminal.panes(), {
+        panes: [
+          {
+            slot: 'pane-a',
+            generation: 3,
+            revision: 8,
+            kind: 'terminal',
+            provider: null,
+            tab: null,
+            title: 'Shell',
+            focused: true,
+          },
+        ],
+        truncated: false,
+      });
+      assert.deepEqual(
+        calls.map(({ call }) => call),
+        ['pane_list', 'pane_list'],
+      );
+    },
+  );
+});
+
 test('real Unix terminal-to-text rejects same-slot replacement and preserves session health', async () => {
   let reads = 0;
   await withPaneIdentityHost(

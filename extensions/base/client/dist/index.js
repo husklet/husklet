@@ -612,6 +612,12 @@ export function workspace(session, { signal } = {}) {
         }
         return snapshot;
     };
+    const exactPaneInventory = (inventory) => {
+        if (new Set(inventory.panes.map(({ slot }) => slot)).size !== inventory.panes.length) {
+            throw new TypeError('host returned duplicate pane slot identities; no pane selection was assumed');
+        }
+        return inventory;
+    };
     const exactExecution = (execution, id, operation) => {
         if (execution.id !== id) {
             throw new TypeError(`host returned ${operation} for execution ${execution.id}, expected ${id}; no execution state was assumed`);
@@ -1346,7 +1352,7 @@ export function workspace(session, { signal } = {}) {
             }),
         },
         terminal: {
-            panes: async () => expect(await session.call('pane_list'), 'panes'),
+            panes: async () => exactPaneInventory(expect(await session.call('pane_list'), 'panes')),
             tabs: async () => expect(await session.call('terminal_tabs'), 'tabs'),
             topology: async () => expect(await session.call('terminal_topology'), 'topology'),
             openTab: async (title) => expect(await session.call('terminal_open_tab', { title }), 'identity'),
@@ -1405,7 +1411,7 @@ export function workspace(session, { signal } = {}) {
             semantics: async (slot) => exactPane(expect(await session.call('pane_semantic_read', { slot }), 'semantics'), slot, 'pane semantics'),
             /** Converts either a terminal or a native UI pane into bounded agent-readable text. */
             toText: async (slot, { lines } = {}) => {
-                const inventory = expect(await session.call('pane_list'), 'panes');
+                const inventory = exactPaneInventory(expect(await session.call('pane_list'), 'panes'));
                 const pane = inventory.panes.find((candidate) => candidate.slot === slot);
                 if (!pane) {
                     const detail = inventory.truncated
@@ -1427,7 +1433,7 @@ export function workspace(session, { signal } = {}) {
                 return { kind: 'ui', text: semanticXml(snapshot), snapshot };
             },
             readAll: async ({ lines } = {}) => {
-                const inventory = expect(await session.call('pane_list'), 'panes');
+                const inventory = exactPaneInventory(expect(await session.call('pane_list'), 'panes'));
                 const panes = [];
                 for (const pane of inventory.panes) {
                     if (pane.kind === 'terminal') {
