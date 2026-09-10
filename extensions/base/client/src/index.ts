@@ -1126,7 +1126,17 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
           'inspection',
         );
       },
-      executions: async () => expect(await session.call('execution_list'), 'executions'),
+      executions: async () => {
+        const inventory = expect(await session.call('execution_list'), 'executions');
+        if (
+          new Set(inventory.executions.map(({ id }) => id)).size !== inventory.executions.length
+        ) {
+          throw new TypeError(
+            'host returned duplicate immutable execution identities; no execution selection was assumed',
+          );
+        }
+        return inventory;
+      },
       executionLogs: async (id, { stdout = true, stderr = true } = {}) =>
         expect(
           await session.call('execution_logs', {
