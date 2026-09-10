@@ -108,8 +108,13 @@ fn trusted_manifest(name: &str) -> Result<Manifest, String> {
         "top" => include_str!("../../../../../extensions/top/extension.toml"),
         _ => return Err(format!("default extension {name} has no first-party manifest contract")),
     };
-    Manifest::parse(source, hl_extension::PROTOCOL)
-        .map_err(|error| format!("default extension {name} has an invalid first-party manifest contract: {error}"))
+    let mut manifest = Manifest::parse(source, hl_extension::PROTOCOL)
+        .map_err(|error| format!("default extension {name} has an invalid first-party manifest contract: {error}"))?;
+    // First-party Dockerfiles stamp the application release into the copied
+    // manifest. Compare candidates to that shipped document, not the source
+    // template's independent development version.
+    manifest.version = env!("CARGO_PKG_VERSION").to_owned();
+    Ok(manifest)
 }
 
 fn provides_default_surface(manifest: &Manifest) -> bool {
@@ -140,6 +145,31 @@ mod tests {
                 format!("ghcr.io/husklet/husklet/extension-{name}:{}", env!("CARGO_PKG_VERSION"))
             );
         }
+    }
+
+    #[test]
+    fn trusted_top_manifest_matches_the_dockerfile_release_stamp() {
+        let source = Manifest::parse(
+            include_str!("../../../../../extensions/top/extension.toml"),
+            hl_extension::PROTOCOL,
+        )
+        .expect("checked-in Top manifest template");
+        let shipped = top_manifest();
+        let dockerfile = include_str!("../../../../../extensions/top/Dockerfile");
+
+        assert_ne!(
+            source.version,
+            env!("CARGO_PKG_VERSION"),
+            "fixture must exercise stamping"
+        );
+        assert!(dockerfile.contains("sed -i \"s/^version = .*/version = \\\"${HUSKLET_EXTENSION_VERSION}\\\"/\""));
+        assert_eq!(shipped.version, env!("CARGO_PKG_VERSION"));
+        let mut expected = source;
+        expected.version = env!("CARGO_PKG_VERSION").to_owned();
+        assert_eq!(
+            shipped, expected,
+            "runtime must model only the Dockerfile's version stamp"
+        );
     }
 
     #[test]
