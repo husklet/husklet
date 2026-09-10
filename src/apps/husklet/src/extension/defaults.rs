@@ -39,8 +39,9 @@ fn install_defaults_with(
         })?;
         if candidate.manifest.name != name {
             return Err(format!(
-                "{reference} declares extension {}, expected {expected}",
-                candidate.manifest.name
+                "default extension {expected} {version} could not be installed from public image {reference}: the image declares extension {}, expected {expected}; verify the image publisher and manifest, then retry workspace provisioning",
+                candidate.manifest.name,
+                version = env!("CARGO_PKG_VERSION")
             ));
         }
         if let Some(entry) = roster.entries().into_iter().find(|entry| entry.name == name) {
@@ -192,6 +193,65 @@ mod tests {
         assert!(error.contains(env!("CARGO_PKG_VERSION")));
         assert!(error.contains("check registry access"));
         assert!(error.contains("retry workspace provisioning"));
+    }
+
+    #[test]
+    fn wrong_default_identity_is_actionable_and_a_corrected_retry_is_clean() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut workspace = WorkspaceConfig::new("demo", "alpine:3.20", hl_ws::Arch::Amd64);
+        workspace.storage = Some(directory.path().join("workspace"));
+        let manifest = |name: &str| Manifest {
+            name: ExtensionName::new(name).unwrap(),
+            display_name: name.to_owned(),
+            version: env!("CARGO_PKG_VERSION").to_owned(),
+            protocol: hl_extension::PROTOCOL,
+            capabilities: Grant::new([Capability::WorkspaceRead, Capability::Interface]),
+            entrypoint: None,
+            activation: Activation::Workspace,
+            interface: Some(Presentation {
+                tab_title: name.to_owned(),
+                icon: None,
+            }),
+            pane_providers: Vec::new(),
+            resources: Resources::default(),
+            containers: hl_extension::ContainerGrant::default(),
+            images: hl_extension::ImageGrant::default(),
+            networks: hl_extension::NetworkGrant::default(),
+            volumes: hl_extension::VolumeGrant::default(),
+            filesystem: hl_extension::FilesystemGrant::default(),
+            workspace_environment: hl_extension::WorkspaceEnvironmentGrant::default(),
+        };
+
+        let error = install_defaults_with(&workspace, |_, reference| {
+            Ok(Candidate {
+                reference: reference.to_owned(),
+                digest: "sha256:spoof".to_owned(),
+                manifest: manifest("storybook"),
+            })
+        })
+        .expect_err("wrong default identity");
+
+        assert!(error.contains(DEFAULT_EXTENSIONS[0].1));
+        assert!(error.contains(env!("CARGO_PKG_VERSION")));
+        assert!(error.contains("declares extension storybook, expected top"));
+        assert!(error.contains("verify the image publisher and manifest"));
+        assert!(error.contains("retry workspace provisioning"));
+        assert!(Roster::workspace(&workspace).unwrap().entries().is_empty());
+
+        install_defaults_with(&workspace, |_, reference| {
+            Ok(Candidate {
+                reference: reference.to_owned(),
+                digest: "sha256:top".to_owned(),
+                manifest: manifest("top"),
+            })
+        })
+        .expect("corrected retry");
+
+        let entries = Roster::workspace(&workspace).unwrap().entries();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name.as_str(), "top");
+        assert_eq!(entries[0].image_digest, "sha256:top");
+        assert_eq!(entries[0].stage, Stage::Duty);
     }
 
     #[test]
