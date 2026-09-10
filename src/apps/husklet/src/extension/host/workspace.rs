@@ -346,7 +346,12 @@ impl Workspace {
         let inspection = bridge
             .wait(client.images().inspect(&record.image_digest))
             .map_err(|error| error.to_string())?;
-        image_from_inspection(&record.image_digest, self.config.arch.as_str(), &inspection)
+        image_from_inspection(
+            record.name.as_str(),
+            &record.image_digest,
+            self.config.arch.as_str(),
+            &inspection,
+        )
     }
 
     /// What this workspace tells an extension about itself.
@@ -456,6 +461,7 @@ impl Supply for Workspace {
 }
 
 fn image_from_inspection(
+    extension: &str,
     recorded_digest: &str,
     architecture: &str,
     inspection: &hl_client::model::InspectImage,
@@ -470,6 +476,15 @@ fn image_from_inspection(
         return Err(format!(
             "recorded extension image {recorded_digest} is {}/{}, but this workspace requires linux/{architecture}; retry workspace provisioning with the correct architecture",
             inspection.os, inspection.architecture
+        ));
+    }
+    if extension == "top"
+        && (inspection.config.entrypoint != ["/usr/local/bin/node"]
+            || inspection.config.cmd != ["/app/dist/main.js"]
+            || inspection.config.user != "node")
+    {
+        return Err(format!(
+            "recorded Top image {recorded_digest} has an unexpected OCI process configuration; expected node to run /app/dist/main.js as the node user; verify the published image, then retry workspace provisioning"
         ));
     }
     Ok(Image::from_inspection(recorded_digest.to_owned(), inspection))
@@ -501,12 +516,13 @@ mod image_tests {
     #[test]
     fn startup_is_bound_to_the_recorded_digest_and_workspace_platform() {
         let digest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-        let image = image_from_inspection(digest, "amd64", &inspection(digest, "linux", "amd64"))
+        let image = image_from_inspection("sample", digest, "amd64", &inspection(digest, "linux", "amd64"))
             .expect("matching installed artifact");
         assert_eq!(image.reference, digest);
         assert_eq!(image.digest, digest);
 
         let wrong_digest = image_from_inspection(
+            "sample",
             digest,
             "amd64",
             &inspection(
@@ -520,12 +536,45 @@ mod image_tests {
         assert!(wrong_digest.contains("retry workspace provisioning"));
 
         for (os, architecture) in [("darwin", "amd64"), ("linux", "arm64")] {
-            let wrong_platform = image_from_inspection(digest, "amd64", &inspection(digest, os, architecture))
-                .expect_err("wrong platform");
+            let wrong_platform =
+                image_from_inspection("sample", digest, "amd64", &inspection(digest, os, architecture))
+                    .expect_err("wrong platform");
             assert!(wrong_platform.contains(&format!("is {os}/{architecture}")));
             assert!(wrong_platform.contains("requires linux/amd64"));
             assert!(wrong_platform.contains("retry workspace provisioning"));
         }
+    }
+
+    #[test]
+    fn top_startup_is_bound_to_the_dockerfile_process_contract() {
+        let digest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let mut top = inspection(digest, "linux", "amd64");
+        top.config.entrypoint = vec!["/usr/local/bin/node".to_owned()];
+        top.config.cmd = vec!["/app/dist/main.js".to_owned()];
+        top.config.user = "node".to_owned();
+        let dockerfile = include_str!("../../../../../../extensions/top/Dockerfile");
+        assert!(dockerfile.contains("ENTRYPOINT [\"/usr/local/bin/node\"]"));
+        assert!(dockerfile.contains("CMD [\"/app/dist/main.js\"]"));
+        assert!(dockerfile.contains("USER node"));
+        image_from_inspection("top", digest, "amd64", &top).expect("shipped Top process contract");
+
+        for corrupt in ["entrypoint", "command", "user"] {
+            let mut candidate = top.clone();
+            match corrupt {
+                "entrypoint" => candidate.config.entrypoint = vec!["/bin/sh".to_owned()],
+                "command" => candidate.config.cmd = vec!["-c".to_owned(), "malicious".to_owned()],
+                "user" => candidate.config.user = "root".to_owned(),
+                _ => unreachable!(),
+            }
+            let error = image_from_inspection("top", digest, "amd64", &candidate)
+                .expect_err("altered first-party process contract");
+            assert!(error.contains("unexpected OCI process configuration"));
+            assert!(error.contains("verify the published image"));
+            assert!(error.contains("retry workspace provisioning"));
+        }
+
+        image_from_inspection("custom", digest, "amd64", &inspection(digest, "linux", "amd64"))
+            .expect("custom extension keeps its own image process configuration");
     }
 }
 
