@@ -601,6 +601,80 @@ test('real Unix volume inspection rejects another name and preserves session hea
   }
 });
 
+test('real Unix workspace inspection rejects another name without mutation and preserves session health', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-workspace-inspect-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const calls = [];
+  const connections = new Set();
+  const configuration = (name) => ({
+    name,
+    image: 'alpine:3.20',
+    architecture: 'amd64',
+    generation: 'a'.repeat(32),
+    configuration_revision: 'b'.repeat(32),
+    storage: null,
+    shell: null,
+    cpus: null,
+    memory_mb: null,
+    environment: [],
+    mounts: [],
+    docker_socket: false,
+    scrollback: null,
+    vpn: null,
+    execution_lifetime: 'persisted',
+    terminal: {
+      font_family: null,
+      font_size: null,
+      foreground: null,
+      background: null,
+      cursor_shape: null,
+      cursor_blink: null,
+    },
+  });
+  const server = net.createServer((socket) => {
+    connections.add(socket);
+    socket.on('close', () => connections.delete(socket));
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.kind !== KIND.request || frame.channel !== 2) continue;
+        calls.push(frame.payload.call);
+        socket.write(
+          encode({
+            channel: 2,
+            kind: KIND.response,
+            payload: {
+              reply: 'workspace_configuration',
+              with: configuration(calls.length === 1 ? 'production' : 'review'),
+            },
+          }),
+        );
+      }
+    });
+    socket.write(
+      encode({
+        channel: CONTROL,
+        kind: KIND.open,
+        payload: { protocol: 1, peer: 'workspace-inspect', granted: ['workspaces:read'] },
+      }),
+    );
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    const api = workspace(session);
+    await assert.rejects(api.inspect('review'), /configuration for production, expected review/);
+    assert.deepEqual(calls, ['workspace_inspect'], 'rejection emits no follow-up or mutation');
+    assert.equal((await api.inspect('review')).name, 'review');
+    assert.deepEqual(calls, ['workspace_inspect', 'workspace_inspect']);
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('real Unix execution reads reject another identity and preserve session health', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-execution-identity-'));
   const socketPath = path.join(directory, 'host.sock');

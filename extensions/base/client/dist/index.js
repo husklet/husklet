@@ -630,6 +630,12 @@ export function workspace(session, { signal } = {}) {
         }
         return networks;
     };
+    const exactWorkspaceConfiguration = (configuration, name) => {
+        if (configuration.name !== name) {
+            throw new TypeError(`host returned workspace configuration for ${configuration.name}, expected ${name}; no workspace state was assumed`);
+        }
+        return configuration;
+    };
     const exactTopology = (topology) => {
         exactTabs(topology.tabs);
         if (topology.active_tab != null &&
@@ -731,14 +737,14 @@ export function workspace(session, { signal } = {}) {
         },
         info: async () => expect(await session.call('workspace_info'), 'workspace'),
         list: async () => expect(await session.call('workspace_list'), 'workspaces'),
-        inspect: async (name) => expect(await session.call('workspace_inspect', { name }), 'workspace_configuration'),
-        create: async (configuration) => expect(await session.call('workspace_create', { configuration }), 'workspace_configuration'),
-        update: async (name, generation, configurationRevision, configuration) => expect(await session.call('workspace_update', {
+        inspect: async (name) => exactWorkspaceConfiguration(expect(await session.call('workspace_inspect', { name }), 'workspace_configuration'), name),
+        create: async (configuration) => exactWorkspaceConfiguration(expect(await session.call('workspace_create', { configuration }), 'workspace_configuration'), configuration.name),
+        update: async (name, generation, configurationRevision, configuration) => exactWorkspaceConfiguration(expect(await session.call('workspace_update', {
             name,
             generation: immutableIdentity(generation, [32], 'workspace generation'),
             configuration_revision: immutableIdentity(configurationRevision, [32], 'workspace configuration revision'),
             configuration,
-        }), 'workspace_configuration'),
+        }), 'workspace_configuration'), name),
         patchEnvironment: async (name, generation, configurationRevision, patch) => expect(await session.call('workspace_environment_patch', {
             name,
             generation: immutableIdentity(generation, [32], 'workspace generation'),
