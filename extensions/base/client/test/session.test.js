@@ -584,6 +584,76 @@ test('real Unix filesystem watcher exposes listener failure without poisoning th
   }
 });
 
+test('real Unix cancelled state update cannot publish a stale checkpoint', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-state-update-abort-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const calls = [];
+  const connections = new Set();
+  const server = net.createServer((socket) => {
+    connections.add(socket);
+    socket.on('close', () => connections.delete(socket));
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.kind !== KIND.request) continue;
+        calls.push(frame.payload.call);
+        const payload =
+          frame.payload.call === 'state_read'
+            ? { reply: 'state', with: { identity: 'absent', contents: [] } }
+            : {
+                reply: 'workspace',
+                with: { name: 'index', image: 'toolbox', architecture: 'amd64' },
+              };
+        socket.write(encode({ channel: frame.channel, kind: KIND.response, payload }));
+      }
+    });
+    socket.write(
+      encode({
+        channel: CONTROL,
+        kind: KIND.open,
+        payload: {
+          protocol: 1,
+          peer: 'state-update-abort',
+          granted: ['state:read', 'state:write', 'workspaces:read'],
+        },
+      }),
+    );
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    const controller = new AbortController();
+    const codec = {
+      decode(value) {
+        return value ?? { revision: 0 };
+      },
+      encode(value) {
+        return value;
+      },
+    };
+    await assert.rejects(
+      workspace(session).state.updateJson(
+        codec,
+        async (current) => {
+          await Promise.resolve();
+          controller.abort('new indexing run started');
+          return { revision: current.revision + 1 };
+        },
+        { signal: controller.signal },
+      ),
+      (error) => error.name === 'AbortError' && error.cause === controller.signal.reason,
+    );
+    assert.deepEqual(calls, ['state_read'], 'abort after computation must prevent state_write');
+    assert.equal((await workspace(session).info()).name, 'index');
+    assert.deepEqual(calls, ['state_read', 'workspace_info']);
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('real Unix text wait reconciles an unread revision without requiring a later event', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-text-reconcile-'));
   const socketPath = path.join(directory, 'host.sock');

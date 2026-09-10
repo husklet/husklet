@@ -374,6 +374,13 @@ function requireFilesystemActive(signal?: AbortSignal) {
   if (signal?.aborted) throw filesystemAbort(signal);
 }
 
+function requireStateUpdateActive(signal?: AbortSignal) {
+  if (!signal?.aborted) return;
+  const error = new Error('extension state update aborted', { cause: signal.reason });
+  error.name = 'AbortError';
+  throw error;
+}
+
 function isDirectFilesystemChild(parent: string, child: string) {
   const parts = (value: string) =>
     value.split(/[\\/]/).filter((part) => part.length > 0 && part !== '.');
@@ -2338,7 +2345,11 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
       readJson: async (codec) => decodeJsonState(await api.state.read(), codec),
       writeJson: (observed, value, codec) =>
         api.state.write(observed, encodeJsonState(value, codec)),
-      updateJson: async (codec, update, { attempts = 4 } = {}) => {
+      updateJson: async (
+        codec,
+        update,
+        { attempts = 4, signal: updateSignal }: { attempts?: number; signal?: AbortSignal } = {},
+      ) => {
         if (!Number.isSafeInteger(attempts) || attempts < 1 || attempts > 16)
           throw new RangeError(
             'extension state JSON update attempts must be an integer from 1 through 16',
@@ -2346,8 +2357,11 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
         if (typeof update !== 'function')
           throw new TypeError('extension state JSON update requires an update function');
         for (let attempt = 0; attempt < attempts; attempt += 1) {
+          requireStateUpdateActive(updateSignal);
           const current = await api.state.readJson(codec);
+          requireStateUpdateActive(updateSignal);
           const value = await update(current.value);
+          requireStateUpdateActive(updateSignal);
           try {
             const identity = await api.state.writeJson(current.identity, value, codec);
             return { identity, value };

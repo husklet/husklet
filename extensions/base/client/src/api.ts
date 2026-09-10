@@ -1555,11 +1555,11 @@ export interface WorkspaceApi {
     clear(observed: string): Promise<void>;
     readJson<T>(codec: StateCodec<T>): Promise<JsonState<T>>;
     writeJson<T>(observed: string, value: T, codec: StateCodec<T>): Promise<string>;
-    /** The update callback may be rerun after a concurrent CAS conflict. */
+    /** The update callback may be rerun after a concurrent CAS conflict; abort prevents a later write/retry. */
     updateJson<T>(
       codec: StateCodec<T>,
       update: (current: T) => T | Promise<T>,
-      options?: { attempts?: number },
+      options?: { attempts?: number; signal?: AbortSignal },
     ): Promise<JsonState<T>>;
   };
   /** Small workspace-local UI preferences, isolated to this authenticated extension. */
