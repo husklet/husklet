@@ -10,6 +10,7 @@ import { CheckboxWorkbench } from './checkbox.js';
 import { CommandPaletteStory } from './command-palette.js';
 import { ConfirmationStory } from './confirmation.js';
 import { EntryWorkbench } from './entry.js';
+import { ExpanderWorkbench } from './expander.js';
 import { FormControlWorkbench } from './form-control.js';
 import { HeadingWorkbench } from './heading.js';
 import { IconButtonWorkbench } from './icon-button.js';
@@ -30,6 +31,7 @@ type NativeWorkbenchName =
   | 'Button'
   | 'Checkbox'
   | 'Entry'
+  | 'Expander'
   | 'FormControl'
   | 'Heading'
   | 'IconButton'
@@ -79,6 +81,7 @@ const nativeWorkbenchPages = {
   Button: ButtonWorkbench,
   Checkbox: CheckboxWorkbench,
   Entry: EntryWorkbench,
+  Expander: ExpanderWorkbench,
   FormControl: FormControlWorkbench,
   Heading: HeadingWorkbench,
   IconButton: IconButtonWorkbench,

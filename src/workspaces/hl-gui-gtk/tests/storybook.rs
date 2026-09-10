@@ -28,6 +28,7 @@ mod unix {
         "FormControl",
         "Slider",
         "Heading",
+        "Expander",
         "Extension acquisition",
         "Validated settings form",
         "Keyboard and semantic actions",
@@ -223,6 +224,7 @@ mod unix {
                 | "FormControl"
                 | "Slider"
                 | "Heading"
+                | "Expander"
                 | "Switch"
                 | "DataTable"
         );
@@ -554,6 +556,54 @@ mod unix {
                 assert_eq!(label.accessible_role(), gtk::AccessibleRole::Heading);
             }
         }
+        if story == "Expander" {
+            let controlled = find::<gtk::Expander>(&root, |expander| {
+                expander.label().as_deref() == Some("Runtime diagnostics")
+            });
+            assert_eq!(controlled.label().as_deref(), Some("Runtime diagnostics"));
+            assert_eq!(controlled.accessible_role(), gtk::AccessibleRole::Button);
+            assert!(!controlled.is_expanded(), "controlled Expander starts collapsed");
+            assert!(
+                controlled.can_focus(),
+                "the labelled disclosure participates in keyboard focus"
+            );
+            assert!(controlled.grab_focus(), "Expander summary owns keyboard focus");
+            // GTK's native Enter and Space bindings both dispatch this action signal.
+            // Exercising it in both directions proves each binding's common path
+            // changes state and reports once without installing a synthetic handler.
+            for expected in [true, false] {
+                controlled.emit_by_name::<()>("activate", &[]);
+                settle_toolkit();
+                let reports = surface.reports().drain();
+                assert_eq!(reports.len(), 1, "one keyboard activation reports exactly once");
+                let hl_gui::Event::Expand { value, .. } = &reports[0] else {
+                    panic!("keyboard activation emitted the wrong report: {:?}", reports[0])
+                };
+                assert_eq!(value, &hl_gui::PropValue::Flag(expected));
+                assert_eq!(controlled.is_expanded(), expected);
+                assert!(controlled.has_focus(), "toggle preserves focus on the summary");
+            }
+
+            let mut states = descendants::<gtk::Expander>(&root)
+                .into_iter()
+                .filter(|expander| expander.label().as_deref() == Some("Technical details"))
+                .map(|expander| expander.is_expanded())
+                .collect::<Vec<_>>();
+            states.sort_unstable();
+            assert_eq!(states, [false, true], "Expander shows both canonical disclosure states");
+
+            let bounded = find::<gtk::Expander>(&root, |expander| {
+                expander
+                    .label()
+                    .is_some_and(|label| label.starts_with("Connection diagnostics"))
+            });
+            assert!(
+                bounded.width() <= root.width(),
+                "long Expander allocated {}px beyond its {}px page",
+                bounded.width(),
+                root.width()
+            );
+        }
         if story == "Checkbox" {
             let property = find::<gtk::Label>(&root, |label| label.text() == "Property");
             let owned = ["label", "checked", "indeterminate", "enabled", "onToggle"]
@@ -870,6 +920,13 @@ mod unix {
         );
         tree.apply(&rerender, &mut surface)
             .unwrap_or_else(|error| panic!("{story} rerender failed in GTK: {error:?}"));
+        if story == "Expander" {
+            let disclosure = find::<gtk::Expander>(&root, |expander| {
+                expander.label().as_deref() == Some("Runtime diagnostics")
+            });
+            assert!(disclosure.is_expanded(), "controlled state survives its rerender");
+            assert!(disclosure.has_focus(), "controlled rerender preserves summary focus");
+        }
         if let Some(before) = toggle_before {
             settle_toolkit();
             let toggle =
@@ -1282,6 +1339,13 @@ mod unix {
                 })
                 .emit_clicked();
             }
+            "Expander" => {
+                let disclosure = find::<gtk::Expander>(root, |expander| {
+                    expander.label().as_deref() == Some("Runtime diagnostics")
+                });
+                assert!(disclosure.grab_focus(), "Expander summary accepts keyboard focus");
+                disclosure.emit_by_name::<()>("activate", &[]);
+            }
             "Switch" => {
                 labelled_switch(root, "Restore panes on launch").set_active(false);
             }
@@ -1461,6 +1525,17 @@ mod unix {
                 &hl_gui::PropValue::Flag(false),
                 "native Expander must report the collapsed state"
             );
+        }
+        if story == "Expander" {
+            let hl_gui::Event::Expand { node, id, value } = &event else {
+                panic!("native Expander did not emit its typed Expand interaction: {event:?}")
+            };
+            assert_eq!(
+                tree.handler(*node, hl_gui::Trigger::Expand),
+                Some(id),
+                "controlled Expander preserves its producer-owned handler identity"
+            );
+            assert_eq!(value, &hl_gui::PropValue::Flag(true));
         }
         if story == "Keyboard and semantic actions" {
             let hl_gui::Event::Change { node, .. } = event else {
