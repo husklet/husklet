@@ -542,11 +542,16 @@ mod unix {
                     paned.has_focus(),
                     "resized Top divider exposes its focused handle state"
                 );
+                assert_overview_grid(&root, 1_200, 224, "resized-wide");
                 capture(&window, "populated-workspace-resized-wide", 1_200, 800);
                 paned.set_position(160);
                 root.allocate(1_200, 1_600, -1, None);
                 selected.grab_focus();
                 settle_toolkit();
+            }
+            if fixture == "populated" && name == "workspace" {
+                let content_start = if width == 600 { 16 } else { 184 };
+                assert_overview_grid(&root, width, content_start, width_name);
             }
             capture(&window, &format!("{capture_fixture}-{name}-{width_name}"), width, 800);
             if fixture == "populated" && name == "extensions" {
@@ -1509,6 +1514,66 @@ mod unix {
             found.extend(widgets_with_class(&current, class));
         }
         found
+    }
+
+    fn assert_overview_grid(root: &gtk::Widget, width: i32, content_start: i32, case: &str) {
+        let cards = widgets_with_class(root, "hl-card");
+        assert_eq!(cards.len(), 8, "{case} overview renders every summary card");
+        for (card, label) in cards.iter().zip([
+            "Containers",
+            "Processes",
+            "Executions",
+            "Images",
+            "Volumes",
+            "Networks",
+            "Terminal tabs",
+            "Extensions",
+        ]) {
+            assert!(card.has_css_class("variant-outline"));
+            assert!(card.hexpands(), "{case} {label} card participates in responsive fill");
+            assert!(!card.vexpands(), "{case} {label} card keeps content height");
+            let action = find_button(card, label);
+            assert_eq!(action.accessible_role(), gtk::AccessibleRole::Button);
+            assert!(action.is_focusable(), "{case} {label} summary is keyboard actionable");
+        }
+
+        let mut bounds = cards
+            .iter()
+            .map(|card| {
+                let bounds = card.compute_bounds(root).expect("overview card belongs to Top root");
+                (
+                    bounds.x().round() as i32,
+                    bounds.y().round() as i32,
+                    bounds.width().round() as i32,
+                )
+            })
+            .collect::<Vec<_>>();
+        bounds.sort_unstable_by_key(|(x, y, _)| (*y, *x));
+        let mut rows = bounds.iter().map(|(_, y, _)| *y).collect::<Vec<_>>();
+        rows.dedup();
+        let expected_rows = if width == 600 { 8 } else { 2 };
+        let expected_columns = if width == 600 { 1 } else { 4 };
+        assert_eq!(rows.len(), expected_rows, "{case} overview row count");
+        for y in rows {
+            let row = bounds.iter().filter(|(_, top, _)| *top == y).collect::<Vec<_>>();
+            assert_eq!(row.len(), expected_columns, "{case} overview column count at y={y}");
+            let (first_x, _, _) = *row[0];
+            let (last_x, _, last_width) = *row[row.len() - 1];
+            assert_eq!(first_x, content_start, "{case} overview row starts at the content inset");
+            assert_eq!(
+                last_x + last_width,
+                root.width() - 16,
+                "{case} overview row reaches the trailing page inset"
+            );
+            if width == 600 {
+                assert_eq!(last_width, 568);
+            } else {
+                let widths = row.iter().map(|(_, _, width)| *width).collect::<Vec<_>>();
+                let minimum = *widths.iter().min().expect("overview row is populated");
+                let maximum = *widths.iter().max().expect("overview row is populated");
+                assert!(maximum - minimum <= 1, "{case} overview columns differ: {widths:?}");
+            }
+        }
     }
 
     fn assert_installed_density(root: &gtk::Widget, cards: &[gtk::Widget], width: i32, case: &str) {

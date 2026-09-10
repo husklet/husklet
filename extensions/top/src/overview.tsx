@@ -218,7 +218,7 @@ function Summary({
   onOpen: () => void;
 }) {
   return (
-    <Card grow={false} width={{ minimum: { chars: 26 } }} variant="outline">
+    <Card grow width={{ minimum: { chars: 30 } }} height="content" variant="outline">
       <CardActionArea variant="ghost" tooltip={`Open ${label}`} onInvoke={onOpen}>
         <CardContent gap={1} pad={3}>
           <Row gap={1} align="center" width="fill">

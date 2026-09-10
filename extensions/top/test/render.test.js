@@ -2895,8 +2895,18 @@ test('overview never presents stale inventory counts as current during loading o
   );
   assert.equal(
     ancestorProperty(stage, 'Containers', 'Card', 'Grow')?.Number,
-    0,
-    'cards expand across a line without stretching rows down the viewport',
+    1,
+    'summary cards share every wide row instead of leaving a ragged dead zone',
+  );
+  assert.deepEqual(
+    ancestorProperty(stage, 'Containers', 'Card', 'Width'),
+    { Bounds: { minimum: { Chars: 30 }, maximum: null } },
+    'summary cards retain a readable floor before wrapping',
+  );
+  assert.deepEqual(
+    ancestorProperty(stage, 'Containers', 'Card', 'Height'),
+    { Length: 'Content' },
+    'width growth never stretches summary rows down the viewport',
   );
   const openContainers = patches
     .filter(
