@@ -21,7 +21,7 @@ pub const DEFAULT_EXTENSIONS: [(&str, &str); 1] = [(
 /// the same tag, and the current digest must replace it before the workspace is
 /// allowed to start.
 pub fn install_defaults(workspace: &WorkspaceConfig) -> Result<(), String> {
-    install_defaults_with(workspace, Candidate::read)
+    install_defaults_with(workspace, Candidate::read_fresh)
 }
 
 fn install_defaults_with(

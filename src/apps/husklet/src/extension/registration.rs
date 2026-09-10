@@ -106,7 +106,7 @@ impl Candidate {
         progress: &Sender<Acquisition>,
         cancellation: &Cancellation,
     ) {
-        let result = Self::acquire_inner(workspace, reference, progress, cancellation);
+        let result = Self::acquire_inner(workspace, reference, progress, cancellation, false);
         let event = match result {
             Ok(candidate) => Acquisition::Ready(candidate),
             Err(_) if cancellation.is_cancelled() => Acquisition::Cancelled,
@@ -128,7 +128,18 @@ impl Candidate {
     /// document is not a manifest this host speaks.
     pub fn read(workspace: &WorkspaceConfig, reference: &str) -> Result<Self, String> {
         let (sent, _ignored) = std::sync::mpsc::channel();
-        Self::acquire_inner(workspace, reference, &sent, &Cancellation::default())
+        Self::acquire_inner(workspace, reference, &sent, &Cancellation::default(), false)
+    }
+
+    /// Resolves a registry reference before inspecting it, even when that tag is
+    /// already cached locally. First-party release tags use this path so a retry
+    /// cannot silently retain an older image published under the same version.
+    ///
+    /// # Errors
+    /// Returns why the registry refresh or subsequent candidate inspection failed.
+    pub(crate) fn read_fresh(workspace: &WorkspaceConfig, reference: &str) -> Result<Self, String> {
+        let (sent, _ignored) = std::sync::mpsc::channel();
+        Self::acquire_inner(workspace, reference, &sent, &Cancellation::default(), true)
     }
 
     fn acquire_inner(
@@ -136,13 +147,21 @@ impl Candidate {
         reference: &str,
         progress: &Sender<Acquisition>,
         cancellation: &Cancellation,
+        refresh: bool,
     ) -> Result<Self, String> {
         cancellation.check()?;
         let socket = crate::runtime::domain::Domain::new(workspace)
             .ensure(workspace)
             .map_err(|error| error.to_string())?;
         let bridge = Bridge::new(socket).map_err(|error| error.to_string())?;
-        Self::acquire_with_bridge(reference, workspace.arch.as_str(), progress, cancellation, &bridge)
+        Self::acquire_with_bridge(
+            reference,
+            workspace.arch.as_str(),
+            progress,
+            cancellation,
+            &bridge,
+            refresh,
+        )
     }
 
     fn acquire_with_bridge(
@@ -151,13 +170,19 @@ impl Candidate {
         progress: &Sender<Acquisition>,
         cancellation: &Cancellation,
         bridge: &Bridge,
+        refresh: bool,
     ) -> Result<Self, String> {
         let client = bridge.client();
         let _ = progress.send(Acquisition::Inspecting);
         cancellation.check()?;
+        if refresh {
+            pull(bridge, reference, architecture, progress, cancellation)
+                .map_err(|reason| format!("could not refresh extension image {reference}: {reason}"))?;
+            cancellation.check()?;
+        }
         let inspection: InspectImage = match cancellable(&bridge, cancellation, client.images().inspect(reference))? {
             Ok(inspection) => inspection,
-            Err(error) if matches!(super::failure(&error), HostError::Absent(_)) => {
+            Err(error) if !refresh && matches!(super::failure(&error), HostError::Absent(_)) => {
                 pull(bridge, reference, architecture, progress, cancellation)?;
                 cancellable(&bridge, cancellation, client.images().inspect(reference))?
                     .map_err(|error| error.to_string())?
@@ -196,6 +221,30 @@ impl Candidate {
                     progress,
                     &Cancellation::default(),
                     &bridge,
+                    false,
+                )
+            });
+        let event = result.map_or_else(Acquisition::Failed, Acquisition::Ready);
+        let _ = progress.send(event);
+    }
+
+    #[cfg(test)]
+    fn acquire_fresh_from_socket(
+        socket: &std::path::Path,
+        architecture: hl_ws::Arch,
+        reference: &str,
+        progress: &Sender<Acquisition>,
+    ) {
+        let result = Bridge::new(socket.to_path_buf())
+            .map_err(|error| error.to_string())
+            .and_then(|bridge| {
+                Self::acquire_with_bridge(
+                    reference,
+                    architecture.as_str(),
+                    progress,
+                    &Cancellation::default(),
+                    &bridge,
+                    true,
                 )
             });
         let event = result.map_or_else(Acquisition::Failed, Acquisition::Ready);
@@ -639,6 +688,54 @@ mod tests {
         assert_eq!(
             requests[1],
             "POST /v1.43/images/create?fromImage=registry%2Etest%2Fteam%2Fextension&tag=v1&platform=linux%2Farm64 HTTP/1.1"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fresh_acquisition_refreshes_a_cached_tag_before_inspection() {
+        use std::io::{Read as _, Write as _};
+
+        let root = tempfile::TempDir::new().unwrap();
+        let socket = root.path().join("mock.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut bytes = Vec::new();
+            let mut chunk = [0_u8; 1024];
+            while !bytes.windows(4).any(|window| window == b"\r\n\r\n") {
+                let count = stream.read(&mut chunk).unwrap();
+                assert_ne!(count, 0, "request ended before its headers");
+                bytes.extend_from_slice(&chunk[..count]);
+            }
+            let body = "{\"error\":\"registry denied anonymous refresh\"}\n";
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .unwrap();
+            String::from_utf8(bytes).unwrap().lines().next().unwrap().to_owned()
+        });
+        let (progress, received) = std::sync::mpsc::channel();
+
+        Candidate::acquire_fresh_from_socket(
+            &socket,
+            hl_ws::Arch::Arm64,
+            "registry.test/husklet/extension-top:0.4.0",
+            &progress,
+        );
+
+        let terminal = received
+            .into_iter()
+            .find(|event| matches!(event, Acquisition::Failed(_) | Acquisition::Ready(_)))
+            .unwrap();
+        assert!(
+            matches!(terminal, Acquisition::Failed(reason) if reason.contains("could not refresh extension image") && reason.contains("registry denied anonymous refresh"))
+        );
+        assert_eq!(
+            server.join().unwrap(),
+            "POST /v1.43/images/create?fromImage=registry%2Etest%2Fhusklet%2Fextension%2Dtop&tag=0%2E4%2E0&platform=linux%2Farm64 HTTP/1.1"
         );
     }
 
