@@ -16,6 +16,7 @@ mod unix {
     use hl_gui_gtk::Surface;
 
     const STORIES: &[&str] = &[
+        "Autocomplete",
         "Button",
         "Card",
         "IconButton",
@@ -622,6 +623,30 @@ mod unix {
             assert_contained(&root, "PasswordEntry before narrow");
             assert!(field.width() <= 360);
             capture_story(&realized_window, "PasswordEntry before narrow");
+            realized_window.set_size_request(1_200, 800);
+            realized_window.set_default_size(1_200, 800);
+            settle_window_width(&realized_window, 1_200);
+        }
+        if story == "Autocomplete" {
+            let choice = find::<gtk::DropDown>(&root, |drop| {
+                drop.tooltip_text().as_deref() == Some("Runtime")
+            });
+            assert_eq!(choice.accessible_role(), gtk::AccessibleRole::ComboBox);
+            assert!(choice.enables_search());
+            assert_eq!(choice.model().expect("Autocomplete options").n_items(), 3);
+            assert!(
+                (28..=44).contains(&choice.height()),
+                "Autocomplete is {}px tall",
+                choice.height()
+            );
+            assert!(choice.grab_focus(), "Autocomplete accepts keyboard focus");
+            capture_story(&realized_window, "Autocomplete before wide");
+            realized_window.set_size_request(600, 800);
+            realized_window.set_default_size(600, 800);
+            settle_window_width(&realized_window, 600);
+            assert_contained(&root, "Autocomplete before narrow");
+            assert!(choice.width() <= 360);
+            capture_story(&realized_window, "Autocomplete before narrow");
             realized_window.set_size_request(1_200, 800);
             realized_window.set_default_size(1_200, 800);
             settle_window_width(&realized_window, 1_200);
@@ -1252,6 +1277,19 @@ mod unix {
             assert_contained(&root, "PasswordEntry changed narrow");
             capture_story(&realized_window, "PasswordEntry changed narrow");
         }
+        if story == "Autocomplete" {
+            let choice = find::<gtk::DropDown>(&root, |drop| {
+                drop.tooltip_text().as_deref() == Some("Runtime")
+            });
+            assert_eq!(choice.selected(), 1);
+            find::<gtk::Label>(&root, |label| label.text() == "Selected Python 3.13.");
+            capture_story(&realized_window, "Autocomplete selected wide");
+            realized_window.set_size_request(600, 800);
+            realized_window.set_default_size(600, 800);
+            settle_window_width(&realized_window, 600);
+            assert_contained(&root, "Autocomplete selected narrow");
+            capture_story(&realized_window, "Autocomplete selected narrow");
+        }
         if let Some(before) = toggle_before {
             settle_toolkit();
             let toggle =
@@ -1633,6 +1671,12 @@ mod unix {
 
     fn emit_representative(story: &str, root: &gtk::Widget, surface: &Surface, tree: &Tree) -> hl_gui::Event {
         match story {
+            "Autocomplete" => {
+                find::<gtk::DropDown>(root, |drop| {
+                    drop.tooltip_text().as_deref() == Some("Runtime")
+                })
+                .set_selected(1);
+            }
             "Button" => {
                 find::<gtk::Button>(root, |button| button_caption(button).as_deref() == Some("Run task"))
                     .emit_clicked();
@@ -1827,7 +1871,12 @@ mod unix {
             (1..=2).contains(&reports.len()),
             "{story} emitted {reports:?} instead of a bounded event"
         );
-        let event = if matches!(story, "Radio" | "RadioGroup") {
+        let event = if story == "Autocomplete" {
+            reports
+                .into_iter()
+                .find(|event| matches!(event, hl_gui::Event::Select { rows, .. } if rows == &[1]))
+                .expect("Autocomplete reports the selected row")
+        } else if matches!(story, "Radio" | "RadioGroup") {
             reports
                 .into_iter()
                 .find(|event| {
