@@ -2266,6 +2266,13 @@
           }
         },
         {
+          "name": "journal",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
           "name": "next",
           "optional": false,
           "schema": {
@@ -2334,6 +2341,13 @@
             "maximum": 9007199254740991,
             "minimum": 0,
             "signed": false
+          }
+        },
+        {
+          "name": "journal",
+          "optional": false,
+          "schema": {
+            "kind": "string"
           }
         },
         {
@@ -11900,6 +11914,13 @@
           "payload": {
             "fields": [
               {
+                "name": "observed",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
                 "name": "after",
                 "optional": false,
                 "schema": {
@@ -13695,7 +13716,7 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:13b3a14ceb067c34",
+  "source_fingerprint": "fnv1a64:568ecc10fdacc838",
   "specification_version": 1,
   "topics": [
     {

@@ -1,5 +1,5 @@
 // Generated from Rust hl-extension protocol/v1.json. Do not edit.
-// Protocol artifact fnv1a64:00889a043f9c3d71
+// Protocol artifact fnv1a64:e9a5ee646b328f31
 export const PROTOCOL_SPECIFICATION_VERSION = 1;
 export const PROTOCOL_VERSION = 1;
 export const PROTOCOL_BOUNDS = Object.freeze({
@@ -2597,6 +2597,13 @@ const definitions = {
         }
       },
       {
+        "name": "journal",
+        "optional": false,
+        "schema": {
+          "kind": "string"
+        }
+      },
+      {
         "name": "next",
         "optional": false,
         "schema": {
@@ -2665,6 +2672,13 @@ const definitions = {
           "maximum": 9007199254740991,
           "minimum": 0,
           "signed": false
+        }
+      },
+      {
+        "name": "journal",
+        "optional": false,
+        "schema": {
+          "kind": "string"
         }
       },
       {
@@ -11158,6 +11172,13 @@ const roots = {
         "name": "filesystem_changes",
         "payload": {
           "fields": [
+            {
+              "name": "observed",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            },
             {
               "name": "after",
               "optional": false,

@@ -19,6 +19,7 @@ type Configuration = {
 };
 type Checkpoint = {
   version: 1;
+  journal: string | null;
   revision: number;
   documents: Record<string, { identity: string; embedding: string }>;
 };
@@ -26,7 +27,7 @@ type Checkpoint = {
 const configuration = JSON.parse(process.argv[2] ?? 'null') as Configuration;
 const codec = {
   decode(value: unknown): Checkpoint {
-    if (value === undefined) return { version: 1, revision: 0, documents: {} };
+    if (value === undefined) return { version: 1, journal: null, revision: 0, documents: {} };
     if (!value || typeof value !== 'object' || (value as { version?: unknown }).version !== 1)
       throw new TypeError('unsupported embeddings checkpoint');
     return value as Checkpoint;
@@ -42,7 +43,13 @@ try {
   const resumed = await host.state.readJson(codec);
   const inventory = await host.files.inventory();
   if (!inventory.complete) throw new Error('workspace inventory is incomplete');
-  const journal = await host.files.changes(resumed.value.revision, 128);
+  const journal = await host.files.changes(
+    {
+      journal: resumed.value.journal ?? inventory.journal,
+      revision: resumed.value.revision,
+    },
+    128,
+  );
   if (journal.truncated) throw new Error('workspace journal requires a full rescan');
 
   const documents = { ...resumed.value.documents };
@@ -74,7 +81,7 @@ try {
 
   const checkpoint = await host.state.writeJson(
     resumed.identity,
-    { version: 1, revision: journal.next, documents },
+    { version: 1, journal: journal.journal, revision: journal.next, documents },
     codec,
   );
   const surface = render(

@@ -1630,7 +1630,16 @@ impl Session {
                 let port = self.peer.authority().port(Capability::FilesystemRead, services.files)?;
                 Ok(Reply::FileInventory(port.inventory(&self.filesystem.read)?))
             }
-            Request::FilesystemChanges { after, limit } => {
+            Request::FilesystemChanges {
+                observed,
+                after,
+                limit,
+            } => {
+                if observed.len() != 32 || !observed.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                    return Err(Failure::Failed {
+                        detail: "filesystem journal identity must be 32 hexadecimal characters".into(),
+                    });
+                }
                 if *limit == 0 || *limit > 256 {
                     return Err(Failure::Failed {
                         detail: "filesystem change page limit must be from 1 through 256".into(),
@@ -1639,6 +1648,7 @@ impl Session {
                 let port = self.peer.authority().port(Capability::FilesystemRead, services.files)?;
                 Ok(Reply::FileChanges(port.changes_since(
                     &self.filesystem.read,
+                    observed,
                     *after,
                     usize::from(*limit),
                 )?))

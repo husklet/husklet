@@ -13,7 +13,7 @@ export async function watchTests(
   host: WorkspaceApi,
   container: { id: string; generation: number },
   options: {
-    after: number;
+    cursor: { journal: string; revision: number };
     command: string[];
     signal: AbortSignal;
     report(event: TestRunEvent): void | Promise<void>;
@@ -64,7 +64,7 @@ export async function watchTests(
         await current;
       }
     },
-    { after: options.after, signal: options.signal },
+    { cursor: options.cursor, signal: options.signal },
   );
   return async () => {
     active?.abort('test watcher stopped');

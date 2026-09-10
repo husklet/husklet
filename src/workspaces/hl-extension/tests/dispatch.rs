@@ -757,7 +757,26 @@ impl WorkspaceFiles for Host {
             }],
             complete: true,
             coalesced: 0,
+            journal: "a".repeat(32),
             revision: 0,
+        })
+    }
+
+    fn changes_since(
+        &self,
+        _roots: &[hl_extension::FilesystemSelector],
+        _observed: &str,
+        _after: u64,
+        _limit: usize,
+    ) -> Result<hl_extension::port::FileChangePage, HostError> {
+        self.ledger.note("files.changes_since");
+        Ok(hl_extension::port::FileChangePage {
+            journal: "a".repeat(32),
+            changes: Vec::new(),
+            next: 0,
+            current: 0,
+            more: false,
+            truncated: false,
         })
     }
 
@@ -1691,7 +1710,7 @@ fn all_calls() -> Vec<(Request, Capability)> {
     let mut requests = calls();
     requests.extend([
         (
-            Request::FilesystemChanges { after: 0, limit: 1 },
+            Request::FilesystemChanges { observed: "a".repeat(32), after: 0, limit: 1 },
             Capability::FilesystemRead,
         ),
         (Request::StateRead, Capability::StateRead),
@@ -2186,6 +2205,22 @@ fn extension_controls_refuse_partial_digests_before_host_authority() {
         },
     ] {
         assert!(session.dispatch(&request, &services(&host)).is_err());
+    }
+    assert!(host.ledger.reached().is_empty());
+}
+
+#[test]
+fn filesystem_journal_identity_is_bounded_before_the_host_is_reached() {
+    let host = Host::new();
+    let mut session = session(&[Capability::FilesystemRead], &["src"]);
+    for observed in ["not-hex".to_owned(), "a".repeat(33)] {
+        assert!(matches!(
+            session.dispatch(
+                &Request::FilesystemChanges { observed, after: 0, limit: 1 },
+                &services(&host),
+            ),
+            Err(Failure::Failed { .. })
+        ));
     }
     assert!(host.ledger.reached().is_empty());
 }

@@ -22,6 +22,9 @@ import {
 import { KIND, Reader, encode } from '../dist/wire.js';
 import { PROTOCOL } from '../dist/session.js';
 
+const FILE_JOURNAL = '0123456789abcdef0123456789abcdef';
+const NEXT_FILE_JOURNAL = 'fedcba9876543210fedcba9876543210';
+
 test('row requests reject unsafe or unbounded database windows', () => {
   const request = {
     id: 4,
@@ -1332,6 +1335,7 @@ test('filesystem watcher preserves bounded completeness and coalescing metadata'
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
   const stop = await opening;
   const inventory = {
+    journal: FILE_JOURNAL,
     entries: [{ path: 'src/main.ts', directory: false, size: 12, identity: 'v1:1:2:3:4:5:6:7' }],
     complete: false,
     coalesced: 4,
@@ -1358,6 +1362,7 @@ test('filesystem change watcher advances opaque pages and exposes truncation', a
   const calls = [];
   const pages = [
     {
+      journal: FILE_JOURNAL,
       changes: [
         {
           revision: 11,
@@ -1372,6 +1377,7 @@ test('filesystem change watcher advances opaque pages and exposes truncation', a
       truncated: false,
     },
     {
+      journal: FILE_JOURNAL,
       changes: [{ revision: 12, kind: 'remove', path: 'src/gone.ts', entry: null }],
       next: 12,
       current: 12,
@@ -1386,6 +1392,7 @@ test('filesystem change watcher advances opaque pages and exposes truncation', a
       return {
         reply: 'file_changes',
         with: pages.shift() ?? {
+          journal: FILE_JOURNAL,
           changes: [],
           next: 12,
           current: 12,
@@ -1409,20 +1416,32 @@ test('filesystem change watcher advances opaque pages and exposes truncation', a
           resolve();
         }
       },
-      { after: 10, pageSize: 1, pollMs: 1000, signal: controller.signal },
+      {
+        cursor: { journal: FILE_JOURNAL, revision: 10 },
+        pageSize: 1,
+        pollMs: 1000,
+        signal: controller.signal,
+      },
     );
   });
   await delivered;
   assert.deepEqual(seen, ['src/late.ts', 'src/gone.ts']);
   assert.deepEqual(calls.slice(0, 2), [
-    ['filesystem_changes', { after: 10, limit: 1 }],
-    ['filesystem_changes', { after: 11, limit: 1 }],
+    ['filesystem_changes', { observed: FILE_JOURNAL, after: 10, limit: 1 }],
+    ['filesystem_changes', { observed: FILE_JOURNAL, after: 11, limit: 1 }],
   ]);
 });
 
 test('filesystem change watcher exposes a cursor advance with no visible paths', async () => {
   const calls = [];
-  const page = { changes: [], next: 19, current: 19, more: false, truncated: false };
+  const page = {
+    journal: FILE_JOURNAL,
+    changes: [],
+    next: 19,
+    current: 19,
+    more: false,
+    truncated: false,
+  };
   const api = workspace({
     granted: ['filesystem:read'],
     async call(name, payload) {
@@ -1443,11 +1462,13 @@ test('filesystem change watcher exposes a cursor advance with no visible paths',
       controller.abort();
       delivered(value);
     },
-    { after: 7, pollMs: 1_000, signal: controller.signal },
+    { cursor: { journal: FILE_JOURNAL, revision: 7 }, pollMs: 1_000, signal: controller.signal },
   );
   assert.deepEqual(await seen, page);
   await stop();
-  assert.deepEqual(calls, [['filesystem_changes', { after: 7, limit: 256 }]]);
+  assert.deepEqual(calls, [
+    ['filesystem_changes', { observed: FILE_JOURNAL, after: 7, limit: 256 }],
+  ]);
 });
 
 test('real Unix change-page iteration applies backpressure and surfaces overflow, malformed cursors, and abort', async () => {
@@ -1455,12 +1476,16 @@ test('real Unix change-page iteration applies backpressure and surfaces overflow
   const next = frames(stage.host);
   await next();
   const files = workspace(stage.session).files;
-  const stream = files.changePages({ after: 10, pageSize: 1, pollMs: 10 });
+  const stream = files.changePages({
+    cursor: { journal: FILE_JOURNAL, revision: 10 },
+    pageSize: 1,
+    pollMs: 10,
+  });
 
   const first = stream.next();
   assert.deepEqual((await next()).payload, {
     call: 'filesystem_changes',
-    with: { after: 10, limit: 1 },
+    with: { observed: FILE_JOURNAL, after: 10, limit: 1 },
   });
   stage.host.write(
     encode({
@@ -1469,6 +1494,7 @@ test('real Unix change-page iteration applies backpressure and surfaces overflow
       payload: {
         reply: 'file_changes',
         with: {
+          journal: FILE_JOURNAL,
           changes: [
             {
               revision: 11,
@@ -1489,21 +1515,7 @@ test('real Unix change-page iteration applies backpressure and surfaces overflow
   await new Promise((resolve) => setTimeout(resolve, 20));
 
   const overflow = stream.next();
-  assert.deepEqual((await next()).payload.with, { after: 11, limit: 1 });
-  stage.host.write(
-    encode({
-      channel: 2,
-      kind: KIND.response,
-      payload: {
-        reply: 'file_changes',
-        with: { changes: [], next: 20, current: 20, more: false, truncated: true },
-      },
-    }),
-  );
-  assert.equal((await overflow).value.truncated, true);
-
-  const malformed = stream.next();
-  assert.deepEqual((await next()).payload.with, { after: 20, limit: 1 });
+  assert.deepEqual((await next()).payload.with, { observed: FILE_JOURNAL, after: 11, limit: 1 });
   stage.host.write(
     encode({
       channel: 2,
@@ -1511,6 +1523,32 @@ test('real Unix change-page iteration applies backpressure and surfaces overflow
       payload: {
         reply: 'file_changes',
         with: {
+          journal: NEXT_FILE_JOURNAL,
+          changes: [],
+          next: 20,
+          current: 20,
+          more: false,
+          truncated: true,
+        },
+      },
+    }),
+  );
+  assert.equal((await overflow).value.truncated, true);
+
+  const malformed = stream.next();
+  assert.deepEqual((await next()).payload.with, {
+    observed: NEXT_FILE_JOURNAL,
+    after: 20,
+    limit: 1,
+  });
+  stage.host.write(
+    encode({
+      channel: 2,
+      kind: KIND.response,
+      payload: {
+        reply: 'file_changes',
+        with: {
+          journal: FILE_JOURNAL,
           changes: [{ revision: 20, kind: 'remove', path: 'src/stale.ts', entry: null }],
           next: 20,
           current: 20,
@@ -1523,24 +1561,41 @@ test('real Unix change-page iteration applies backpressure and surfaces overflow
   await assert.rejects(malformed, /inconsistent filesystem change page/);
 
   const controller = new AbortController();
-  const idle = files.changePages({ after: 20, pollMs: 10_000, signal: controller.signal });
+  const idle = files.changePages({
+    cursor: { journal: NEXT_FILE_JOURNAL, revision: 20 },
+    pollMs: 10_000,
+    signal: controller.signal,
+  });
   const waiting = idle.next();
-  assert.deepEqual((await next()).payload.with, { after: 20, limit: 256 });
+  assert.deepEqual((await next()).payload.with, {
+    observed: NEXT_FILE_JOURNAL,
+    after: 20,
+    limit: 256,
+  });
   stage.host.write(
     encode({
       channel: 2,
       kind: KIND.response,
       payload: {
         reply: 'file_changes',
-        with: { changes: [], next: 20, current: 20, more: false, truncated: false },
+        with: {
+          journal: NEXT_FILE_JOURNAL,
+          changes: [],
+          next: 20,
+          current: 20,
+          more: false,
+          truncated: false,
+        },
       },
     }),
   );
   controller.abort('diagnostics stopped');
   await assert.rejects(waiting, (error) => error.name === 'AbortError');
 
-  const disconnected = files.changePages({ after: 20, pollMs: 1 }).next();
-  assert.deepEqual((await next()).payload.with, { after: 20, limit: 256 });
+  const disconnected = files
+    .changePages({ cursor: { journal: FILE_JOURNAL, revision: 20 }, pollMs: 1 })
+    .next();
+  assert.deepEqual((await next()).payload.with, { observed: FILE_JOURNAL, after: 20, limit: 256 });
   stage.host.destroy();
   await assert.rejects(disconnected);
   stage.session.close();
@@ -1554,6 +1609,7 @@ test('callback filesystem watcher reports listener failure through its stop hand
       return {
         reply: 'file_changes',
         with: {
+          journal: FILE_JOURNAL,
           changes: [{ revision: 1, kind: 'remove', path: 'stale.ts', entry: null }],
           next: 1,
           current: 1,
@@ -1576,7 +1632,7 @@ test('callback filesystem watcher reports listener failure through its stop hand
       reached();
       throw failure;
     },
-    { pollMs: 10_000 },
+    { cursor: { journal: FILE_JOURNAL, revision: 0 }, pollMs: 10_000 },
   );
   await delivered;
   await assert.rejects(stop.done, (error) => error === failure);

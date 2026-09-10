@@ -517,7 +517,12 @@ export interface FileInventory {
     entries: FileEntry[];
     complete: boolean;
     coalesced: number;
+    journal: string;
     /** Journal cursor from the same reconciliation snapshot. */
+    revision: number;
+}
+export interface FileCursor {
+    journal: string;
     revision: number;
 }
 export interface FileChange {
@@ -528,6 +533,7 @@ export interface FileChange {
 }
 export interface FileChangePage {
     changes: FileChange[];
+    journal: string;
     next: number;
     current: number;
     more: boolean;
@@ -1510,20 +1516,20 @@ export interface WorkspaceApi {
     files: {
         /** Returns the current bounded inventory for the exact consented read roots. */
         inventory(): Promise<FileInventory>;
-        changes(after?: number, limit?: number): Promise<FileChangePage>;
+        changes(cursor: FileCursor, limit?: number): Promise<FileChangePage>;
         /**
          * Consumer-driven, cursor-safe change pages. Slow consumers apply polling backpressure;
          * host/transport failures reject the pending `next()`, and abort interrupts polling.
          */
-        changePages(options?: {
-            after?: number;
+        changePages(options: {
+            cursor: FileCursor;
             pageSize?: number;
             pollMs?: number;
             signal?: AbortSignal;
         }): AsyncGenerator<FileChangePage, void, void>;
         /** Cursor-safe polling watcher. `done` rejects immediately on listener or transport failure. */
-        watchChanges(listener: (page: FileChangePage) => void | Promise<void>, options?: {
-            after?: number;
+        watchChanges(listener: (page: FileChangePage) => void | Promise<void>, options: {
+            cursor: FileCursor;
             pageSize?: number;
             pollMs?: number;
             signal?: AbortSignal;

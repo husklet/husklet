@@ -17,6 +17,8 @@ import {
 } from '../dist/index.js';
 import { CONTROL, KIND, Reader, encode } from '../dist/wire.js';
 
+const FILE_JOURNAL = '0123456789abcdef0123456789abcdef';
+
 test('real Unix chunk reads pin a prior file identity across fragmented frames', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-observed-chunks-'));
   const socketPath = path.join(directory, 'host.sock');
@@ -442,7 +444,14 @@ test('real Unix filesystem watcher publishes filtered cursor-only progress for r
   const socketPath = path.join(directory, 'host.sock');
   const calls = [];
   const connections = new Set();
-  const page = { changes: [], next: 19, current: 19, more: false, truncated: false };
+  const page = {
+    journal: FILE_JOURNAL,
+    changes: [],
+    next: 19,
+    current: 19,
+    more: false,
+    truncated: false,
+  };
   const server = net.createServer((socket) => {
     connections.add(socket);
     socket.on('close', () => connections.delete(socket));
@@ -488,11 +497,18 @@ test('real Unix filesystem watcher publishes filtered cursor-only progress for r
         controller.abort();
         delivered(value);
       },
-      { after: 7, pageSize: 32, pollMs: 1_000, signal: controller.signal },
+      {
+        cursor: { journal: FILE_JOURNAL, revision: 7 },
+        pageSize: 32,
+        pollMs: 1_000,
+        signal: controller.signal,
+      },
     );
     assert.deepEqual(await seen, page);
     await stop();
-    assert.deepEqual(calls, [{ call: 'filesystem_changes', with: { after: 7, limit: 32 } }]);
+    assert.deepEqual(calls, [
+      { call: 'filesystem_changes', with: { observed: FILE_JOURNAL, after: 7, limit: 32 } },
+    ]);
     await session.close();
   } finally {
     for (const connection of connections) connection.destroy();
@@ -519,6 +535,7 @@ test('real Unix filesystem watcher exposes listener failure without poisoning th
             ? {
                 reply: 'file_changes',
                 with: {
+                  journal: FILE_JOURNAL,
                   changes: [{ revision: 3, kind: 'modify', path: 'src/a.ts', entry: null }],
                   next: 3,
                   current: 3,
@@ -553,7 +570,7 @@ test('real Unix filesystem watcher exposes listener failure without poisoning th
       async () => {
         throw failure;
       },
-      { after: 2, pollMs: 10_000 },
+      { cursor: { journal: FILE_JOURNAL, revision: 2 }, pollMs: 10_000 },
     );
     await assert.rejects(stop.done, (error) => error === failure);
     assert.deepEqual(calls, ['filesystem_changes']);
@@ -1111,6 +1128,7 @@ test('real Unix filesystem inventory can reconcile immediately after reconnect',
                 complete: false,
                 coalesced: 9,
                 revision: 12,
+                journal: FILE_JOURNAL,
               },
             },
           }),
@@ -6666,13 +6684,9 @@ test('real Unix inspectAndAct rejects a wrong post-action pane identity', async 
             },
           }),
         );
-        socket.write(
-          encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }),
-        );
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
       } else {
-        socket.write(
-          encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }),
-        );
+        socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
       }
     },
     async (session, calls) => {

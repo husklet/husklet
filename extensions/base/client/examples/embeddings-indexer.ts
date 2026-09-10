@@ -16,7 +16,12 @@ type Configuration = {
   model?: { container: string; generation: number; command: string[] };
 };
 type DocumentState = { identity: string; digest: string; bytes: number };
-type Checkpoint = { version: 1; revision: number; documents: Record<string, DocumentState> };
+type Checkpoint = {
+  version: 1;
+  journal: string | null;
+  revision: number;
+  documents: Record<string, DocumentState>;
+};
 
 const configuration = JSON.parse(process.argv[2] ?? 'null') as Configuration | null;
 if (!configuration?.path || !configuration.roots?.length) {
@@ -27,7 +32,7 @@ const chunkBytes = Math.max(1, Math.min(configuration.chunkBytes ?? 64 * 1024, 6
 const maxDocumentBytes = configuration.maxDocumentBytes ?? 16 * 1024 * 1024;
 const checkpointCodec = {
   decode(value: unknown): Checkpoint {
-    if (value === undefined) return { version: 1, revision: 0, documents: {} };
+    if (value === undefined) return { version: 1, journal: null, revision: 0, documents: {} };
     if (
       typeof value !== 'object' ||
       value === null ||
@@ -137,7 +142,10 @@ try {
       }
     }
   }
-  const caughtUp = await host.files.changes(inventory.revision);
+  const caughtUp = await host.files.changes({
+    journal: inventory.journal,
+    revision: inventory.revision,
+  });
   if (caughtUp.truncated) throw new Error('filesystem journal gap requires a full rescan');
   if (caughtUp.changes.length > 0) {
     throw new Error('document changed after inventory; refusing a stale checkpoint');
@@ -146,6 +154,7 @@ try {
     await host.state.updateJson(checkpointCodec, (current) => ({
       ...current,
       revision: caughtUp.next,
+      journal: caughtUp.journal,
       documents: { ...current.documents, ...scanned },
     }))
   ).value;
@@ -175,7 +184,13 @@ try {
           }))
         ).value;
       },
-      { after: checkpoint.revision, signal: controller.signal },
+      {
+        cursor: {
+          journal: checkpoint.journal ?? inventory.journal,
+          revision: checkpoint.revision,
+        },
+        signal: controller.signal,
+      },
     );
     const interrupted = new Promise<void>((resolve) => {
       if (controller.signal.aborted) resolve();

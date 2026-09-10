@@ -421,6 +421,7 @@ pub enum Request {
     },
     FilesystemInventory,
     FilesystemChanges {
+        observed: String,
         after: u64,
         limit: u16,
     },

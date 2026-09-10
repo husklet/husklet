@@ -714,6 +714,8 @@ pub struct FileInventory {
     pub entries: Vec<Entry>,
     pub complete: bool,
     pub coalesced: u64,
+    /// Opaque identity of the scoped in-memory journal that issued `revision`.
+    pub journal: String,
     /// Journal cursor immediately preceding this reconciliation snapshot.
     pub revision: u64,
 }
@@ -742,6 +744,7 @@ pub struct FileChange {
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct FileChangePage {
     pub changes: Vec<FileChange>,
+    pub journal: String,
     pub next: u64,
     pub current: u64,
     pub more: bool,
@@ -1520,6 +1523,7 @@ pub trait WorkspaceFiles {
     fn changes_since(
         &self,
         _roots: &[crate::FilesystemSelector],
+        _observed: &str,
         _after: u64,
         _limit: usize,
     ) -> Result<FileChangePage, HostError> {

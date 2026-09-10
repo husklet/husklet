@@ -221,6 +221,12 @@ function exactFilesystemPageSize(limit) {
     }
     return limit;
 }
+function exactFilesystemJournal(journal) {
+    if (typeof journal !== 'string' || !/^[0-9a-fA-F]{32}$/.test(journal)) {
+        throw new TypeError('filesystem journal identity must be 32 hexadecimal characters');
+    }
+    return journal;
+}
 function compareUtf8(left, right) {
     const encoder = new TextEncoder();
     const leftBytes = encoder.encode(left);
@@ -1473,13 +1479,20 @@ export function workspace(session, { signal } = {}) {
             },
         },
         files: {
-            inventory: async () => expect(await session.call('filesystem_inventory'), 'file_inventory'),
-            changes: async (after = 0, limit = 256) => {
+            inventory: async () => {
+                const inventory = expect(await session.call('filesystem_inventory'), 'file_inventory');
+                exactFilesystemJournal(inventory.journal);
+                return inventory;
+            },
+            changes: async ({ journal, revision: after }, limit = 256) => {
+                exactFilesystemJournal(journal);
                 if (!Number.isSafeInteger(after) || after < 0)
                     throw new TypeError('filesystem change cursor must be a nonnegative safe integer');
                 exactFilesystemPageSize(limit);
-                const page = expect(await session.call('filesystem_changes', { after, limit }), 'file_changes');
-                if (page.changes.length > limit ||
+                const page = expect(await session.call('filesystem_changes', { observed: journal, after, limit }), 'file_changes');
+                exactFilesystemJournal(page.journal);
+                if ((page.journal !== journal && !page.truncated) ||
+                    page.changes.length > limit ||
                     (!page.truncated && page.next < after) ||
                     page.current < page.next ||
                     page.changes.some((change, index) => change.revision <= after ||
@@ -1492,7 +1505,8 @@ export function workspace(session, { signal } = {}) {
                     throw new TypeError('host returned an inconsistent filesystem change page');
                 return page;
             },
-            changePages: async function* ({ after = 0, pageSize = 256, pollMs = 250, signal, } = {}) {
+            changePages: async function* ({ cursor, pageSize = 256, pollMs = 250, signal, }) {
+                let { journal, revision: after } = cursor;
                 exactFilesystemPageSize(pageSize);
                 if (!Number.isSafeInteger(after) || after < 0)
                     throw new TypeError('filesystem change cursor must be a nonnegative safe integer');
@@ -1501,8 +1515,9 @@ export function workspace(session, { signal } = {}) {
                 for (;;) {
                     requireFilesystemActive(signal);
                     const requestedAfter = after;
-                    const page = await api.files.changes(after, pageSize);
+                    const page = await api.files.changes({ journal, revision: after }, pageSize);
                     requireFilesystemActive(signal);
+                    journal = page.journal;
                     after = page.next;
                     if (page.truncated || page.changes.length > 0 || page.next !== requestedAfter)
                         yield page;
@@ -1524,7 +1539,7 @@ export function workspace(session, { signal } = {}) {
                     });
                 }
             },
-            watchChanges: async (listener, { after = 0, pageSize = 256, pollMs = 250, signal, } = {}) => {
+            watchChanges: async (listener, { cursor, pageSize = 256, pollMs = 250, signal, }) => {
                 const stopped = new AbortController();
                 const abort = () => stopped.abort(signal?.reason);
                 if (signal?.aborted)
@@ -1534,7 +1549,7 @@ export function workspace(session, { signal } = {}) {
                 const running = (async () => {
                     try {
                         for await (const page of api.files.changePages({
-                            after,
+                            cursor,
                             pageSize,
                             pollMs,
                             signal: stopped.signal,

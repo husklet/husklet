@@ -10,6 +10,7 @@ import { CONTROL, KIND, Reader, encode } from '../dist/wire.js';
 
 const examples = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../examples');
 const reactExamples = path.resolve(examples, '../../react/examples');
+const FILE_JOURNAL = '0123456789abcdef0123456789abcdef';
 const capabilities = [
   'panes:observe',
   'panes:semantic-read',
@@ -284,6 +285,7 @@ test('embeddings indexer reconciles, recursively discovers, streams, and checkpo
             complete: true,
             coalesced: 0,
             revision: 7,
+            journal: FILE_JOURNAL,
           },
         });
       else if (call === 'filesystem_list_page')
@@ -321,7 +323,14 @@ test('embeddings indexer reconciles, recursively discovers, streams, and checkpo
       } else if (call === 'filesystem_changes')
         respond(socket, frame, {
           reply: 'file_changes',
-          with: { changes: [], next: 7, current: 7, more: false, truncated: false },
+          with: {
+            journal: FILE_JOURNAL,
+            changes: [],
+            next: 7,
+            current: 7,
+            more: false,
+            truncated: false,
+          },
         });
       else if (call === 'state_write') {
         assert.equal(frame.payload.with.observed, 'absent');
@@ -366,6 +375,7 @@ test('embeddings indexer refuses publication after journal invalidation', async 
             complete: true,
             coalesced: 0,
             revision: 20,
+            journal: FILE_JOURNAL,
           },
         });
       else if (call === 'filesystem_list_page')
@@ -397,6 +407,7 @@ test('embeddings indexer refuses publication after journal invalidation', async 
         respond(socket, frame, {
           reply: 'file_changes',
           with: {
+            journal: FILE_JOURNAL,
             changes: [{ revision: 21, kind: 'invalidate', path: 'src/a.md', entry: null }],
             next: 21,
             current: 21,
@@ -439,12 +450,13 @@ test('embeddings workbench resumes, indexes changed ranges with an opaque creden
       else if (call === 'filesystem_inventory')
         respond(socket, frame, {
           reply: 'file_inventory',
-          with: { entries: [], complete: true, coalesced: 0, revision: 6 },
+          with: { journal: FILE_JOURNAL, entries: [], complete: true, coalesced: 0, revision: 6 },
         });
       else if (call === 'filesystem_changes')
         respond(socket, frame, {
           reply: 'file_changes',
           with: {
+            journal: FILE_JOURNAL,
             changes: [
               {
                 revision: 6,

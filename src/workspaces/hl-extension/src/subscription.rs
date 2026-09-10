@@ -235,6 +235,7 @@ mod tests {
             entries: Vec::new(),
             complete: true,
             coalesced: 0,
+            journal: "a".repeat(32),
             revision: 0,
         });
         assert_eq!(filesystem.topic(), Topic::Filesystem);

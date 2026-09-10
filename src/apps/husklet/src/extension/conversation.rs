@@ -2706,16 +2706,46 @@ mod tests {
         let mut wire = Wire::new(theirs);
         shake(&mut wire, PROTOCOL);
 
-        let baseline = ask(&mut wire, &Request::FilesystemChanges { after: 0, limit: 2 });
+        let inventory = ask(&mut wire, &Request::FilesystemInventory);
+        let Ok(Reply::FileInventory(inventory)) = codec::read_reply(&inventory) else { panic!("inventory") };
+        let journal = inventory.journal;
+        let baseline = ask(&mut wire, &Request::FilesystemChanges { observed: journal.clone(), after: 0, limit: 2 });
         assert!(
             matches!(codec::read_reply(&baseline), Ok(Reply::FileChanges(page)) if page.changes.is_empty() && !page.truncated)
         );
-        let foreign_cursor = ask(&mut wire, &Request::FilesystemChanges { after: 999, limit: 2 });
+        let foreign_cursor = ask(&mut wire, &Request::FilesystemChanges { observed: journal.clone(), after: 999, limit: 2 });
         let Reply::FileChanges(foreign_cursor) = codec::read_reply(&foreign_cursor).unwrap() else {
             panic!("page")
         };
         assert!(foreign_cursor.truncated, "{foreign_cursor:?}");
         assert_eq!(foreign_cursor.next, foreign_cursor.current);
+
+        let stale_journal = ask(
+            &mut wire,
+            &Request::FilesystemChanges {
+                observed: "f".repeat(32),
+                after: 0,
+                limit: 2,
+            },
+        );
+        let Reply::FileChanges(stale_journal) = codec::read_reply(&stale_journal).unwrap() else {
+            panic!("page")
+        };
+        assert!(stale_journal.truncated);
+        assert!(stale_journal.changes.is_empty());
+        assert_eq!(stale_journal.journal, journal);
+        let recovered = ask(
+            &mut wire,
+            &Request::FilesystemChanges {
+                observed: stale_journal.journal,
+                after: stale_journal.next,
+                limit: 2,
+            },
+        );
+        assert!(
+            matches!(codec::read_reply(&recovered), Ok(Reply::FileChanges(page)) if !page.truncated),
+            "the same framed session must recover after journal invalidation"
+        );
 
         std::fs::write(root.join("docs/transient.md"), b"short lived").unwrap();
         std::fs::remove_file(root.join("docs/transient.md")).unwrap();
@@ -2726,6 +2756,7 @@ mod tests {
             let framed = ask(
                 &mut wire,
                 &Request::FilesystemChanges {
+                    observed: journal.clone(),
                     after: transient_cursor,
                     limit: 256,
                 },
@@ -2752,6 +2783,7 @@ mod tests {
         let first = ask(
             &mut wire,
             &Request::FilesystemChanges {
+                observed: journal.clone(),
                 after: transient_cursor,
                 limit: 2,
             },
@@ -2771,6 +2803,7 @@ mod tests {
             let framed = ask(
                 &mut wire,
                 &Request::FilesystemChanges {
+                    observed: journal.clone(),
                     after: cursor,
                     limit: 2,
                 },

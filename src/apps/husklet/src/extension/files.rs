@@ -40,8 +40,8 @@ struct WatcherState {
     overflow: Arc<AtomicBool>,
 }
 
-#[derive(Default)]
 struct FileJournal {
+    identity: String,
     revision: u64,
     oldest: u64,
     entries: BTreeMap<RelativePath, Entry>,
@@ -50,6 +50,22 @@ struct FileJournal {
     scan_truncated: bool,
     event_overflow: bool,
     pending_invalidations: std::collections::BTreeSet<RelativePath>,
+}
+
+impl Default for FileJournal {
+    fn default() -> Self {
+        Self {
+            identity: uuid::Uuid::new_v4().simple().to_string(),
+            revision: 0,
+            oldest: 0,
+            entries: BTreeMap::new(),
+            changes: VecDeque::new(),
+            initialized: false,
+            scan_truncated: false,
+            event_overflow: false,
+            pending_invalidations: std::collections::BTreeSet::new(),
+        }
+    }
 }
 
 const PATH_DEPTH_LIMIT: usize = 128;
@@ -388,7 +404,7 @@ impl WorkspaceDirectory {
 impl WorkspaceFiles for WorkspaceDirectory {
     fn inventory(&self, roots: &[hl_extension::FilesystemSelector]) -> Result<FileInventory, HostError> {
         self.refresh_journal(roots)?;
-        let revision = {
+        let (journal, revision) = {
             let journals = self
                 .journals
                 .lock()
@@ -396,7 +412,8 @@ impl WorkspaceFiles for WorkspaceDirectory {
             let mut key = roots.to_vec();
             key.sort();
             key.dedup();
-            journals.get(&key).expect("refresh creates the scoped journal").revision
+            let journal = journals.get(&key).expect("refresh creates the scoped journal");
+            (journal.identity.clone(), journal.revision)
         };
         const LIMIT: usize = 256;
         const PATH_BYTES_LIMIT: usize = 256 * 1024;
@@ -445,6 +462,7 @@ impl WorkspaceFiles for WorkspaceDirectory {
             entries: entries.into_values().collect(),
             complete,
             coalesced: 0,
+            journal,
             revision,
         };
         if inventory.complete {
@@ -465,6 +483,7 @@ impl WorkspaceFiles for WorkspaceDirectory {
     fn changes_since(
         &self,
         roots: &[hl_extension::FilesystemSelector],
+        observed: &str,
         after: u64,
         limit: usize,
     ) -> Result<FileChangePage, HostError> {
@@ -477,8 +496,11 @@ impl WorkspaceFiles for WorkspaceDirectory {
         key.sort();
         key.dedup();
         let journal = journals.get(&key).expect("refresh creates the scoped journal");
-        let truncated =
-            journal.scan_truncated || journal.event_overflow || after < journal.oldest || after > journal.revision;
+        let truncated = observed != journal.identity
+            || journal.scan_truncated
+            || journal.event_overflow
+            || after < journal.oldest
+            || after > journal.revision;
         let changes = if truncated {
             Vec::new()
         } else {
@@ -494,6 +516,7 @@ impl WorkspaceFiles for WorkspaceDirectory {
         let more = journal.changes.iter().any(|change| change.revision > next);
         let next = if more { next } else { journal.revision };
         Ok(FileChangePage {
+            journal: journal.identity.clone(),
             more: !truncated && more,
             changes,
             next: if truncated { journal.revision } else { next },
@@ -1231,14 +1254,15 @@ mod tests {
         std::fs::create_dir_all(root.join("docs")).unwrap();
         let files = WorkspaceDirectory::new(&root).unwrap();
         let roots = [subtree("docs")];
-        let baseline = files.changes_since(&roots, 0, 32).unwrap();
+        let inventory = files.inventory(&roots).unwrap();
+        let baseline = files.changes_since(&roots, &inventory.journal, inventory.revision, 32).unwrap();
         files.watcher.lock().unwrap().overflow.store(true, Ordering::Release);
-        let overflow = files.changes_since(&roots, baseline.next, 32).unwrap();
+        let overflow = files.changes_since(&roots, &baseline.journal, baseline.next, 32).unwrap();
         assert!(overflow.truncated);
         assert!(overflow.changes.is_empty());
         let rebased = files.inventory(&roots).unwrap();
         assert!(rebased.complete);
-        assert!(!files.changes_since(&roots, rebased.revision, 32).unwrap().truncated);
+        assert!(!files.changes_since(&roots, &rebased.journal, rebased.revision, 32).unwrap().truncated);
     }
 
     #[test]
@@ -1255,13 +1279,43 @@ mod tests {
         std::fs::write(root.join("docs/readme.md"), b"after").unwrap();
         std::thread::sleep(std::time::Duration::from_millis(25));
 
-        let page = files.changes_since(&roots, inventory.revision, 32).unwrap();
+        let page = files.changes_since(&roots, &inventory.journal, inventory.revision, 32).unwrap();
         assert!(!page.truncated);
         assert!(
             page.changes
                 .iter()
                 .any(|change| { change.revision > inventory.revision && change.path.as_str() == "docs/readme.md" })
         );
+    }
+
+    #[test]
+    fn recreated_workspace_directory_invalidates_a_cursor_from_the_prior_journal() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("workspace");
+        std::fs::create_dir_all(root.join("docs")).unwrap();
+        std::fs::write(root.join("docs/readme.md"), b"before").unwrap();
+        let roots = [subtree("docs")];
+
+        let old = {
+            let files = WorkspaceDirectory::new(&root).unwrap();
+            files.inventory(&roots).unwrap()
+        };
+        std::fs::write(root.join("docs/readme.md"), b"changed while stopped").unwrap();
+        let files = WorkspaceDirectory::new(&root).unwrap();
+        let invalidated = files
+            .changes_since(&roots, &old.journal, old.revision, 32)
+            .unwrap();
+
+        assert_ne!(invalidated.journal, old.journal);
+        assert!(invalidated.truncated);
+        assert!(invalidated.changes.is_empty());
+        assert_eq!(invalidated.next, invalidated.current);
+        let fresh = files.inventory(&roots).unwrap();
+        assert_eq!(fresh.journal, invalidated.journal);
+        assert!(!files
+            .changes_since(&roots, &fresh.journal, fresh.revision, 32)
+            .unwrap()
+            .truncated);
     }
 
     #[test]
@@ -1273,15 +1327,16 @@ mod tests {
         let files = WorkspaceDirectory::new(&root).unwrap();
         let alpha = [subtree("alpha")];
         let beta = [subtree("beta")];
-        files.changes_since(&alpha, 0, 32).unwrap();
-        files.changes_since(&beta, 0, 32).unwrap();
+        let alpha_inventory = files.inventory(&alpha).unwrap();
+        let beta_inventory = files.inventory(&beta).unwrap();
+        assert_ne!(alpha_inventory.journal, beta_inventory.journal);
         std::fs::write(root.join("alpha/transient"), b"x").unwrap();
         std::fs::remove_file(root.join("alpha/transient")).unwrap();
         std::fs::write(root.join("beta/transient"), b"x").unwrap();
         std::fs::remove_file(root.join("beta/transient")).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(25));
-        let alpha_page = files.changes_since(&alpha, 0, 32).unwrap();
-        let beta_page = files.changes_since(&beta, 0, 32).unwrap();
+        let alpha_page = files.changes_since(&alpha, &alpha_inventory.journal, 0, 32).unwrap();
+        let beta_page = files.changes_since(&beta, &beta_inventory.journal, 0, 32).unwrap();
         assert!(
             alpha_page
                 .changes
