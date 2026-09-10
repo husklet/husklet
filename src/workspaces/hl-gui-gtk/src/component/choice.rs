@@ -100,6 +100,14 @@ glib::wrapper! {
 }
 
 impl Choice {
+    pub(crate) fn set_width_chars(&self, count: i32) {
+        self.imp()
+            .label
+            .get()
+            .expect("constructed choice")
+            .set_width_chars(count);
+    }
+
     fn selected(&self) -> Option<u32> {
         u32::try_from(self.imp().selected.get()).ok()
     }

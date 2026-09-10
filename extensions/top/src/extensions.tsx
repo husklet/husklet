@@ -984,7 +984,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                         <Select
                           value={catalogueFilter}
                           tooltip="Filter extension catalogue by status"
-                          width={{ minimum: { chars: 16 }, maximum: { chars: 22 } }}
+                          width={{ minimum: { chars: 22 }, maximum: { chars: 22 } }}
                           choices={[
                             { value: 'discover', label: 'Available & updates' },
                             { value: 'all', label: 'All extensions' },
@@ -1708,7 +1708,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                     <Select
                       value={installedFilter}
                       tooltip="Filter installed extensions by status"
-                      width={{ minimum: { chars: 16 }, maximum: { chars: 22 } }}
+                      width={{ minimum: { chars: 22 }, maximum: { chars: 22 } }}
                       choices={[
                         { value: 'all', label: 'All installed' },
                         { value: 'running', label: 'Running' },

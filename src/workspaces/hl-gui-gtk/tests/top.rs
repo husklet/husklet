@@ -398,6 +398,13 @@ mod unix {
             }
             capture(&window, &format!("{capture_fixture}-{name}-{width_name}"), width, 800);
             if fixture == "populated" && name == "extensions" {
+                assert_extension_filter(
+                    &root,
+                    "Search installed",
+                    "All installed",
+                    width,
+                    &format!("installed/{width_name}"),
+                );
                 let cards = widgets_with_class(&root, "hl-card");
                 assert_installed_density(&root, &cards, width, width_name);
             }
@@ -474,6 +481,13 @@ mod unix {
                     "{width_name} Discover update action fell below the first viewport"
                 );
                 capture(&window, &format!("discover-extensions-{width_name}"), width, 800);
+                assert_extension_filter(
+                    &discover_root,
+                    "Search extensions",
+                    "Available & updates",
+                    width,
+                    &format!("discover/{width_name}"),
+                );
             }
             exercise_extension_update(&mut wire, &mut tree, &mut surface, &window);
         }
@@ -1396,6 +1410,94 @@ mod unix {
             None
         }
         find(root, wanted).unwrap_or_else(|| panic!("entry with placeholder {wanted:?} was not rendered"))
+    }
+
+    fn assert_extension_filter(root: &gtk::Widget, placeholder: &str, selected: &str, width: i32, case: &str) {
+        fn find_choice(root: &gtk::Widget, selected: &str) -> Option<gtk::Widget> {
+            if root.is_mapped() && root.accessible_role() == gtk::AccessibleRole::ComboBox && has_label(root, selected)
+            {
+                return Some(root.clone());
+            }
+            let mut child = root.first_child();
+            while let Some(widget) = child {
+                child = widget.next_sibling();
+                if let Some(choice) = find_choice(&widget, selected) {
+                    return Some(choice);
+                }
+            }
+            None
+        }
+
+        fn find_selected_label(root: &gtk::Widget, selected: &str) -> Option<gtk::Label> {
+            if let Some(label) = root
+                .downcast_ref::<gtk::Label>()
+                .filter(|label| label.is_mapped() && label.text() == selected)
+            {
+                return Some(label.clone());
+            }
+            let mut child = root.first_child();
+            while let Some(widget) = child {
+                child = widget.next_sibling();
+                if let Some(label) = find_selected_label(&widget, selected) {
+                    return Some(label);
+                }
+            }
+            None
+        }
+
+        fn mapped_widgets(root: &gtk::Widget, found: &mut Vec<gtk::Widget>) {
+            if root.is_mapped() {
+                found.push(root.clone());
+            }
+            let mut child = root.first_child();
+            while let Some(widget) = child {
+                child = widget.next_sibling();
+                mapped_widgets(&widget, found);
+            }
+        }
+
+        let query = find_entry_with_placeholder(root, placeholder).upcast::<gtk::Widget>();
+        let choice = find_choice(root, selected)
+            .unwrap_or_else(|| panic!("{case} selected filter {selected:?} was not rendered"));
+        let selected_label = find_selected_label(&choice, selected)
+            .unwrap_or_else(|| panic!("{case} selected label {selected:?} was not rendered"));
+        assert!(
+            !selected_label.layout().is_ellipsized(),
+            "{case} selected filter label {selected:?} was ellipsized at label={}px choice={}px natural={:?}",
+            selected_label.width(),
+            choice.width(),
+            selected_label.layout().pixel_size(),
+        );
+
+        let bounds = choice
+            .compute_bounds(root)
+            .unwrap_or_else(|| panic!("{case} filter does not belong to the rendered root"));
+        assert!(
+            bounds.x() >= 16.0 && bounds.x() + bounds.width() <= (width - 16) as f32,
+            "{case} filter escaped the 16px page inset: x={} width={} page={width}",
+            bounds.x(),
+            bounds.width(),
+        );
+
+        let mut ordered = Vec::new();
+        mapped_widgets(root, &mut ordered);
+        let query_position = ordered
+            .iter()
+            .position(|widget| widget == &query)
+            .unwrap_or_else(|| panic!("{case} query is absent from keyboard traversal"));
+        let choice_position = ordered
+            .iter()
+            .position(|widget| widget == &choice)
+            .unwrap_or_else(|| panic!("{case} filter is absent from keyboard traversal"));
+        let result_position = ordered
+            .iter()
+            .position(|widget| widget.is_focusable() && ancestor_with_class(widget, "hl-card").is_some());
+        let result_position =
+            result_position.unwrap_or_else(|| panic!("{case} has no keyboard-reachable result action"));
+        assert!(
+            query_position < choice_position && choice_position < result_position,
+            "{case} keyboard order was query={query_position}, filter={choice_position}, result={result_position}"
+        );
     }
 
     fn ancestor_with_class(widget: &gtk::Widget, class: &str) -> Option<gtk::Widget> {

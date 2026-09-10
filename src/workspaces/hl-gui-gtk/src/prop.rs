@@ -264,6 +264,10 @@ fn width(widget: &gtk::Widget, value: &PropValue) {
 }
 
 fn characters(widget: &gtk::Widget, count: u16) {
+    if let Some(choice) = widget.downcast_ref::<crate::component::choice::Choice>() {
+        choice.set_width_chars(count.into());
+        return;
+    }
     if let Some(entry) = widget.downcast_ref::<gtk::Entry>() {
         entry.set_width_chars(count.into());
         return;
