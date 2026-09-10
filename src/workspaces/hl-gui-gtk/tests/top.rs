@@ -607,9 +607,14 @@ mod unix {
                     .and_then(|widget| widget.downcast::<gtk::ScrolledWindow>().ok())
                     .expect("process DataTable retains its scrolling viewport");
                 assert!(
-                    (318..=322).contains(&table.height()),
-                    "{width_name} process DataTable allocated {}px instead of authored 320px",
+                    (158..=162).contains(&table.height()),
+                    "{width_name} sparse process DataTable allocated {}px instead of its 160px floor",
                     table.height(),
+                );
+                assert_eq!(table.max_content_height(), 320);
+                assert!(
+                    table.propagates_natural_height(),
+                    "{width_name} process DataTable must grow with rows only until its 320px ceiling"
                 );
                 let visible = view
                     .columns()

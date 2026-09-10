@@ -293,7 +293,9 @@ fn characters(widget: &gtk::Widget, count: u16) {
 /// honoured where GTK4 can express one — scrolled content and character-counted
 /// text — because a plain GTK widget has no maximum size, and inventing one by
 /// freezing the widget at its floor would silently render a size the producer
-/// never described.
+/// never described. A vertical ceiling also opts a scroller into natural-height
+/// propagation: sparse content stays at the floor while dense content grows only
+/// to the declared maximum.
 fn span_across(widget: &gtk::Widget, axis: gtk::Orientation, bounds: hl_gui::Bounds) {
     let horizontal = axis == gtk::Orientation::Horizontal;
     if let Some(pixels) = bounds.minimum.and_then(|length| dimension_pixels(length, horizontal)) {
@@ -334,6 +336,7 @@ fn ceiling_of(widget: &gtk::Widget, horizontal: bool, ceiling: Length) {
             window.set_max_content_width(pixels);
         } else {
             window.set_max_content_height(pixels);
+            window.set_propagate_natural_height(true);
         }
         return;
     }
@@ -525,6 +528,23 @@ mod tests {
             height(&table, &PropValue::Length(Length::Step(80)));
             assert_eq!(table.height_request(), 320);
             assert!(!table.vexpands(), "Fill followed by Step becomes fixed again");
+
+            height(
+                &table,
+                &PropValue::Bounds(hl_gui::Bounds {
+                    minimum: Some(Length::Step(40)),
+                    maximum: Some(Length::Step(80)),
+                }),
+            );
+            let window = table
+                .downcast_ref::<gtk::ScrolledWindow>()
+                .expect("DataTable is a scrolling viewport");
+            assert_eq!(table.height_request(), 160);
+            assert_eq!(window.max_content_height(), 320);
+            assert!(
+                window.propagates_natural_height(),
+                "a bounded viewport follows sparse content until its ceiling"
+            );
 
             grow(&table, &PropValue::Number(1.0));
             assert!(table.vexpands(), "Grow explicitly opts into expansion");
