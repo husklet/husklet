@@ -612,6 +612,12 @@ export function workspace(session, { signal } = {}) {
         }
         return snapshot;
     };
+    const exactExecution = (execution, id, operation) => {
+        if (execution.id !== id) {
+            throw new TypeError(`host returned ${operation} for execution ${execution.id}, expected ${id}; no execution state was assumed`);
+        }
+        return execution;
+    };
     const done = async (name, argument) => expect(await session.call(name, argument), 'done');
     const requireCapabilities = (...capabilities) => {
         for (const capability of capabilities) {
@@ -840,7 +846,10 @@ export function workspace(session, { signal } = {}) {
                 }
             },
             logs: async (id, { stdout = true, stderr = true } = {}) => expect(await session.call('container_logs', { id, stdout, stderr }), 'logs'),
-            execution: async (id) => expect(await session.call('execution_inspect', { id: immutableIdentity(id, [32], 'execution') }), 'execution'),
+            execution: async (id) => {
+                const executionId = immutableIdentity(id, [32], 'execution');
+                return exactExecution(expect(await session.call('execution_inspect', { id: executionId }), 'execution'), executionId, 'inspection');
+            },
             executions: async () => expect(await session.call('execution_list'), 'executions'),
             executionLogs: async (id, { stdout = true, stderr = true } = {}) => expect(await session.call('execution_logs', {
                 id: immutableIdentity(id, [32], 'execution'),
@@ -896,10 +905,13 @@ export function workspace(session, { signal } = {}) {
                         await outputPoll(pollIntervalMs, signal);
                 }
             },
-            waitExecution: async (id, { timeoutMs = 30_000 } = {}) => expect(await session.call('execution_wait', {
-                id: immutableIdentity(id, [32], 'execution'),
-                timeout_ms: timeoutMs,
-            }), 'execution'),
+            waitExecution: async (id, { timeoutMs = 30_000 } = {}) => {
+                const executionId = immutableIdentity(id, [32], 'execution');
+                return exactExecution(expect(await session.call('execution_wait', {
+                    id: executionId,
+                    timeout_ms: timeoutMs,
+                }), 'execution'), executionId, 'wait result');
+            },
             signalExecution: (id, signal) => done('execution_kill', {
                 id: immutableIdentity(id, [32], 'execution'),
                 signal: exactExecutionSignal(signal),
