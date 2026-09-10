@@ -178,19 +178,45 @@ export function Overview({
           onRetry={refreshAll}
         />
         <Row width="fill" gap={1} wrap>
-          <Summary title="Containers" {...containersSummary} onOpen={() => onOpen('containers')} />
-          <Summary
-            title="Processes"
-            value="Inspect"
-            detail="Per-container snapshots"
-            onOpen={() => onOpen('processes')}
-          />
-          <Summary title="Executions" {...executionsSummary} onOpen={() => onOpen('executions')} />
-          <Summary title="Images" {...imagesSummary} onOpen={() => onOpen('images')} />
-          <Summary title="Volumes" {...volumesSummary} onOpen={() => onOpen('volumes')} />
-          <Summary title="Networks" {...networksSummary} onOpen={() => onOpen('networks')} />
-          <Summary title="Terminal tabs" {...terminalsSummary} onOpen={() => onOpen('terminals')} />
-          <Summary title="Extensions" {...extensionsSummary} onOpen={() => onOpen('extensions')} />
+          <SummaryPair>
+            <Summary
+              title="Containers"
+              {...containersSummary}
+              onOpen={() => onOpen('containers')}
+            />
+            <Summary
+              title="Processes"
+              value="Inspect"
+              detail="Per-container snapshots"
+              onOpen={() => onOpen('processes')}
+            />
+          </SummaryPair>
+          <SummaryPair>
+            <Summary
+              title="Executions"
+              {...executionsSummary}
+              onOpen={() => onOpen('executions')}
+            />
+            <Summary title="Images" {...imagesSummary} onOpen={() => onOpen('images')} />
+          </SummaryPair>
+        </Row>
+        <Row width="fill" gap={1} wrap>
+          <SummaryPair>
+            <Summary title="Volumes" {...volumesSummary} onOpen={() => onOpen('volumes')} />
+            <Summary title="Networks" {...networksSummary} onOpen={() => onOpen('networks')} />
+          </SummaryPair>
+          <SummaryPair>
+            <Summary
+              title="Terminal tabs"
+              {...terminalsSummary}
+              onOpen={() => onOpen('terminals')}
+            />
+            <Summary
+              title="Extensions"
+              {...extensionsSummary}
+              onOpen={() => onOpen('extensions')}
+            />
+          </SummaryPair>
         </Row>
       </Column>
     </Scroll>
@@ -207,6 +233,14 @@ function resourceSummary<T>(
   return { value: String(records.length), detail: readyDetail(records) };
 }
 
+function SummaryPair({ children }: { children: React.ReactNode }) {
+  return (
+    <Row grow width={{ minimum: { chars: 32 } }} height="content" gap={1}>
+      {children}
+    </Row>
+  );
+}
+
 function Summary({
   title: label,
   value,
@@ -219,11 +253,11 @@ function Summary({
   onOpen: () => void;
 }) {
   return (
-    <Card grow width={{ minimum: { chars: 30 } }} height="content" variant="outline">
+    <Card grow width={{ chars: 14 }} height="content" variant="outline">
       <CardActionArea variant="ghost" tooltip={`Open ${label}`} onInvoke={onOpen}>
-        <CardContent gap={1} pad={3}>
+        <CardContent gap={1} pad={2}>
           <Row gap={1} align="center" width="fill">
-            <Text label={label} color="text-dim" />
+            <Text label={label} color="text-dim" wrap />
             <Spacer />
             <Icon icon="go-next-symbolic" tooltip={`Open ${label}`} />
           </Row>

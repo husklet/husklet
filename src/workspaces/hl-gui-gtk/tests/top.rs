@@ -1670,10 +1670,18 @@ mod unix {
             assert!(card.has_css_class("variant-outline"));
             assert!(card.hexpands(), "{case} {label} card participates in responsive fill");
             assert!(!card.vexpands(), "{case} {label} card keeps content height");
+            assert!(
+                (96..=104).contains(&card.height()),
+                "{case} {label} card was {}px instead of a compact three-line surface",
+                card.height()
+            );
             let action = find_button(card, label);
             assert_eq!(action.accessible_role(), gtk::AccessibleRole::Button);
             assert!(action.is_focusable(), "{case} {label} summary is keyboard actionable");
         }
+        let first_action = find_button(&cards[0], "Containers");
+        assert!(first_action.grab_focus(), "{case} first summary accepts native focus");
+        assert!(first_action.has_focus(), "{case} first summary exposes its focus state");
 
         let mut bounds = cards
             .iter()
@@ -1689,29 +1697,43 @@ mod unix {
         bounds.sort_unstable_by_key(|(x, y, _)| (*y, *x));
         let mut rows = bounds.iter().map(|(_, y, _)| *y).collect::<Vec<_>>();
         rows.dedup();
-        let expected_rows = if width == 600 { 8 } else { 2 };
-        let expected_columns = if width == 600 { 1 } else { 4 };
+        let expected_rows = if width == 600 { 4 } else { 2 };
+        let expected_columns = if width == 600 { 2 } else { 4 };
         assert_eq!(rows.len(), expected_rows, "{case} overview row count");
         for y in rows {
             let row = bounds.iter().filter(|(_, top, _)| *top == y).collect::<Vec<_>>();
             assert_eq!(row.len(), expected_columns, "{case} overview column count at y={y}");
             let (first_x, _, _) = *row[0];
             let (last_x, _, last_width) = *row[row.len() - 1];
-            assert_eq!(first_x, content_start, "{case} overview row starts at the content inset");
+            assert_eq!(
+                first_x, content_start,
+                "{case} overview row starts at the content inset"
+            );
             assert_eq!(
                 last_x + last_width,
                 root.width() - 16,
                 "{case} overview row reaches the trailing page inset"
             );
+            let widths = row.iter().map(|(_, _, width)| *width).collect::<Vec<_>>();
+            assert!(
+                widths.iter().all(|width| *width >= 200),
+                "{case} overview columns fell below a readable 200px: {widths:?}"
+            );
             if width == 600 {
-                assert_eq!(last_width, 568);
-            } else {
-                let widths = row.iter().map(|(_, _, width)| *width).collect::<Vec<_>>();
-                let minimum = *widths.iter().min().expect("overview row is populated");
-                let maximum = *widths.iter().max().expect("overview row is populated");
-                assert!(maximum - minimum <= 1, "{case} overview columns differ: {widths:?}");
+                let (second_x, _, _) = *row[1];
+                let first_width = row[0].2;
+                assert_eq!(second_x - first_x - first_width, 4, "{case} narrow card gap");
+                assert!(
+                    widths.iter().all(|card_width| (240..=324).contains(card_width)),
+                    "{case} narrow overview cards did not share a readable half row: {widths:?}"
+                );
             }
         }
+        let last = cards.last().expect("overview has a final summary card");
+        assert!(
+            vertical_end(root, last) <= 600,
+            "{case} overview destinations exceeded the compact first-screen budget"
+        );
     }
 
     fn assert_installed_density(root: &gtk::Widget, cards: &[gtk::Widget], width: i32, case: &str) {

@@ -2858,6 +2858,19 @@ test('overview keeps failures actionable while never presenting stale inventory 
       .filter((patch) => patch.Create?.tag === 'CardActionArea')
       .map((patch) => patch.Create.id),
   );
+  const rowNodes = new Set(
+    patches.filter((patch) => patch.Create?.tag === 'Row').map((patch) => patch.Create.id),
+  );
+  assert.equal(
+    patches.filter(
+      (patch) =>
+        patch.SetProp?.prop === 'Width' &&
+        rowNodes.has(patch.SetProp.id) &&
+        patch.SetProp.value?.Bounds?.minimum?.Chars === 32,
+    ).length,
+    4,
+    'four stable summary pairs produce four narrow rows without changing the two wide rows',
+  );
   for (const resource of [
     'Containers',
     'Processes',
@@ -2917,8 +2930,13 @@ test('overview keeps failures actionable while never presenting stale inventory 
   );
   assert.deepEqual(
     ancestorProperty(stage, 'Containers', 'Card', 'Width'),
-    { Bounds: { minimum: { Chars: 30 }, maximum: null } },
-    'summary cards retain a readable floor before wrapping',
+    { Length: { Chars: 14 } },
+    'summary cards share one equal responsive basis while admitting two narrow columns',
+  );
+  assert.deepEqual(
+    ancestorProperty(stage, 'Containers', 'CardContent', 'Pad'),
+    { Length: { Step: 2 } },
+    'repeated dashboard cards use compact content insets',
   );
   assert.deepEqual(
     ancestorProperty(stage, 'Containers', 'Card', 'Height'),
