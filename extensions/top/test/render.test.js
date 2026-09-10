@@ -4527,6 +4527,9 @@ test('volume and network panels render bounded real inventories and controls', (
   for (const label of ['Networks', 'private', 'Remove'])
     assert.ok(labels(networkFrame).includes(label), label);
   const networkInventoryStage = stageFromFrame(networkFrame);
+  assert.deepEqual(taggedProperty(networkInventoryStage, 'Networks', 'Heading', 'Scale'), {
+    Scale: 'Display',
+  });
   assert.ok(taggedProperty(networkInventoryStage, 'private', 'Heading', 'Scale'));
   assert.equal(
     networkFrame.patches.filter((patch) => patch.Create?.tag === 'CardContent').length,

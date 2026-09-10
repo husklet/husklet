@@ -481,7 +481,7 @@ function Page({
     <Scroll grow width="fill" height="fill">
       <Column width="fill" pad={4} gap={3}>
         <Row gap={2} align="center" justify="start" wrap>
-          <Heading label={title} scale="title" />
+          <Heading label={title} scale="display" />
           {action}
         </Row>
         <Text label={subtitle} color="text-dim" wrap />

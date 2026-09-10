@@ -961,7 +961,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
   const content = (
     <Scroll grow width="fill" height="fill">
       <Container pad={4} gap={3} width={PAGE_WIDTH}>
-        <Heading label="Extensions" scale="title" />
+        <Heading label="Extensions" scale="display" />
         <Text
           label="Discover tools, review their access, and manage what runs in this workspace."
           color="text-dim"

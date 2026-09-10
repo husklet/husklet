@@ -152,7 +152,7 @@ export function Overview({
     <Scroll grow width="fill" height="fill">
       <Column width="fill" pad={4} gap={3}>
         <Row gap={1} width="fill" align="center" justify="start" wrap>
-          <Heading label="Workspace" scale="title" align="start" grow={false} />
+          <Heading label="Workspace" scale="display" align="start" grow={false} />
           <Spacer />
           {refreshing ? <Spinner /> : null}
           <IconButton

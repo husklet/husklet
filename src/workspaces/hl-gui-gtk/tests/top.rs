@@ -347,6 +347,9 @@ mod unix {
                 }
             }
             if fixture == "populated" && name == "networks" {
+                let title = find_heading(&root, "Networks");
+                assert!(title.has_css_class("scale-display"));
+                assert_eq!(title.accessible_role(), gtk::AccessibleRole::Heading);
                 let entry = find_entry_placeholder(&root, "Network name");
                 let create = find_button(&root, "Create");
                 let refresh = find_button(&root, "Refresh");
@@ -1771,6 +1774,26 @@ mod unix {
             None
         }
         find(root, placeholder).unwrap_or_else(|| panic!("entry placeholder {placeholder:?} was not rendered"))
+    }
+
+    fn find_heading(root: &gtk::Widget, wanted: &str) -> gtk::Label {
+        fn find(root: &gtk::Widget, wanted: &str) -> Option<gtk::Label> {
+            if let Some(label) = root
+                .downcast_ref::<gtk::Label>()
+                .filter(|label| label.text() == wanted && label.has_css_class("hl-heading"))
+            {
+                return Some(label.clone());
+            }
+            let mut child = root.first_child();
+            while let Some(current) = child {
+                child = current.next_sibling();
+                if let Some(label) = find(&current, wanted) {
+                    return Some(label);
+                }
+            }
+            None
+        }
+        find(root, wanted).unwrap_or_else(|| panic!("heading {wanted:?} was not rendered"))
     }
 
     fn find_tooltip_button(root: &gtk::Widget, tooltip: &str) -> gtk::Button {
