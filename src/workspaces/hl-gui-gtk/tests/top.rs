@@ -346,6 +346,32 @@ mod unix {
                     );
                 }
             }
+            if fixture == "populated" && name == "networks" {
+                let entry = find_entry_placeholder(&root, "Network name");
+                let create = find_button(&root, "Create");
+                let refresh = find_button(&root, "Refresh");
+                let widgets = [
+                    entry.clone().upcast::<gtk::Widget>(),
+                    create.clone().upcast(),
+                    refresh.clone().upcast(),
+                ];
+                let tops = widgets.iter().map(|widget| widget.allocation().y()).collect::<Vec<_>>();
+                assert!(
+                    tops.iter().max().unwrap() - tops.iter().min().unwrap() <= 4,
+                    "{width_name} network creation controls do not share a row: {tops:?}"
+                );
+                let heights = widgets
+                    .iter()
+                    .map(|widget| widget.allocation().height())
+                    .collect::<Vec<_>>();
+                assert!(
+                    heights.iter().max().unwrap() - heights.iter().min().unwrap() <= 8,
+                    "{width_name} network creation controls have mismatched heights: {heights:?}"
+                );
+                assert!(entry.allocation().x() < create.allocation().x());
+                assert!(create.allocation().x() < refresh.allocation().x());
+                assert!(vertical_end(&root, refresh.upcast_ref()) <= 240);
+            }
             if fixture == "populated" && name == "processes" && width == 1_200 {
                 settle_toolkit();
                 let request = surface
@@ -1725,6 +1751,26 @@ mod unix {
             }
         }
         panic!("button {label:?} was not rendered");
+    }
+
+    fn find_entry_placeholder(root: &gtk::Widget, placeholder: &str) -> gtk::Entry {
+        fn find(root: &gtk::Widget, placeholder: &str) -> Option<gtk::Entry> {
+            if let Some(entry) = root
+                .downcast_ref::<gtk::Entry>()
+                .filter(|entry| entry.placeholder_text().as_deref() == Some(placeholder))
+            {
+                return Some(entry.clone());
+            }
+            let mut child = root.first_child();
+            while let Some(current) = child {
+                child = current.next_sibling();
+                if let Some(entry) = find(&current, placeholder) {
+                    return Some(entry);
+                }
+            }
+            None
+        }
+        find(root, placeholder).unwrap_or_else(|| panic!("entry placeholder {placeholder:?} was not rendered"))
     }
 
     fn find_tooltip_button(root: &gtk::Widget, tooltip: &str) -> gtk::Button {

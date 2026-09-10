@@ -269,13 +269,14 @@ export function Networks({
         : 'ready';
   return (
     <Page title="Networks" subtitle="Create networks and connect stopped workspace containers.">
-      <Column gap={1} width={{ minimum: { chars: 20 }, maximum: { chars: 44 } }}>
+      <Column gap={1} width={{ minimum: { chars: 20 }, maximum: { chars: 64 } }}>
         <FormLabel label="Create a network" />
         <Row gap={1} wrap width="fill" align="center" justify="start">
           <Entry
             value={name}
             placeholder="Network name"
-            width={{ minimum: { chars: 14 }, maximum: { chars: 28 } }}
+            width={{ minimum: { chars: 20 }, maximum: { chars: 40 } }}
+            grow
             enabled={creation.state !== 'loading'}
             onChange={(event) => {
               setName(String(event.value ?? ''));

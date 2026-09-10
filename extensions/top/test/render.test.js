@@ -7003,6 +7003,12 @@ test('network creation exposes pending failure and retained retry before claimin
   };
   const stage = host();
   stage.render(h(Networks, { api: controlled, resource, containers: containerResource() }));
+  assert.deepEqual(placeholderProperty(stage, 'Network name', 'Grow'), { Number: 1 });
+  assert.deepEqual(placeholderProperty(stage, 'Network name', 'Width'), {
+    Bounds: { minimum: { Chars: 20 }, maximum: { Chars: 40 } },
+  });
+  const initialLabels = orderedLabels(stage);
+  assert.ok(initialLabels.indexOf('Create') < initialLabels.indexOf('Refresh'));
   change(stage, 'Network name', ' private-net ');
   invoke(stage, 'Create');
   await settled();
