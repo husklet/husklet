@@ -93,6 +93,7 @@ struct Host {
     filesystem_pages: Cell<usize>,
     filesystem_ranges: Cell<usize>,
     filesystem_file: RefCell<Option<(RelativePath, Vec<u8>, String)>>,
+    execution_output_calls: Cell<usize>,
 }
 impl hl_extension::port::VolumeStore for Host {}
 impl hl_extension::port::NetworkStore for Host {
@@ -121,6 +122,7 @@ impl Host {
             filesystem_pages: Cell::new(0),
             filesystem_ranges: Cell::new(0),
             filesystem_file: RefCell::new(None),
+            execution_output_calls: Cell::new(0),
         }
     }
 }
@@ -132,6 +134,40 @@ impl ContainerInventory for Host {
 
     fn inspect(&self, id: &str) -> Result<ContainerSummary, HostError> {
         Err(HostError::Absent(id.into()))
+    }
+
+    fn execution(&self, id: &str) -> Result<hl_extension::port::ExecutionSummary, HostError> {
+        Ok(hl_extension::port::ExecutionSummary {
+            id: id.into(),
+            container_id: "c2".into(),
+            running: true,
+            exit_code: 0,
+            pid: 9,
+            command: vec!["psql".into()],
+            user: "postgres".into(),
+        })
+    }
+
+    fn execution_output(
+        &self,
+        _id: &str,
+        after: u64,
+        _limit: u16,
+    ) -> Result<hl_extension::port::ExecutionOutputPage, HostError> {
+        self.execution_output_calls
+            .set(self.execution_output_calls.get() + 1);
+        Ok(hl_extension::port::ExecutionOutputPage {
+            entries: vec![hl_extension::port::ExecutionOutputEntry {
+                sequence: after + 1,
+                timestamp_ms: 1,
+                stream: "stdout".into(),
+                bytes: b"secret row\n".to_vec(),
+            }],
+            next: after + 1,
+            more: false,
+            eof: false,
+            gap: false,
+        })
     }
 }
 
@@ -1326,6 +1362,63 @@ fn network_write_cannot_cross_an_ungranted_container_scope_over_a_real_socket() 
         host.network_aliases.borrow().is_empty(),
         "the network adapter was not reached across the consent boundary"
     );
+}
+
+#[test]
+fn hidden_execution_output_is_denied_over_unix_framing_and_the_session_stays_healthy() {
+    let (host_end, extension_end) = connected_pair();
+    let host = Host::new();
+    let mut session = Session::new(Authority::new(
+        ExtensionName::new("database").unwrap(),
+        Grant::new([Capability::ContainerRead, Capability::WorkspaceRead]),
+        Vec::new(),
+    ))
+    .with_containers(hl_extension::ContainerGrant {
+        selectors: vec![hl_extension::ContainerSelector::Name {
+            name: "postgres".into(),
+        }],
+        create: false,
+    });
+    let mut extension = hl_extension::Wire::new(extension_end);
+    let mut server = hl_extension::Wire::new(host_end);
+
+    extension
+        .send(
+            &codec::request(&Request::ExecutionOutput {
+                id: "e".repeat(32),
+                after: 0,
+                limit: 16,
+            })
+            .expect("output request"),
+        )
+        .expect("output request sent");
+    let request = codec::read_request(&server.receive().expect("output frame")).expect("output decoded");
+    let failure = session
+        .dispatch(&request, &services(&host))
+        .expect_err("hidden execution denied");
+    server
+        .send(&codec::failure(&failure).expect("failure frame"))
+        .expect("failure sent");
+    assert!(matches!(
+        codec::read_failure(&extension.receive().expect("failure received")),
+        Ok(Failure::Denied { capability, .. }) if capability == Capability::ContainerRead.as_str()
+    ));
+    assert_eq!(host.execution_output_calls.get(), 0);
+
+    extension
+        .send(&codec::request(&Request::WorkspaceInfo).expect("health request"))
+        .expect("health request sent");
+    let request = codec::read_request(&server.receive().expect("health frame")).expect("health decoded");
+    let reply = session
+        .dispatch(&request, &services(&host))
+        .expect("session remains healthy");
+    server
+        .send(&codec::reply(&reply).expect("health reply"))
+        .expect("health reply sent");
+    assert!(matches!(
+        codec::read_reply(&extension.receive().expect("health reply received")),
+        Ok(Reply::Workspace(info)) if info.name == "dev"
+    ));
 }
 
 #[test]

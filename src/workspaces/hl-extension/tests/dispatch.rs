@@ -46,6 +46,7 @@ struct Host {
     execution_input: RefCell<Vec<Vec<u8>>>,
     cancelled_revision: Cell<Option<u64>>,
     fail_notification: Cell<bool>,
+    execution_container: RefCell<String>,
 }
 
 impl hl_extension::NotificationSink for Host {
@@ -153,6 +154,7 @@ impl Host {
             execution_input: RefCell::new(Vec::new()),
             cancelled_revision: Cell::new(None),
             fail_notification: Cell::new(false),
+            execution_container: RefCell::new("c1".into()),
         }
     }
 
@@ -221,7 +223,7 @@ impl ContainerInventory for Host {
         self.ledger.note("executions.inspect");
         Ok(ExecutionSummary {
             id: id.into(),
-            container_id: "c1".into(),
+            container_id: self.execution_container.borrow().clone(),
             running: true,
             exit_code: 0,
             pid: 8,
@@ -3667,6 +3669,61 @@ fn execution_output_window_is_bounded_before_inventory_authority() {
         ));
     }
     assert!(host.ledger.reached().is_empty());
+}
+
+#[test]
+fn execution_output_requires_the_executions_container_scope_before_retrieval() {
+    let host = Host::new();
+    *host.execution_container.borrow_mut() = "c2".into();
+    let mut session = Session::new(Authority::new(
+        ExtensionName::new("sample").expect("name"),
+        Grant::new([Capability::ContainerRead]),
+        Vec::new(),
+    ))
+    .with_containers(hl_extension::ContainerGrant {
+        selectors: vec![hl_extension::ContainerSelector::Name { name: "api".into() }],
+        create: false,
+    });
+
+    assert!(matches!(
+        session.dispatch(
+            &Request::ExecutionOutput {
+                id: "e".repeat(32),
+                after: 0,
+                limit: 16,
+            },
+            &services(&host),
+        ),
+        Err(Failure::Denied { capability, .. }) if capability == "containers:read"
+    ));
+    assert_eq!(
+        host.ledger.reached(),
+        vec!["executions.inspect", "containers.list"],
+        "hidden execution output must not reach its output adapter"
+    );
+}
+
+#[test]
+fn execution_output_still_pages_for_an_execution_in_scope() {
+    let host = Host::new();
+    let mut session = session(&[Capability::ContainerRead], &[]);
+    let reply = session
+        .dispatch(
+            &Request::ExecutionOutput {
+                id: "e".repeat(32),
+                after: 41,
+                limit: 1,
+            },
+            &services(&host),
+        )
+        .expect("in-scope output");
+
+    assert!(matches!(reply, Reply::ExecutionOutput(page)
+        if page.next == 42 && page.entries.len() == 1 && page.entries[0].bytes == b"row\n"));
+    assert_eq!(
+        host.ledger.reached(),
+        vec!["executions.inspect", "containers.list", "executions.output"]
+    );
 }
 
 #[test]

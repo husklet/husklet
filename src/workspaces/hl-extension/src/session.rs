@@ -825,6 +825,7 @@ impl Session {
                         detail: "execution output limit must be between 1 and 16".into(),
                     });
                 }
+                self.resolve_execution(id, port.port())?;
                 let page = port.execution_output(id, *after, *limit)?;
                 let ordered = page
                     .entries
