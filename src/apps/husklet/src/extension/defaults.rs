@@ -50,6 +50,13 @@ fn install_defaults_with(
                 version = env!("CARGO_PKG_VERSION")
             ));
         }
+        let trusted = trusted_manifest(expected)?;
+        if candidate.manifest != trusted {
+            return Err(format!(
+                "default extension {expected} {version} could not be installed from public image {reference}: its manifest does not match the first-party release contract, so Husklet refused to grant it authority automatically; verify the published image, then retry workspace provisioning",
+                version = env!("CARGO_PKG_VERSION")
+            ));
+        }
         if let Some(entry) = roster.entries().into_iter().find(|entry| entry.name == name) {
             if entry.image_digest != candidate.digest {
                 let update = roster
@@ -96,6 +103,15 @@ fn install_defaults_with(
     Ok(())
 }
 
+fn trusted_manifest(name: &str) -> Result<Manifest, String> {
+    let source = match name {
+        "top" => include_str!("../../../../../extensions/top/extension.toml"),
+        _ => return Err(format!("default extension {name} has no first-party manifest contract")),
+    };
+    Manifest::parse(source, hl_extension::PROTOCOL)
+        .map_err(|error| format!("default extension {name} has an invalid first-party manifest contract: {error}"))
+}
+
 fn provides_default_surface(manifest: &Manifest) -> bool {
     manifest.interface.is_some() && matches!(manifest.activation, Activation::Workspace | Activation::Tab)
 }
@@ -109,7 +125,11 @@ fn moment() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hl_extension::{Activation, Capability, Grant, Presentation, Resources};
+    use hl_extension::{Activation, Capability, Grant, Presentation};
+
+    fn top_manifest() -> Manifest {
+        trusted_manifest("top").expect("checked-in Top manifest")
+    }
 
     #[test]
     fn defaults_are_release_matched_and_sidebar_ordered() {
@@ -136,39 +156,11 @@ mod tests {
             } else {
                 panic!("unexpected default reference {reference}");
             };
+            let manifest = top_manifest();
             Ok(Candidate {
                 reference: reference.to_owned(),
                 digest: format!("sha256:{name}"),
-                manifest: Manifest {
-                    containers: hl_extension::ContainerGrant::default(),
-                    images: hl_extension::ImageGrant::default(),
-                    networks: hl_extension::NetworkGrant::default(),
-                    volumes: hl_extension::VolumeGrant::default(),
-                    name: ExtensionName::new(name).unwrap(),
-                    display_name: name.to_owned(),
-                    version: "0.1.0".to_owned(),
-                    protocol: hl_extension::PROTOCOL,
-                    capabilities: Grant::new([
-                        Capability::WorkspaceRead,
-                        Capability::WorkspaceEnvironmentRead,
-                        Capability::WorkspaceEnvironmentWrite,
-                        Capability::ExtensionRead,
-                        Capability::Interface,
-                    ]),
-                    entrypoint: None,
-                    activation: Activation::Workspace,
-                    interface: Some(Presentation {
-                        tab_title: name.to_owned(),
-                        icon: None,
-                    }),
-                    pane_providers: Vec::new(),
-                    resources: Resources::default(),
-                    filesystem: hl_extension::FilesystemGrant::default(),
-                    workspace_environment: hl_extension::WorkspaceEnvironmentGrant {
-                        read: vec![hl_extension::WorkspaceEnvironmentSelector::All { all: true }],
-                        write: vec![hl_extension::WorkspaceEnvironmentSelector::All { all: true }],
-                    },
-                },
+                manifest,
             })
         })
         .unwrap();
@@ -210,26 +202,11 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let mut workspace = WorkspaceConfig::new("demo", "alpine:3.20", hl_ws::Arch::Amd64);
         workspace.storage = Some(directory.path().join("workspace"));
-        let manifest = |name: &str| Manifest {
-            name: ExtensionName::new(name).unwrap(),
-            display_name: name.to_owned(),
-            version: env!("CARGO_PKG_VERSION").to_owned(),
-            protocol: hl_extension::PROTOCOL,
-            capabilities: Grant::new([Capability::WorkspaceRead, Capability::Interface]),
-            entrypoint: None,
-            activation: Activation::Workspace,
-            interface: Some(Presentation {
-                tab_title: name.to_owned(),
-                icon: None,
-            }),
-            pane_providers: Vec::new(),
-            resources: Resources::default(),
-            containers: hl_extension::ContainerGrant::default(),
-            images: hl_extension::ImageGrant::default(),
-            networks: hl_extension::NetworkGrant::default(),
-            volumes: hl_extension::VolumeGrant::default(),
-            filesystem: hl_extension::FilesystemGrant::default(),
-            workspace_environment: hl_extension::WorkspaceEnvironmentGrant::default(),
+        let manifest = |name: &str| {
+            let mut manifest = top_manifest();
+            manifest.name = ExtensionName::new(name).unwrap();
+            manifest.display_name = name.to_owned();
+            manifest
         };
 
         let error = install_defaults_with(&workspace, |_, reference| {
@@ -252,7 +229,7 @@ mod tests {
             Ok(Candidate {
                 reference: reference.to_owned(),
                 digest: "sha256:top".to_owned(),
-                manifest: manifest("top"),
+                manifest: top_manifest(),
             })
         })
         .expect("corrected retry");
@@ -269,27 +246,15 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let mut workspace = WorkspaceConfig::new("demo", "alpine:3.20", hl_ws::Arch::Amd64);
         workspace.storage = Some(directory.path().join("workspace"));
-        let candidate = |reference: &str, activation, interface| Candidate {
-            reference: reference.to_owned(),
-            digest: "sha256:top".to_owned(),
-            manifest: Manifest {
-                name: ExtensionName::new("top").unwrap(),
-                display_name: "Top".into(),
-                version: env!("CARGO_PKG_VERSION").to_owned(),
-                protocol: hl_extension::PROTOCOL,
-                capabilities: Grant::new([Capability::WorkspaceRead, Capability::Interface]),
-                entrypoint: None,
-                activation,
-                interface,
-                pane_providers: Vec::new(),
-                resources: Resources::default(),
-                containers: hl_extension::ContainerGrant::default(),
-                images: hl_extension::ImageGrant::default(),
-                networks: hl_extension::NetworkGrant::default(),
-                volumes: hl_extension::VolumeGrant::default(),
-                filesystem: hl_extension::FilesystemGrant::default(),
-                workspace_environment: hl_extension::WorkspaceEnvironmentGrant::default(),
-            },
+        let candidate = |reference: &str, activation, interface| {
+            let mut manifest = top_manifest();
+            manifest.activation = activation;
+            manifest.interface = interface;
+            Candidate {
+                reference: reference.to_owned(),
+                digest: "sha256:top".to_owned(),
+                manifest,
+            }
         };
 
         let error = install_defaults_with(&workspace, |_, reference| {
@@ -318,14 +283,11 @@ mod tests {
         assert!(Roster::workspace(&workspace).unwrap().entries().is_empty());
 
         install_defaults_with(&workspace, |_, reference| {
-            Ok(candidate(
-                reference,
-                Activation::Tab,
-                Some(Presentation {
-                    tab_title: "Top".into(),
-                    icon: None,
-                }),
-            ))
+            Ok(Candidate {
+                reference: reference.to_owned(),
+                digest: "sha256:top".to_owned(),
+                manifest: top_manifest(),
+            })
         })
         .expect("corrected retry");
 
@@ -348,31 +310,55 @@ mod tests {
     }
 
     #[test]
+    fn automatic_authority_is_bound_to_the_checked_in_manifest_before_mutation() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut workspace = WorkspaceConfig::new("demo", "alpine:3.20", hl_ws::Arch::Amd64);
+        workspace.storage = Some(directory.path().join("workspace"));
+        let trusted = top_manifest();
+        Roster::workspace(&workspace)
+            .unwrap()
+            .register(&trusted, "sha256:usable-top", &trusted.capabilities, 1)
+            .unwrap();
+        let mut broadened = trusted.clone();
+        broadened.capabilities = Grant::new(trusted.capabilities.iter().chain([Capability::FilesystemWrite]));
+
+        let error = install_defaults_with(&workspace, |_, reference| {
+            Ok(Candidate {
+                reference: reference.to_owned(),
+                digest: "sha256:untrusted-top".to_owned(),
+                manifest: broadened.clone(),
+            })
+        })
+        .expect_err("broadened automatic authority");
+
+        assert!(error.contains("does not match the first-party release contract"));
+        assert!(error.contains("refused to grant it authority automatically"));
+        assert!(error.contains("verify the published image"));
+        let retained = Roster::workspace(&workspace).unwrap().entries();
+        assert_eq!(retained.len(), 1);
+        assert_eq!(retained[0].image_digest, "sha256:usable-top");
+        assert_eq!(retained[0].stage, Stage::Standby);
+
+        install_defaults_with(&workspace, |_, reference| {
+            Ok(Candidate {
+                reference: reference.to_owned(),
+                digest: "sha256:corrected-top".to_owned(),
+                manifest: trusted.clone(),
+            })
+        })
+        .expect("corrected first-party image");
+        let corrected = Roster::workspace(&workspace).unwrap().entries();
+        assert_eq!(corrected.len(), 1);
+        assert_eq!(corrected[0].image_digest, "sha256:corrected-top");
+        assert_eq!(corrected[0].stage, Stage::Duty);
+    }
+
+    #[test]
     fn retry_replaces_a_same_tag_default_with_the_current_image_digest() {
         let directory = tempfile::tempdir().unwrap();
         let mut workspace = WorkspaceConfig::new("demo", "alpine:3.20", hl_ws::Arch::Amd64);
         workspace.storage = Some(directory.path().join("workspace"));
-        let manifest = Manifest {
-            name: ExtensionName::new("top").unwrap(),
-            display_name: "Top".into(),
-            version: "0.4.0".into(),
-            protocol: hl_extension::PROTOCOL,
-            capabilities: Grant::new([Capability::WorkspaceRead, Capability::Interface]),
-            entrypoint: None,
-            activation: Activation::Workspace,
-            interface: Some(Presentation {
-                tab_title: "Top".into(),
-                icon: None,
-            }),
-            pane_providers: Vec::new(),
-            resources: Resources::default(),
-            containers: hl_extension::ContainerGrant::default(),
-            images: hl_extension::ImageGrant::default(),
-            networks: hl_extension::NetworkGrant::default(),
-            volumes: hl_extension::VolumeGrant::default(),
-            filesystem: hl_extension::FilesystemGrant::default(),
-            workspace_environment: hl_extension::WorkspaceEnvironmentGrant::default(),
-        };
+        let manifest = top_manifest();
         // Model interruption after the record was saved but before provisioning
         // enabled it. The mutable release tag may resolve differently on retry.
         Roster::workspace(&workspace)
@@ -398,7 +384,7 @@ mod tests {
         let entries = Roster::workspace(&workspace).unwrap().entries();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].image_digest, "sha256:current-top");
-        assert_eq!(entries[0].version, "0.4.0");
+        assert_eq!(entries[0].version, manifest.version);
         assert_eq!(entries[0].stage, Stage::Duty);
     }
 }
