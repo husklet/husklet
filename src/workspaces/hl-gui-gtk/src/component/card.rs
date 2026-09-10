@@ -81,7 +81,7 @@ pub(crate) fn widget(tag: Tag) -> gtk::Widget {
     match tag {
         Tag::Card | Tag::Paper => frame().upcast(),
         Tag::CardHeader => header().upcast(),
-        Tag::CardContent => axis::column(8).upcast(),
+        Tag::CardContent => content().upcast(),
         Tag::CardActions | Tag::AccordionActions => actions().upcast(),
         Tag::CardMedia => picture().upcast(),
         Tag::CardActionArea => area().upcast(),
@@ -115,6 +115,14 @@ fn header() -> gtk::Box {
     strip.append(&slot::emblem_image());
     strip.append(&column);
     strip
+}
+
+/// The content owns any spare card height so a trailing action row stays
+/// anchored to the card edge when a grid equalizes neighboring cards.
+fn content() -> gtk::Box {
+    let widget = axis::column(8);
+    widget.set_vexpand(true);
+    widget
 }
 
 fn actions() -> gtk::Box {

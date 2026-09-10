@@ -708,6 +708,10 @@ mod unix {
             assert!(has_label(&discover_root, "19 of 20 extensions"));
             let review = find_tooltip_button(&discover_root, "Review the 1.0.0 update for Developer Tool 01");
             let review_access = find_tooltip_button(&discover_root, "Review access requested by Developer Tool 02");
+            let review_card = ancestor_with_class(review.upcast_ref(), "hl-card")
+                .expect("Discover update action belongs to its card");
+            let access_card = ancestor_with_class(review_access.upcast_ref(), "hl-card")
+                .expect("Discover access action belongs to its card");
             assert!(review.is_sensitive(), "compatible Discover update is actionable");
             for (label, action) in [("update", &review), ("access", &review_access)] {
                 assert_eq!(action.accessible_role(), gtk::AccessibleRole::Button);
@@ -728,6 +732,35 @@ mod unix {
                         action.height(),
                         28,
                         "{width_name} Discover {label} action control height"
+                    );
+                }
+                if width == 1_200 {
+                    let review_card_bounds = review_card
+                        .compute_bounds(&discover_root)
+                        .expect("Discover update card belongs to Top root");
+                    let access_card_bounds = access_card
+                        .compute_bounds(&discover_root)
+                        .expect("Discover access card belongs to Top root");
+                    assert_eq!(
+                        review_card_bounds.y(),
+                        access_card_bounds.y(),
+                        "wide Discover cards must share a grid row"
+                    );
+                    assert_eq!(
+                        review_card_bounds.height(),
+                        access_card_bounds.height(),
+                        "wide Discover cards must have equal row height"
+                    );
+                    let review_bounds = review
+                        .compute_bounds(&discover_root)
+                        .expect("Discover update action belongs to Top root");
+                    let access_bounds = review_access
+                        .compute_bounds(&discover_root)
+                        .expect("Discover access action belongs to Top root");
+                    assert_eq!(
+                        review_bounds.y(),
+                        access_bounds.y(),
+                        "wide Discover actions must align despite unequal card copy"
                     );
                 }
                 assert!(

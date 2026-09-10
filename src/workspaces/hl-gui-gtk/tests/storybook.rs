@@ -1329,6 +1329,14 @@ mod unix {
                     .expect("CardActions remains after content");
                 let content = body.first_child().expect("Card body starts with content");
                 assert!(
+                    content.has_css_class("hl-cardcontent"),
+                    "CardContent keeps its semantic style identity"
+                );
+                assert!(
+                    content.vexpands(),
+                    "CardContent must absorb spare height ahead of CardActions"
+                );
+                assert!(
                     content.allocation().y() <= actions.allocation().y(),
                     "Card actions appeared before its content"
                 );
