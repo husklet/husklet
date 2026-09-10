@@ -106,15 +106,13 @@ impl LayoutManagerImpl for Weave {
         let expanding = lines
             .iter()
             .filter(|line| {
-                line.children.iter().any(
-                    |(child, _, _)| {
-                        if vertical {
-                            child.hexpands()
-                        } else {
-                            child.vexpands()
-                        }
-                    },
-                )
+                line.children.iter().any(|(child, _, _)| {
+                    if vertical {
+                        child.hexpands()
+                    } else {
+                        child.vexpands()
+                    }
+                })
             })
             .count();
         let expanding = i32::try_from(expanding).unwrap_or(i32::MAX);
@@ -123,15 +121,13 @@ impl LayoutManagerImpl for Weave {
         let mut remainder = if expanding == 0 { 0 } else { spare % expanding };
         let mut cross = 0;
         for line in lines {
-            let cross_expands = line.children.iter().any(
-                |(child, _, _)| {
-                    if vertical {
-                        child.hexpands()
-                    } else {
-                        child.vexpands()
-                    }
-                },
-            );
+            let cross_expands = line.children.iter().any(|(child, _, _)| {
+                if vertical {
+                    child.hexpands()
+                } else {
+                    child.vexpands()
+                }
+            });
             let bonus = if cross_expands {
                 let bonus = share + i32::from(remainder > 0);
                 remainder = remainder.saturating_sub(1);
@@ -157,9 +153,10 @@ impl Weave {
             && (0..=600).contains(&room)
             && !children.is_empty()
             && children.iter().all(|child| child.has_css_class("hl-card"));
+        let packs_cards = !vertical && children.iter().any(|child| child.has_css_class("hl-card"));
         let mut lines = vec![Line::default()];
         for child in children {
-            let (main, cross) = size(&child, vertical, room);
+            let (main, cross) = size(&child, vertical, room, packs_cards);
             let line = lines.last_mut().expect("a line is always open");
             let advance = if line.children.is_empty() { main } else { main + spacing };
             if room >= 0 && !line.children.is_empty() && (compact_cards || line.main + advance > room) {
@@ -232,7 +229,7 @@ impl Weave {
     }
 }
 
-fn size(child: &gtk::Widget, vertical: bool, room: i32) -> (i32, i32) {
+fn size(child: &gtk::Widget, vertical: bool, room: i32, packs_cards: bool) -> (i32, i32) {
     let (main, cross) = if vertical {
         (gtk::Orientation::Vertical, gtk::Orientation::Horizontal)
     } else {
@@ -241,11 +238,14 @@ fn size(child: &gtk::Widget, vertical: bool, room: i32) -> (i32, i32) {
     let (minimum, natural, _, _) = child.measure(main, -1);
     let along = if room < 0 {
         natural
-    } else if !vertical && child.hexpands() {
+    } else if !vertical && child.hexpands() && packs_cards {
         // An expanding child has already said that its authored floor is the
         // amount needed to enter a line; `line` gives it a share of everything
-        // left. Packing from its intrinsic natural width would let optional
-        // content such as a status icon silently change the column count.
+        // left. A line containing cards deliberately packs all of its growing
+        // children from that floor: packing an adjacent status from its
+        // intrinsic width would let optional content silently change the card
+        // collection's column count. Lines without cards keep natural requests
+        // so wrapped text does not collapse to GTK's one-character minimum.
         minimum.min(room)
     } else {
         natural.min(room).max(minimum)
@@ -388,12 +388,68 @@ mod tests {
             natural > minimum,
             "fixture needs intrinsic width above its authored floor"
         );
-        assert_eq!(flow.imp().lines(container.upcast_ref(), 880).len(), 1);
-        container.allocate(880, 40, -1, None);
+        assert_eq!(flow.imp().lines(container.upcast_ref(), 884).len(), 1);
+        container.allocate(884, 40, -1, None);
         let cards = children(container.upcast_ref());
         assert!(cards
             .windows(2)
             .all(|pair| pair[0].allocation().y() == pair[1].allocation().y()));
-        assert_eq!(cards.iter().map(gtk::Widget::width).sum::<i32>() + 8, 880);
+        assert_eq!(cards.iter().map(gtk::Widget::width).sum::<i32>() + 8, 884);
+    }
+
+    #[test]
+    fn expanding_wrapped_content_keeps_a_readable_line_basis() {
+        if !crate::test_support::on_the_toolkit_thread(expanding_wrapped_content_scenario) {
+            eprintln!("skipped: no display connection");
+            return;
+        }
+    }
+
+    fn expanding_wrapped_content_scenario() {
+        for room in [1_200, 600] {
+            let container = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+            let flow = Flow::new(gtk::Orientation::Horizontal);
+            flow.set_spacing(12);
+            container.set_layout_manager(Some(flow.clone()));
+
+            let action = gtk::Button::with_label("Pin tab");
+            action.set_size_request(75, 36);
+            container.append(&action);
+
+            let status = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+            status.set_hexpand(true);
+            status.append(&gtk::Image::from_icon_name("dialog-information-symbolic"));
+            let caption = gtk::Label::new(Some("No change yet."));
+            caption.set_wrap(true);
+            caption.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+            caption.set_hexpand(true);
+            status.append(&caption);
+            container.append(&status);
+
+            let (minimum, natural, _, _) = status.measure(gtk::Orientation::Horizontal, -1);
+            assert!(
+                natural > minimum,
+                "fixture must distinguish a word line from its glyph floor"
+            );
+            let lines = flow.imp().lines(container.upcast_ref(), room);
+            assert_eq!(
+                lines.len(),
+                1,
+                "{room}px unnecessarily wrapped a short status onto another row"
+            );
+            assert_eq!(lines[0].children[1].1, natural.min(room));
+
+            container.allocate(room, 56, -1, None);
+            assert!(
+                caption.width() >= 90,
+                "{room}px collapsed the receipt to {}px",
+                caption.width()
+            );
+            assert!(
+                status.height() <= 36,
+                "{room}px produced a {}px-tall short receipt",
+                status.height()
+            );
+        }
     }
 }

@@ -532,6 +532,18 @@ mod unix {
                 "documented ToggleButton label center {label_center}px is not centered in {}px",
                 toggle.height()
             );
+            assert_eq!(toggle.accessible_role(), gtk::AccessibleRole::ToggleButton);
+            assert_toggle_receipt(&root, "No change yet.", 36);
+            capture_story(&realized_window, "ToggleButton before wide");
+            realized_window.set_size_request(600, 800);
+            realized_window.set_default_size(600, 800);
+            settle_window_width(&realized_window, 600);
+            assert_contained(&root, "ToggleButton narrow");
+            assert_toggle_receipt(&root, "No change yet.", 56);
+            capture_story(&realized_window, "ToggleButton before narrow");
+            realized_window.set_size_request(1_200, 800);
+            realized_window.set_default_size(1_200, 800);
+            settle_window_width(&realized_window, 1_200);
             Some(toggle.is_active())
         } else {
             None
@@ -1013,7 +1025,15 @@ mod unix {
                 before,
                 "documented ToggleButton did not visibly acknowledge its checked-state change"
             );
+            assert_eq!(toggle.accessible_role(), gtk::AccessibleRole::ToggleButton);
+            assert_toggle_receipt(&root, "No change yet.", 36);
             capture_story(&realized_window, "ToggleButton unchecked");
+            realized_window.set_size_request(600, 800);
+            realized_window.set_default_size(600, 800);
+            settle_window_width(&realized_window, 600);
+            assert_contained(&root, "ToggleButton post-event narrow");
+            assert_toggle_receipt(&root, "No change yet.", 56);
+            capture_story(&realized_window, "ToggleButton unchecked narrow");
         }
         if story == "Checkbox" {
             settle_toolkit();
@@ -1643,6 +1663,34 @@ mod unix {
             .mnemonic_widget()
             .and_then(|widget| widget.downcast::<gtk::Switch>().ok())
             .expect("FormControlLabel caption names its Switch")
+    }
+
+    fn assert_toggle_receipt(root: &gtk::Widget, text: &str, maximum_height: i32) {
+        let labels = descendants::<gtk::Label>(root);
+        let caption = labels
+            .iter()
+            .find(|label| label.text() == text)
+            .cloned()
+            .unwrap_or_else(|| {
+                panic!(
+                    "ToggleButton receipt {text:?} was absent; rendered labels: {:?}",
+                    labels.iter().map(gtk::Label::text).collect::<Vec<_>>()
+                )
+            });
+        let message = caption
+            .parent()
+            .expect("ToggleButton receipt has its InlineMessage surface");
+        assert_eq!(message.accessible_role(), gtk::AccessibleRole::Alert);
+        assert!(
+            caption.width() >= 90,
+            "ToggleButton receipt {text:?} collapsed to a {}px character column",
+            caption.width()
+        );
+        assert!(
+            message.height() <= maximum_height,
+            "ToggleButton receipt {text:?} grew to {}px, expected at most {maximum_height}px",
+            message.height()
+        );
     }
 
     fn find<T: IsA<gtk::Widget> + gtk::glib::object::Cast + Clone + 'static>(
