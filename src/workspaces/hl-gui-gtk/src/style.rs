@@ -43,6 +43,12 @@ fn controls(css: &mut String, theme: &Theme) {
          .hl-select:hover {{ border-color: {dim}; }}\n\
          .hl-select:focus-within {{ border-color: {accent}; box-shadow: 0 0 0 1px {accent}; }}\n\
          .hl-select:disabled, .hl-select button:disabled {{ border-color: {faint}; }}\n\
+         .hl-select-options {{ padding: 4px; }}\n\
+         .hl-select-option {{ min-height: 22px; min-width: 120px; padding: 2px 10px; background: transparent; color: {dim}; border: 1px solid transparent; border-radius: {radius}px; box-shadow: none; }}\n\
+         .hl-select-option:hover {{ background: {raised}; color: {text}; border-color: {line}; }}\n\
+         .hl-select-option:focus, .hl-select-option:focus-visible {{ outline: none; background: {raised}; color: {text}; border-color: {accent}; box-shadow: inset 0 0 0 1px {accent}; }}\n\
+         .hl-select-option.selected {{ background: alpha({accent}, .14); color: {text}; border-color: alpha({accent}, .38); box-shadow: inset 3px 0 0 {accent}; font-weight: 600; }}\n\
+         .hl-select-option.selected:focus, .hl-select-option.selected:focus-visible {{ background: alpha({accent}, .14); box-shadow: inset 3px 0 0 {accent}, inset 0 0 0 1px {accent}; }}\n\
          entry:hover, spinbutton:hover, dropdown:hover > button {{ border-color: {dim}; }}\n\
          entry:focus-within, spinbutton:focus-within, textview:focus-within {{ border-color: {accent}; box-shadow: 0 0 0 1px {accent}; }}\n\
          entry:disabled, spinbutton:disabled, textview:disabled, dropdown:disabled, .hl-select:disabled {{ opacity: .62; background: {surface}; }}\n\
@@ -464,6 +470,27 @@ mod tests {
         assert!(css.contains(".hl-table { background: #0f1115; border: 1px solid #323843;"));
         assert!(css.contains(".hl-tablehead .hl-tablecell { background: #21252d;"));
         assert!(css.contains(".hl-tablecell { min-height: 32px; padding: 6px 8px; border-bottom: 1px solid #323843;"));
+    }
+
+    #[test]
+    fn select_options_distinguish_selection_pointer_and_keyboard_focus() {
+        let css = super::sheet(&Theme::dark());
+        assert!(css.contains(".hl-select-options { padding: 4px;"));
+        assert!(css.contains(
+            ".hl-select-option { min-height: 22px; min-width: 120px; padding: 2px 10px; background: transparent; color: #a7aeba; border: 1px solid transparent; border-radius: 8px; box-shadow: none;"
+        ));
+        assert!(css.contains(
+            ".hl-select-option:hover { background: #21252d; color: #f0f2f5; border-color: #323843;"
+        ));
+        assert!(css.contains(
+            ".hl-select-option:focus, .hl-select-option:focus-visible { outline: none; background: #21252d; color: #f0f2f5; border-color: #559df7; box-shadow: inset 0 0 0 1px #559df7;"
+        ));
+        assert!(css.contains(
+            ".hl-select-option.selected { background: alpha(#559df7, .14); color: #f0f2f5; border-color: alpha(#559df7, .38); box-shadow: inset 3px 0 0 #559df7; font-weight: 600;"
+        ));
+        assert!(css.contains(
+            ".hl-select-option.selected:focus, .hl-select-option.selected:focus-visible { background: alpha(#559df7, .14); box-shadow: inset 3px 0 0 #559df7, inset 0 0 0 1px #559df7;"
+        ));
     }
 
     #[test]

@@ -51,6 +51,7 @@ impl ObjectImpl for State {
         let obj = self.obj();
         obj.add_css_class("choice");
         obj.set_accessible_role(gtk::AccessibleRole::ComboBox);
+        obj.update_property(&[gtk::accessible::Property::HasPopup(true)]);
         obj.set_hexpand(true);
         obj.set_halign(gtk::Align::Fill);
 
@@ -64,6 +65,9 @@ impl ObjectImpl for State {
         let overlay = gtk::Overlay::new();
         overlay.set_child(Some(&closed));
         let options = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        options.add_css_class("hl-select-options");
+        options.set_accessible_role(gtk::AccessibleRole::ListBox);
+        options.update_property(&[gtk::accessible::Property::MultiSelectable(false)]);
         let popover = gtk::Popover::new();
         popover.set_child(Some(&options));
         overlay.add_overlay(&popover);
@@ -122,6 +126,27 @@ impl Choice {
             .and_then(|button| button.label())
             .unwrap_or_else(|| "Choose…".into());
         self.imp().label.get().expect("constructed choice").set_label(&label);
+        self.sync_options();
+    }
+
+    fn sync_options(&self) {
+        let selected = self.selected();
+        let mut child = self.imp().options.get().expect("constructed choice").first_child();
+        let mut index = 0_u32;
+        while let Some(widget) = child {
+            child = widget.next_sibling();
+            let Ok(button) = widget.downcast::<gtk::Button>() else {
+                continue;
+            };
+            let active = selected == Some(index);
+            if active {
+                button.add_css_class("selected");
+            } else {
+                button.remove_css_class("selected");
+            }
+            button.update_state(&[gtk::accessible::State::Selected(Some(active))]);
+            index = index.saturating_add(1);
+        }
     }
 
     fn option(&self, index: u32) -> Option<gtk::Button> {
@@ -168,6 +193,8 @@ pub(crate) fn set_options(widget: &gtk::Widget, labels: &[&str]) -> bool {
     for (index, label) in labels.iter().enumerate() {
         let button = gtk::Button::with_label(label);
         button.add_css_class("flat");
+        button.add_css_class("hl-select-option");
+        button.set_accessible_role(gtk::AccessibleRole::Option);
         button.set_halign(gtk::Align::Fill);
         let weak_choice = choice.downgrade();
         button.connect_clicked(move |_| {
@@ -177,5 +204,6 @@ pub(crate) fn set_options(widget: &gtk::Widget, labels: &[&str]) -> bool {
         });
         options.append(&button);
     }
+    choice.set_selected(choice.selected());
     true
 }

@@ -526,6 +526,54 @@ mod unix {
                 popover.is_visible(),
                 "Select open-list specimen did not reveal its options"
             );
+            let options = find::<gtk::Box>(&popover.clone().upcast(), |options| {
+                options.has_css_class("hl-select-options")
+            });
+            assert_eq!(options.accessible_role(), gtk::AccessibleRole::ListBox);
+            assert_eq!(live.accessible_role(), gtk::AccessibleRole::ComboBox);
+            assert_eq!(options.spacing(), 2);
+            let option_buttons = descendants::<gtk::Button>(options.upcast_ref())
+                .into_iter()
+                .filter(|button| button.has_css_class("hl-select-option"))
+                .collect::<Vec<_>>();
+            assert_eq!(
+                option_buttons.len(),
+                3,
+                "Select popup keeps one native option per choice"
+            );
+            let option_metrics = option_buttons
+                .iter()
+                .map(|button| {
+                    (
+                        button.accessible_role(),
+                        button.measure(gtk::Orientation::Horizontal, -1).0,
+                        button.measure(gtk::Orientation::Vertical, -1).0,
+                    )
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                option_metrics,
+                vec![(gtk::AccessibleRole::Option, 142, 28); 3],
+                "Select options keep exact role and compact natural geometry"
+            );
+            let selected = option_buttons
+                .iter()
+                .find(|button| button.label().as_deref() == Some("Z shell"))
+                .expect("current Select value remains present in its popup");
+            assert!(selected.has_css_class("selected"));
+            let focused = option_buttons
+                .iter()
+                .find(|button| button.label().as_deref() == Some("Bash"))
+                .expect("Select popup exposes its adjacent focus target");
+            assert!(focused.grab_focus(), "Select option accepts native keyboard focus");
+            focused.set_state_flags(gtk::StateFlags::PRELIGHT, false);
+            settle_toolkit();
+            assert!(focused.has_focus());
+            assert!(focused.state_flags().contains(gtk::StateFlags::PRELIGHT));
+            assert!(
+                !focused.has_css_class("selected"),
+                "keyboard focus must not impersonate the current Select value"
+            );
             capture_story(&realized_window, "Select open");
             capture_widget(
                 &realized_window,
