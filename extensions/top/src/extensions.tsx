@@ -1668,7 +1668,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
               )}
             </Column>
           ) : (
-            <Column gap={2} width="fill">
+            <Column gap={2} width="fill" height="content">
               <Row gap={1} width="fill" align="center" justify="start" wrap>
                 <Heading label="Installed extensions" scale="caption" grow={false} align="start" />
                 {inventoryState !== 'loading' ? (
@@ -1774,6 +1774,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                           key={`${extension.name}:${extension.image_digest}`}
                           grow
                           width={{ chars: 30 }}
+                          height="content"
                           variant="outline"
                         >
                           <CardContent gap={1}>

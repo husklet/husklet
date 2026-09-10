@@ -393,6 +393,10 @@ mod unix {
                 settle_toolkit();
             }
             capture(&window, &format!("{capture_fixture}-{name}-{width_name}"), width, 800);
+            if fixture == "populated" && name == "extensions" {
+                let cards = widgets_with_class(&root, "hl-card");
+                assert_installed_density(&root, &cards, width, width_name);
+            }
             if fixture == "populated" && name == "processes" {
                 let view = find_column_view(&root).expect("Processes renders its DataTable");
                 let table = view
@@ -420,6 +424,25 @@ mod unix {
                     assert_eq!(visible, ["container", "pid", "user", "cpu", "memory", "command"]);
                 }
             }
+        }
+        if fixture == "populated" && name == "extensions" {
+            // Re-expanding from the compact selector must not leave the installed
+            // collection carrying its narrow allocation or unused vertical space.
+            window.set_default_size(1_200, 800);
+            window.set_size_request(1_200, 800);
+            settle_toolkit();
+            root.measure(gtk::Orientation::Horizontal, -1);
+            root.measure(gtk::Orientation::Vertical, 1_200);
+            root.allocate(1_200, 1_600, -1, None);
+            assert_contained(&root, &format!("{fixture}/{name}/wide-after-narrow"));
+            capture(
+                &window,
+                &format!("{capture_fixture}-{name}-wide-after-narrow"),
+                1_200,
+                800,
+            );
+            let cards = widgets_with_class(&root, "hl-card");
+            assert_installed_density(&root, &cards, 1_200, "wide-after-narrow");
         }
         if fixture == "populated" && name == "extensions" && !catalogue_empty {
             find_toggle(&root, "Discover").set_active(true);
@@ -1284,6 +1307,92 @@ mod unix {
             found.extend(widgets_with_class(&current, class));
         }
         found
+    }
+
+    fn assert_installed_density(root: &gtk::Widget, cards: &[gtk::Widget], width: i32, case: &str) {
+        let search = find_entry_with_placeholder(root, "Search installed");
+        assert!(!cards.is_empty(), "Installed renders cards");
+        let first = ancestor_with_class(&find_mapped_labelled(root, "faulted-agent"), "hl-card")
+            .expect("faulted installed extension belongs to a card");
+        let first_y = vertical_end(root, &first) - first.height();
+        let gap = first_y - vertical_end(root, search.upcast_ref());
+        let maximum_gap = if width == 600 { 128 } else { 160 };
+        assert!(
+            gap <= maximum_gap,
+            "{case} left {gap}px between the installed filters and first card instead of at most {maximum_gap}px"
+        );
+        let maximum_y = if width == 600 { 500 } else { 360 };
+        assert!(
+            first_y <= maximum_y,
+            "{case} first installed card began at {}px instead of at most {maximum_y}px",
+            first_y
+        );
+        assert!(
+            vertical_end(root, &first) <= 780,
+            "{case} first installed card was not completely visible in the 800px viewport"
+        );
+        let expected_visible = if width == 600 { 1 } else { 3 };
+        let visible = cards
+            .iter()
+            .filter(|card| card.is_mapped())
+            .take(expected_visible)
+            .collect::<Vec<_>>();
+        assert_eq!(visible.len(), expected_visible, "{case} omitted first-row cards");
+        assert!(
+            visible.iter().all(|card| vertical_end(root, card) <= 780),
+            "{case} did not show the complete first installed row in the 800px viewport"
+        );
+    }
+
+    fn find_entry_with_placeholder(root: &gtk::Widget, wanted: &str) -> gtk::Entry {
+        fn find(root: &gtk::Widget, wanted: &str) -> Option<gtk::Entry> {
+            if let Some(entry) = root
+                .downcast_ref::<gtk::Entry>()
+                .filter(|entry| entry.is_mapped() && entry.placeholder_text().as_deref() == Some(wanted))
+            {
+                return Some(entry.clone());
+            }
+            let mut child = root.first_child();
+            while let Some(widget) = child {
+                if widget.is_mapped() {
+                    if let Some(entry) = find(&widget, wanted) {
+                        return Some(entry);
+                    }
+                }
+                child = widget.next_sibling();
+            }
+            None
+        }
+        find(root, wanted).unwrap_or_else(|| panic!("entry with placeholder {wanted:?} was not rendered"))
+    }
+
+    fn ancestor_with_class(widget: &gtk::Widget, class: &str) -> Option<gtk::Widget> {
+        let mut ancestor = Some(widget.clone());
+        while let Some(widget) = ancestor {
+            if widget.has_css_class(class) {
+                return Some(widget);
+            }
+            ancestor = widget.parent();
+        }
+        None
+    }
+
+    fn find_mapped_labelled(root: &gtk::Widget, wanted: &str) -> gtk::Widget {
+        if root.is_mapped()
+            && root
+                .downcast_ref::<gtk::Label>()
+                .is_some_and(|label| label.text() == wanted)
+        {
+            return root.clone();
+        }
+        let mut child = root.first_child();
+        while let Some(widget) = child {
+            if widget.is_mapped() && has_label(&widget, wanted) {
+                return find_mapped_labelled(&widget, wanted);
+            }
+            child = widget.next_sibling();
+        }
+        panic!("mapped label {wanted:?} was not rendered")
     }
 
     fn find_expander(root: &gtk::Widget, label: &str) -> gtk::Expander {
