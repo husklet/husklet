@@ -234,12 +234,18 @@ fn components(css: &mut String, theme: &Theme) {
          .hl-card > box {{ padding: 10px; }}\n\
          .hl-cardactions {{ margin-top: 4px; }}\n\
          .hl-navigationmenu {{ padding: 2px 4px; }}\n\
-         .hl-navigationmenuitem {{ background: transparent; color: {dim}; border: 0; border-radius: {radius}px; min-height: 30px; padding: 4px 8px; font-weight: 500; }}\n\
-         .hl-navigationmenuitem:hover {{ background: {raised}; color: {text}; }}\n\
-         .hl-navigationmenuitem:checked, .hl-navigationmenuitem:checked:hover {{ background: {raised}; color: {text}; box-shadow: inset 2px 0 0 {accent}; }}\n\
-         .hl-listitembutton, .hl-listitembutton.variant-ghost {{ background: transparent; color: {dim}; border: 0; border-radius: 4px; min-height: 28px; padding: 3px 8px; box-shadow: none; font-weight: 400; }}\n\
-         .hl-listitembutton:hover, .hl-listitembutton.variant-ghost:hover {{ background: {raised}; color: {text}; }}\n\
-         .hl-listitembutton.variant-filled, .hl-listitembutton.variant-filled:hover {{ background: {raised}; color: {text}; box-shadow: inset 2px 0 0 {accent}; font-weight: 600; }}\n\
+         .hl-navigationmenuitem {{ background: transparent; color: {dim}; border: 1px solid transparent; border-radius: {radius}px; min-height: 28px; padding: 3px 8px; font-weight: 500; box-shadow: none; }}\n\
+         .hl-navigationmenuitem:hover {{ background: {raised}; color: {text}; border-color: {line}; }}\n\
+         .hl-navigationmenuitem:checked {{ background: alpha({accent}, .14); color: {text}; border-color: alpha({accent}, .38); box-shadow: inset 3px 0 0 {accent}; font-weight: 600; }}\n\
+         .hl-navigationmenuitem:checked:hover {{ background: alpha({accent}, .22); color: {text}; border-color: alpha({accent}, .55); box-shadow: inset 3px 0 0 {accent}; }}\n\
+         .hl-navigationmenuitem:focus, .hl-navigationmenuitem:focus-visible {{ outline: none; background: {raised}; color: {text}; border-color: {accent}; box-shadow: inset 0 0 0 1px {accent}; }}\n\
+         .hl-navigationmenuitem:checked:focus, .hl-navigationmenuitem:checked:focus-visible {{ background: alpha({accent}, .14); box-shadow: inset 3px 0 0 {accent}, inset 0 0 0 1px {accent}; }}\n\
+         .hl-listitembutton, .hl-listitembutton.variant-ghost {{ background: transparent; color: {dim}; border: 1px solid transparent; border-radius: {radius}px; min-height: 26px; padding: 2px 8px; box-shadow: none; font-weight: 400; }}\n\
+         .hl-listitembutton:hover, .hl-listitembutton.variant-ghost:hover {{ background: {raised}; color: {text}; border-color: {line}; }}\n\
+         .hl-listitembutton.variant-filled {{ background: alpha({accent}, .14); color: {text}; border-color: alpha({accent}, .38); box-shadow: inset 3px 0 0 {accent}; font-weight: 600; }}\n\
+         .hl-listitembutton.variant-filled:hover {{ background: alpha({accent}, .22); color: {text}; border-color: alpha({accent}, .55); box-shadow: inset 3px 0 0 {accent}; }}\n\
+         .hl-listitembutton:focus, .hl-listitembutton:focus-visible {{ outline: none; background: {raised}; color: {text}; border-color: {accent}; box-shadow: inset 0 0 0 1px {accent}; }}\n\
+         .hl-listitembutton.variant-filled:focus, .hl-listitembutton.variant-filled:focus-visible {{ background: alpha({accent}, .14); box-shadow: inset 3px 0 0 {accent}, inset 0 0 0 1px {accent}; }}\n\
          .hl-iconbutton {{ min-width: 30px; min-height: 30px; padding: 3px; border-color: transparent; background: transparent; }}\n\
          .hl-iconbutton:hover {{ background: {raised}; border-color: {line}; }}\n\
          .hl-togglebutton {{ background: transparent; border-color: {line}; }}\n\
@@ -352,7 +358,13 @@ mod tests {
         assert!(css.contains("button:focus-visible { outline: 2px"));
         assert!(css.contains(".hl-navigationmenuitem { background: transparent"));
         assert!(css.contains(
-            ".hl-navigationmenuitem:checked, .hl-navigationmenuitem:checked:hover { background: #21252d; color: #f0f2f5; box-shadow: inset 2px 0 0 #559df7"
+            ".hl-navigationmenuitem:checked { background: alpha(#559df7, .14); color: #f0f2f5; border-color: alpha(#559df7, .38); box-shadow: inset 3px 0 0 #559df7; font-weight: 600;"
+        ));
+        assert!(css.contains(
+            ".hl-navigationmenuitem:focus, .hl-navigationmenuitem:focus-visible { outline: none; background: #21252d; color: #f0f2f5; border-color: #559df7; box-shadow: inset 0 0 0 1px #559df7;"
+        ));
+        assert!(css.contains(
+            ".hl-navigationmenuitem:checked:focus, .hl-navigationmenuitem:checked:focus-visible { background: alpha(#559df7, .14); box-shadow: inset 3px 0 0 #559df7, inset 0 0 0 1px #559df7;"
         ));
         assert!(css.contains(".variant-ghost { background: transparent;"));
         assert!(css.contains(".hl-iconbutton { min-width: 30px; min-height: 30px;"));
@@ -364,6 +376,12 @@ mod tests {
             css.contains(".hl-togglebutton:checked:focus-visible { outline: 2px solid #559df7; outline-offset: 2px;")
         );
         assert!(css.contains(".hl-listitembutton, .hl-listitembutton.variant-ghost { background: transparent;"));
+        assert!(css.contains(
+            ".hl-listitembutton.variant-filled { background: alpha(#559df7, .14); color: #f0f2f5; border-color: alpha(#559df7, .38); box-shadow: inset 3px 0 0 #559df7; font-weight: 600;"
+        ));
+        assert!(css.contains(
+            ".hl-listitembutton:focus, .hl-listitembutton:focus-visible { outline: none; background: #21252d; color: #f0f2f5; border-color: #559df7; box-shadow: inset 0 0 0 1px #559df7;"
+        ));
         assert!(css.contains(".hl-card > box { padding: 10px"));
         assert!(css.contains(".hl-card { background: #171a20; border: 1px solid #323843;"));
         assert!(css.contains("box-shadow: 0 1px 2px rgba(0,0,0,.22), inset 0 1px rgba(255,255,255,.035);"));
@@ -378,11 +396,8 @@ mod tests {
     #[test]
     fn button_sizes_have_exact_independent_control_metrics() {
         let css = super::sheet(&Theme::dark());
-        assert!(
-            css.contains(
-                "button.size-small { min-height: 28px; padding: 4px 8px; font-size: 12px; border-radius: 6px;"
-            )
-        );
+        assert!(css
+            .contains("button.size-small { min-height: 28px; padding: 4px 8px; font-size: 12px; border-radius: 6px;"));
         assert!(css.contains(
             "button.size-medium { min-height: 36px; padding: 8px 12px; font-size: 14px; border-radius: 6px;"
         ));

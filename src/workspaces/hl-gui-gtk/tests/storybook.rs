@@ -874,6 +874,63 @@ mod unix {
                 );
             }
         }
+        if story == "Button" {
+            let paned = descendants::<gtk::Paned>(&root)
+                .into_iter()
+                .next()
+                .expect("Button documentation owns desktop navigation");
+            let navigation = paned
+                .start_child()
+                .expect("wide Button documentation retains its rail");
+            let destinations = descendants::<gtk::Button>(&navigation)
+                .into_iter()
+                .filter(|button| button.has_css_class("hl-listitembutton"))
+                .collect::<Vec<_>>();
+            assert_eq!(
+                destinations.len(),
+                11,
+                "the Buttons family remains one bounded component list"
+            );
+            let heights = destinations.iter().map(|button| button.height()).collect::<Vec<_>>();
+            assert!(
+                heights.iter().all(|height| *height == 26),
+                "Storybook component rows were not exactly 26px: {heights:?}"
+            );
+            for destination in &destinations {
+                assert_eq!(destination.accessible_role(), gtk::AccessibleRole::Button);
+                assert!(
+                    destination.is_focusable(),
+                    "every Storybook component is keyboard reachable"
+                );
+                let bounds = destination
+                    .compute_bounds(&navigation)
+                    .expect("component destination belongs to the Storybook rail");
+                assert!(
+                    bounds.x() >= 4.0
+                        && bounds.x() + bounds.width() <= (navigation.width() - 4) as f32,
+                    "component destination escaped the rail's clipping-safe inset: {bounds:?}"
+                );
+            }
+            let selected = destinations
+                .iter()
+                .find(|button| button_caption(button).as_deref() == Some("Button"))
+                .expect("Button is the selected component");
+            let hovered = destinations
+                .iter()
+                .find(|button| button_caption(button).as_deref() == Some("IconButton"))
+                .expect("IconButton is the adjacent component");
+            assert!(selected.has_css_class("variant-filled"));
+            assert!(hovered.has_css_class("variant-ghost"));
+            assert!(selected.grab_focus(), "selected component accepts keyboard focus");
+            hovered.set_state_flags(gtk::StateFlags::PRELIGHT, false);
+            settle_toolkit();
+            assert!(selected.has_focus(), "selected component owns the native focus state");
+            assert!(
+                hovered.state_flags().contains(gtk::StateFlags::PRELIGHT),
+                "adjacent component exposes the native prelight state"
+            );
+            capture_story(&realized_window, "Button navigation states");
+        }
         if story == "DataTable" {
             settle_toolkit();
             let requests = surface.requests(1);

@@ -425,6 +425,60 @@ mod unix {
                 }
                 settle_toolkit();
             }
+            if fixture == "populated" && name == "workspace" && width == 1_200 {
+                let destinations = widgets_with_class(&root, "hl-navigationmenuitem");
+                assert_eq!(destinations.len(), 10, "Top renders every desktop destination once");
+                let heights = destinations.iter().map(gtk::Widget::height).collect::<Vec<_>>();
+                assert!(
+                    heights.iter().all(|height| *height == 28),
+                    "Top navigation rows were not exactly 28px: {heights:?}"
+                );
+                for destination in &destinations {
+                    assert_eq!(
+                        destination.accessible_role(),
+                        gtk::AccessibleRole::ToggleButton,
+                        "selected destinations expose native toggle semantics"
+                    );
+                    assert!(
+                        destination.is_focusable(),
+                        "every Top destination is keyboard reachable"
+                    );
+                    let bounds = destination
+                        .compute_bounds(&root)
+                        .expect("desktop destination belongs to the Top root");
+                    assert!(
+                        bounds.x() >= 4.0 && bounds.x() + bounds.width() <= 156.0,
+                        "desktop destination escaped the 4px inset of the 160px rail: {bounds:?}"
+                    );
+                }
+                let selected = destinations
+                    .iter()
+                    .find(|destination| has_label(destination, "Workspace"))
+                    .and_then(|destination| destination.downcast_ref::<gtk::ToggleButton>())
+                    .expect("Workspace is the selected desktop destination");
+                let hovered = destinations
+                    .iter()
+                    .find(|destination| has_label(destination, "Settings"))
+                    .and_then(|destination| destination.downcast_ref::<gtk::ToggleButton>())
+                    .expect("Settings is the adjacent desktop destination");
+                assert!(selected.is_active());
+                assert!(selected.has_css_class("variant-filled"));
+                assert!(selected.has_css_class("tone-accent"));
+                assert!(!hovered.is_active());
+                assert!(hovered.has_css_class("variant-ghost"));
+                assert!(hovered.has_css_class("tone-neutral"));
+                assert!(selected.grab_focus(), "selected Top destination accepts keyboard focus");
+                hovered.set_state_flags(gtk::StateFlags::PRELIGHT, false);
+                settle_toolkit();
+                assert!(
+                    selected.has_focus(),
+                    "selected Top destination owns the native focus state"
+                );
+                assert!(
+                    hovered.state_flags().contains(gtk::StateFlags::PRELIGHT),
+                    "hovered Top destination exposes the native prelight state"
+                );
+            }
             capture(&window, &format!("{capture_fixture}-{name}-{width_name}"), width, 800);
             if fixture == "populated" && name == "extensions" {
                 assert_extension_filter(
