@@ -2338,7 +2338,15 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
         if (!identity) throw new TypeError('host returned a filesystem file without an identity');
         return { text: parts.join(''), identity, bytes };
       },
-      stat: async (path) => expect(await session.call('filesystem_stat', { path }), 'entry'),
+      stat: async (path) => {
+        const entry = expect(await session.call('filesystem_stat', { path }), 'entry');
+        if (entry.path !== path) {
+          throw new TypeError(
+            `host returned filesystem metadata for ${entry.path}, expected ${path}; no file identity was assumed`,
+          );
+        }
+        return entry;
+      },
       write: (path, contents) =>
         done('filesystem_write', { path, contents: exactFileContents(contents) }),
       writeObserved: async (path, observed, contents) =>

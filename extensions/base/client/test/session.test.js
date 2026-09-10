@@ -255,6 +255,65 @@ test('real Unix range batch preserves ordered paths and one bounded frame', asyn
   }
 });
 
+test('real Unix stat rejects another file identity and preserves session health', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-stat-identity-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const calls = [];
+  const connections = new Set();
+  const server = net.createServer((socket) => {
+    connections.add(socket);
+    socket.on('close', () => connections.delete(socket));
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.kind !== KIND.request || frame.channel !== 2) continue;
+        calls.push(frame.payload);
+        const path = calls.length === 1 ? 'src/replacement.ts' : frame.payload.with.path;
+        socket.write(
+          encode({
+            channel: 2,
+            kind: KIND.response,
+            payload: {
+              reply: 'entry',
+              with: { path, directory: false, size: 12, identity: `identity:${path}` },
+            },
+          }),
+        );
+      }
+    });
+    socket.write(
+      encode({
+        channel: CONTROL,
+        kind: KIND.open,
+        payload: { protocol: 1, peer: 'stat-identity', granted: ['filesystem:read'] },
+      }),
+    );
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    const files = workspace(session).files;
+    await assert.rejects(
+      files.stat('src/index.ts'),
+      /metadata for src\/replacement\.ts, expected src\/index\.ts; no file identity was assumed/,
+    );
+    assert.deepEqual(
+      calls.map(({ call }) => call),
+      ['filesystem_stat'],
+    );
+    assert.equal((await files.stat('src/index.ts')).identity, 'identity:src/index.ts');
+    assert.deepEqual(
+      calls.map(({ call }) => call),
+      ['filesystem_stat', 'filesystem_stat'],
+    );
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('real Unix credential injection sends only the key without granting secret reads', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-credential-exec-'));
   const socketPath = path.join(directory, 'host.sock');
