@@ -1452,6 +1452,19 @@ mod unix {
                 assert!(emblem.is_visible(), "{tone} cue is hidden");
                 assert_eq!(emblem.accessible_role(), gtk::AccessibleRole::Presentation);
                 assert!(!emblem.can_focus(), "decorative {tone} icon entered keyboard order");
+                if tone == "danger" {
+                    let caption = find::<gtk::Label>(message.upcast_ref(), |caption| caption.text() == label);
+                    let ink = caption.color();
+                    assert_eq!(
+                        [
+                            (ink.red() * 255.0).round() as u8,
+                            (ink.green() * 255.0).round() as u8,
+                            (ink.blue() * 255.0).round() as u8,
+                        ],
+                        [0xff, 0x90, 0x90],
+                        "danger Alert resolves the shared AAA error-text token"
+                    );
+                }
             }
             let override_message = find::<gtk::Box>(&root, |candidate| {
                 candidate.has_css_class("hl-inlinemessage")

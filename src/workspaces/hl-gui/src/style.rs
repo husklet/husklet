@@ -437,7 +437,7 @@ impl Theme {
             (Token::Accent, Rgb::new(0x55, 0x9d, 0xf7)),
             (Token::Positive, Rgb::new(0x3f, 0xb9, 0x50)),
             (Token::Warning, Rgb::new(0xd2, 0x9a, 0x2c)),
-            (Token::Danger, Rgb::new(0xe5, 0x53, 0x53)),
+            (Token::Danger, Rgb::new(0xff, 0x90, 0x90)),
             (Token::Info, Rgb::new(0x6d, 0x8b, 0xa8)),
         ];
         Self {
@@ -541,6 +541,19 @@ mod tests {
         }
         assert_eq!(theme.color(Token::TextDim), Rgb::new(0xbe, 0xc5, 0xcf));
         assert_eq!(theme.color(Token::TextFaint), Rgb::new(0xa9, 0xb0, 0xbc));
+    }
+
+    #[test]
+    fn dark_theme_danger_text_meets_aaa_on_every_application_surface() {
+        let theme = Theme::dark();
+        let danger = theme.color(Token::Danger);
+        for background in [Token::Ground, Token::Surface, Token::Raised] {
+            assert!(
+                contrast(danger, theme.color(background)) >= 7.0,
+                "Danger does not meet 7:1 AAA contrast on {background:?}"
+            );
+        }
+        assert_eq!(danger, Rgb::new(0xff, 0x90, 0x90));
     }
 
     #[test]

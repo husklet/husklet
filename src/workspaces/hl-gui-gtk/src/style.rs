@@ -505,7 +505,7 @@ mod tests {
         ));
         assert!(!css.contains("checkbutton:focus, checkbutton:focus-visible {"));
         assert!(css.contains(
-            "entry.tone-danger, .hl-entry.tone-danger { border-color: #e55353; box-shadow: 0 0 0 1px #e55353;"
+            "entry.tone-danger, .hl-entry.tone-danger { border-color: #ff9090; box-shadow: 0 0 0 1px #ff9090;"
         ));
         assert!(css.contains(".hl-table { background: #0f1115; border: 1px solid #323843;"));
         assert!(css.contains(".hl-tablehead .hl-tablecell { background: #21252d;"));
