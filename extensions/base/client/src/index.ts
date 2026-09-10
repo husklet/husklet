@@ -37,6 +37,7 @@ import type {
   ExtensionSummary,
   FileEntry,
   JsonState,
+  NetworkInventory,
   PaneChange,
   Session as ClientSession,
   StateCodec,
@@ -813,6 +814,14 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
       throw new TypeError('host returned duplicate tab identities; no tab selection was assumed');
     }
     return tabs;
+  };
+  const exactNetworks = <Networks extends { id: string }[]>(networks: Networks) => {
+    if (new Set(networks.map(({ id }) => id)).size !== networks.length) {
+      throw new TypeError(
+        'host returned duplicate immutable network identities; no network selection was assumed',
+      );
+    }
+    return networks;
   };
   const exactTopology = <
     Topology extends { active_tab?: string | null; tabs: { id: string; root: IdentityLayout }[] },
@@ -1741,7 +1750,11 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
         }),
     },
     networks: {
-      inventory: async () => expect(await session.call('network_list'), 'networks'),
+      inventory: async () => {
+        const inventory = expect(await session.call('network_list'), 'networks');
+        exactNetworks(inventory.networks);
+        return inventory;
+      },
       list: async () => (await api.networks.inventory()).networks,
       inspect: async (reference) =>
         expect(await session.call('network_inspect', { reference }), 'network'),
@@ -2809,7 +2822,16 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
   api.watchVolumes = (listener) =>
     api.watchVolumeInventory((inventory) => listener(inventory.volumes));
   api.watchNetworkInventory = (listener) =>
-    watch('networks', 'networks', listener, 'network inventory');
+    watch(
+      'networks',
+      'networks',
+      (value) => {
+        const inventory = value as NetworkInventory;
+        exactNetworks(inventory.networks);
+        return listener(inventory);
+      },
+      'network inventory',
+    );
   api.watchNetworks = (listener) =>
     api.watchNetworkInventory((inventory) => listener(inventory.networks));
   api.images.removeAndWait = async (reference, { timeoutMs = 30_000 } = {}) => {
