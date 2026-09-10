@@ -1031,8 +1031,30 @@ impl ExtensionStateStore for CredentialPort {
         self.read.set(true);
         assert_eq!(key, "postgres.password");
         Ok(ExtensionCredential {
+            key: key.to_owned(),
             revision: 1,
             value: Some(b"sentinel-password".to_vec()),
+        })
+    }
+}
+
+struct MismatchedCredentialPort;
+
+impl ExtensionStateStore for MismatchedCredentialPort {
+    fn read(&self) -> Result<ExtensionState, HostError> {
+        unreachable!()
+    }
+    fn write(&self, _observed: &str, _contents: &[u8]) -> Result<String, HostError> {
+        unreachable!()
+    }
+    fn clear(&self, _observed: &str) -> Result<(), HostError> {
+        unreachable!()
+    }
+    fn credential(&self, _key: &str) -> Result<ExtensionCredential, HostError> {
+        Ok(ExtensionCredential {
+            key: "production.password".into(),
+            revision: 1,
+            value: Some(b"secret".to_vec()),
         })
     }
 }
@@ -3990,6 +4012,19 @@ fn credential_execution_requires_both_grants_and_resolves_only_inside_the_host()
     );
     assert!(state.read.get());
     assert_eq!(host.ledger.reached(), vec!["containers.list", "containers.exec"]);
+}
+
+#[test]
+fn credential_read_rejects_a_host_value_for_another_key() {
+    let host = Host::new();
+    let mut client = session(&[Capability::CredentialRead], &[]);
+    let result = client.dispatch(
+        &Request::CredentialRead {
+            key: "postgres.password".into(),
+        },
+        &services_with_state(&host, &MismatchedCredentialPort),
+    );
+    assert!(matches!(result, Err(Failure::Failed { detail }) if detail.contains("another key")));
 }
 
 #[test]

@@ -1000,7 +1000,10 @@ test('real Unix credential calls reveal only the named value and preserve CAS fr
         calls.push(frame.payload);
         const reply =
           frame.payload.call === 'credential_read'
-            ? { reply: 'credential', with: { revision: 7, value: [0, 255, 10] } }
+            ? {
+                reply: 'credential',
+                with: { key: 'postgres.password', revision: 7, value: [0, 255, 10] },
+              }
             : { reply: 'revision', with: frame.payload.call === 'credential_set' ? 8 : 9 };
         socket.write(encode({ channel: frame.channel, kind: KIND.response, payload: reply }));
       }
@@ -1022,6 +1025,7 @@ test('real Unix credential calls reveal only the named value and preserve CAS fr
     const session = await connect({ path: socketPath });
     const credentials = workspace(session).credentials;
     assert.deepEqual(await credentials.read('postgres.password'), {
+      key: 'postgres.password',
       revision: 7,
       value: [0, 255, 10],
     });
@@ -1035,6 +1039,59 @@ test('real Unix credential calls reveal only the named value and preserve CAS fr
       },
       { call: 'credential_remove', with: { observed: 8, key: 'postgres.password' } },
     ]);
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('real Unix credential read rejects another key without mutation and preserves session health', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-credential-identity-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const calls = [];
+  const connections = new Set();
+  const server = net.createServer((socket) => {
+    connections.add(socket);
+    socket.on('close', () => connections.delete(socket));
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.kind !== KIND.request || frame.channel !== 2) continue;
+        calls.push(frame.payload.call);
+        socket.write(
+          encode({
+            channel: 2,
+            kind: KIND.response,
+            payload: {
+              reply: 'credential',
+              with: {
+                key: calls.length === 1 ? 'production.password' : 'postgres.password',
+                revision: 7,
+                value: [115, 101, 99, 114, 101, 116],
+              },
+            },
+          }),
+        );
+      }
+    });
+    socket.write(
+      encode({
+        channel: CONTROL,
+        kind: KIND.open,
+        payload: { protocol: 1, peer: 'postgres', granted: ['credentials:read'] },
+      }),
+    );
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    const credentials = workspace(session).credentials;
+    await assert.rejects(credentials.read('postgres.password'), /credential production.password/);
+    assert.deepEqual(calls, ['credential_read'], 'rejection emits no follow-up or mutation');
+    assert.equal((await credentials.read('postgres.password')).key, 'postgres.password');
+    assert.deepEqual(calls, ['credential_read', 'credential_read']);
     await session.close();
   } finally {
     for (const connection of connections) connection.destroy();

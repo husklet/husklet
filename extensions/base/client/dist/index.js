@@ -1989,7 +1989,14 @@ export function workspace(session, { signal } = {}) {
             remove: async (observed, key) => expect(await session.call('preference_remove', { observed, key }), 'revision'),
         },
         credentials: {
-            read: async (key) => expect(await session.call('credential_read', { key: exactCredentialKey(key) }), 'credential'),
+            read: async (key) => {
+                const exactKey = exactCredentialKey(key);
+                const credential = expect(await session.call('credential_read', { key: exactKey }), 'credential');
+                if (credential.key !== exactKey) {
+                    throw new TypeError(`host returned credential ${credential.key}, expected ${exactKey}; no credential value was assumed`);
+                }
+                return credential;
+            },
             set: async (observed, key, value) => expect(await session.call('credential_set', {
                 observed,
                 key: exactCredentialKey(key),

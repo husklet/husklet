@@ -1474,6 +1474,7 @@ pub struct ExtensionPreferences {
 /// revision so creation is protected against stale concurrent writes.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct ExtensionCredential {
+    pub key: String,
     pub revision: u64,
     pub value: Option<Vec<u8>>,
 }

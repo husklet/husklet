@@ -382,7 +382,7 @@ impl ExtensionStateStore for StateBlob {
     fn credential(&self, key: &str) -> Result<ExtensionCredential, HostError> {
         let lock = self.lock()?; fs2::FileExt::lock_shared(&lock).map_err(Self::failure)?;
         let credentials = self.read_credentials_unlocked()?;
-        Ok(ExtensionCredential { revision: credentials.revision, value: credentials.entries.iter().find(|(current, _)| current == key).map(|(_, value)| value.clone()) })
+        Ok(ExtensionCredential { key: key.to_owned(), revision: credentials.revision, value: credentials.entries.iter().find(|(current, _)| current == key).map(|(_, value)| value.clone()) })
     }
 
     fn credential_set(&self, observed: u64, key: &str, value: &[u8]) -> Result<u64, HostError> {
@@ -488,7 +488,7 @@ mod tests {
         let path = root.path().join("extensions/state/postgres.credentials");
         assert_eq!(std::fs::metadata(path).unwrap().permissions().mode() & 0o077, 0);
         let removed = reopened.credential_remove(revision, "password").unwrap();
-        assert_eq!(reopened.credential("password").unwrap(), hl_extension::port::ExtensionCredential { revision: removed, value: None });
+        assert_eq!(reopened.credential("password").unwrap(), hl_extension::port::ExtensionCredential { key: "password".into(), revision: removed, value: None });
     }
 
     #[test]

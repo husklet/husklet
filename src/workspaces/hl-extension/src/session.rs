@@ -1888,6 +1888,11 @@ impl Session {
             Request::CredentialRead { key } => {
                 validate_credential_key(key)?;
                 let credential = port.credential(key)?;
+                if credential.key != *key {
+                    return Err(Failure::Failed {
+                        detail: "host returned a credential for another key".into(),
+                    });
+                }
                 if credential
                     .value
                     .as_ref()

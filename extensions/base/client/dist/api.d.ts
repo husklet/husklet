@@ -560,6 +560,7 @@ export interface ExtensionState {
 }
 /** Host-protected per-extension credential; private file isolation, not encryption or a keychain. */
 export interface ExtensionCredential {
+    key: string;
     revision: number;
     value?: number[] | null;
 }

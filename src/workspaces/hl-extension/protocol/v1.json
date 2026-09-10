@@ -1970,6 +1970,13 @@
     "ExtensionCredential": {
       "fields": [
         {
+          "name": "key",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
           "name": "revision",
           "optional": false,
           "schema": {
@@ -13716,7 +13723,7 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:568ecc10fdacc838",
+  "source_fingerprint": "fnv1a64:d7489dacae2c2e64",
   "specification_version": 1,
   "topics": [
     {
