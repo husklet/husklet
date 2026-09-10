@@ -34,7 +34,8 @@ expect_literal extensions/base/Dockerfile 'LABEL husklet.extension.npm.version="
 expect_literal .github/scripts/smoke-extension-image.sh '[[ "$node_version" == 22.23.2 ]] || fail "$image does not carry the pinned Node version"'
 expect_literal .github/scripts/smoke-extension-image.sh '[[ "$npm_version" == 10.9.8 ]] || fail "$image does not carry the pinned npm version"'
 expect_literal .github/scripts/smoke-extension-image.sh '      import { connect as clientConnect } from "@husklet/client";'
-expect_literal .github/scripts/smoke-extension-image.sh '  [[ "$(inspect '"'"'{{json .Config.Cmd}}'"'"')" == '"'"'["node","/app/dist/main.js"]'"'"' ]] \'
+expect_literal .github/scripts/smoke-extension-image.sh '  [[ "$(inspect '"'"'{{json .Config.Entrypoint}}'"'"')" == '"'"'["/usr/local/bin/node"]'"'"' ]] \'
+expect_literal .github/scripts/smoke-extension-image.sh '  [[ "$(inspect '"'"'{{json .Config.Cmd}}'"'"')" == '"'"'["/app/dist/main.js"]'"'"' ]] \'
 expect_literal .github/scripts/smoke-extension-image.sh '      if (!fs.statSync("/app/dist/main.js").isFile()) throw new Error("entrypoint missing");'
 
 node -e '

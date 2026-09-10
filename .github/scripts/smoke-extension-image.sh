@@ -70,8 +70,10 @@ if [[ "$kind" == base ]]; then
 else
   [[ "$(inspect '{{index .Config.Labels "husklet.extension.manifest"}}')" == /etc/husklet/extension.toml ]] \
     || fail "$image does not point at its packaged manifest"
-  [[ "$(inspect '{{json .Config.Cmd}}')" == '["node","/app/dist/main.js"]' ]] \
-    || fail "$image does not launch its packaged entrypoint"
+  [[ "$(inspect '{{json .Config.Entrypoint}}')" == '["/usr/local/bin/node"]' ]] \
+    || fail "$image does not launch with the packaged Node runtime"
+  [[ "$(inspect '{{json .Config.Cmd}}')" == '["/app/dist/main.js"]' ]] \
+    || fail "$image does not pass its packaged application to Node"
   docker run --rm --platform "$platform" --entrypoint node \
     -e EXPECTED_VERSION="$version" -e EXPECTED_EXTENSION="$kind" "$image" --input-type=module --eval '
       import fs from "node:fs";
