@@ -439,6 +439,11 @@ impl Sidecar {
             self.remove(target)?;
             return Ok(None);
         }
+        if container.state.activity.restarting {
+            return Err(HostError::Conflict(
+                "the extension container is restarting; retry after its lifecycle transition finishes".to_owned(),
+            ));
+        }
         if container.state.activity.paused {
             self.unpause(spec.container())?;
             return Ok(Some(Outcome::Resumption));
@@ -819,6 +824,48 @@ mod tests {
             ],
             "availability is reported only after the paused process is resumed"
         );
+    }
+
+    #[test]
+    fn ensure_reports_restarting_without_sending_an_invalid_start() {
+        for running in [false, true] {
+            let temporary = tempfile::tempdir().expect("temporary directory");
+            let socket = temporary.path().join("docker.sock");
+            let listener = UnixListener::bind(&socket).expect("mock Docker socket");
+            let wanted = spec().generation(42);
+            let signature = wanted.signature();
+            let served = std::thread::spawn(move || {
+                let labels = format!(
+                    r#"{{"{SIGNATURE_LABEL}":"{signature}","{NAME_LABEL}":"sample","{GENERATION_LABEL}":"42"}}"#
+                );
+                let restarting = inspection("restarting-id", &labels)
+                    .replace("\"Restarting\":false", "\"Restarting\":true")
+                    .replace("\"Running\":true", &format!("\"Running\":{running}"));
+                let mut stream = accept_bounded(&listener);
+                stream
+                    .set_read_timeout(Some(Duration::from_millis(250)))
+                    .expect("read timeout");
+                let request = read_request(&mut stream).expect("inspect request");
+                respond(&mut stream, "200 OK", restarting.as_bytes());
+                assert!(
+                    read_request(&mut stream).is_none(),
+                    "a restarting container received another lifecycle request"
+                );
+                request
+            });
+            let bridge = Arc::new(super::super::Bridge::new(socket).expect("bridge"));
+
+            let failure = Sidecar::new(bridge)
+                .ensure(&wanted)
+                .expect_err("restart is not readiness");
+
+            assert!(failure.to_string().contains("restarting"));
+            assert!(failure.to_string().contains("retry"));
+            assert_eq!(
+                served.join().expect("daemon joined"),
+                "GET /v1.43/containers/extension%2Dsample/json?size=false"
+            );
+        }
     }
 
     #[test]
