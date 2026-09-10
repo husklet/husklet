@@ -815,6 +815,14 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
     }
     return tabs;
   };
+  const exactImages = <Images extends { id: string }[]>(images: Images) => {
+    if (new Set(images.map(({ id }) => id)).size !== images.length) {
+      throw new TypeError(
+        'host returned duplicate immutable image identities; no image selection was assumed',
+      );
+    }
+    return images;
+  };
   const exactNetworks = <Networks extends { id: string }[]>(networks: Networks) => {
     if (new Set(networks.map(({ id }) => id)).size !== networks.length) {
       throw new TypeError(
@@ -1753,7 +1761,11 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
           .then((reply) => expect(reply, 'identity')),
     },
     images: {
-      inventory: async () => expect(await session.call('image_list'), 'images'),
+      inventory: async () => {
+        const inventory = expect(await session.call('image_list'), 'images');
+        exactImages(inventory.images);
+        return inventory;
+      },
       list: async () => (await api.images.inventory()).images,
       inspect: async (reference) => {
         const image = expect(await session.call('image_inspect', { reference }), 'image_details');
