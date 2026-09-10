@@ -1,6 +1,6 @@
 //! First-party extensions installed while a workspace is provisioned.
 
-use hl_extension::{ExtensionName, Stage};
+use hl_extension::{Activation, ExtensionName, Stage};
 
 use super::{Candidate, Roster};
 use crate::config::WorkspaceConfig;
@@ -41,6 +41,12 @@ fn install_defaults_with(
             return Err(format!(
                 "default extension {expected} {version} could not be installed from public image {reference}: the image declares extension {}, expected {expected}; verify the image publisher and manifest, then retry workspace provisioning",
                 candidate.manifest.name,
+                version = env!("CARGO_PKG_VERSION")
+            ));
+        }
+        if candidate.manifest.activation != Activation::Workspace || candidate.manifest.interface.is_none() {
+            return Err(format!(
+                "default extension {expected} {version} could not be installed from public image {reference}: its manifest must provide a workspace-activated interface; verify the image publisher and manifest, then retry workspace provisioning",
                 version = env!("CARGO_PKG_VERSION")
             ));
         }
@@ -250,6 +256,77 @@ mod tests {
         let entries = Roster::workspace(&workspace).unwrap().entries();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].name.as_str(), "top");
+        assert_eq!(entries[0].image_digest, "sha256:top");
+        assert_eq!(entries[0].stage, Stage::Duty);
+    }
+
+    #[test]
+    fn unusable_default_surface_is_rejected_and_a_corrected_retry_reaches_duty() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut workspace = WorkspaceConfig::new("demo", "alpine:3.20", hl_ws::Arch::Amd64);
+        workspace.storage = Some(directory.path().join("workspace"));
+        let candidate = |reference: &str, activation, interface| Candidate {
+            reference: reference.to_owned(),
+            digest: "sha256:top".to_owned(),
+            manifest: Manifest {
+                name: ExtensionName::new("top").unwrap(),
+                display_name: "Top".into(),
+                version: env!("CARGO_PKG_VERSION").to_owned(),
+                protocol: hl_extension::PROTOCOL,
+                capabilities: Grant::new([Capability::WorkspaceRead, Capability::Interface]),
+                entrypoint: None,
+                activation,
+                interface,
+                pane_providers: Vec::new(),
+                resources: Resources::default(),
+                containers: hl_extension::ContainerGrant::default(),
+                images: hl_extension::ImageGrant::default(),
+                networks: hl_extension::NetworkGrant::default(),
+                volumes: hl_extension::VolumeGrant::default(),
+                filesystem: hl_extension::FilesystemGrant::default(),
+                workspace_environment: hl_extension::WorkspaceEnvironmentGrant::default(),
+            },
+        };
+
+        let error = install_defaults_with(&workspace, |_, reference| {
+            Ok(candidate(
+                reference,
+                Activation::Manual,
+                Some(Presentation {
+                    tab_title: "Top".into(),
+                    icon: None,
+                }),
+            ))
+        })
+        .expect_err("manually activated default surface");
+
+        assert!(error.contains(DEFAULT_EXTENSIONS[0].1));
+        assert!(error.contains("must provide a workspace-activated interface"));
+        assert!(error.contains("verify the image publisher and manifest"));
+        assert!(error.contains("retry workspace provisioning"));
+        assert!(Roster::workspace(&workspace).unwrap().entries().is_empty());
+
+        let error = install_defaults_with(&workspace, |_, reference| {
+            Ok(candidate(reference, Activation::Workspace, None))
+        })
+        .expect_err("default without an interface");
+        assert!(error.contains("must provide a workspace-activated interface"));
+        assert!(Roster::workspace(&workspace).unwrap().entries().is_empty());
+
+        install_defaults_with(&workspace, |_, reference| {
+            Ok(candidate(
+                reference,
+                Activation::Workspace,
+                Some(Presentation {
+                    tab_title: "Top".into(),
+                    icon: None,
+                }),
+            ))
+        })
+        .expect("corrected retry");
+
+        let entries = Roster::workspace(&workspace).unwrap().entries();
+        assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].image_digest, "sha256:top");
         assert_eq!(entries[0].stage, Stage::Duty);
     }
