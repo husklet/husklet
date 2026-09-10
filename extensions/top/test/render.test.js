@@ -2294,36 +2294,58 @@ test('extension review grants one exact network without workspace-wide network a
 test('extension image entry submits from the keyboard and consent explains requested authority', async () => {
   const calls = [];
   let installs = 0;
+  let acquisitionState = 'ready';
+  let committed = false;
   const stage = host();
   stage.render(
     h(Extensions, {
       api: {
         extensions: {
-          list: async () => [],
+          list: async () =>
+            committed
+              ? [
+                  {
+                    name: 'assistant',
+                    version: '1.2.0',
+                    image_digest: `sha256:${'a'.repeat(64)}`,
+                    enabled: false,
+                    status: 'standby',
+                  },
+                ]
+              : [],
           startAcquisition: async (reference) => {
             calls.push(['inspect', reference]);
+            acquisitionState = 'ready';
             return { job: 'candidate' };
           },
           acquisition: async () => ({
             job: 'candidate',
             reference: 'registry.example/assistant:1.2.0',
             revision: 7,
-            state: 'ready',
+            state: acquisitionState,
             progress: null,
-            candidate: {
-              name: 'assistant',
-              version: '1.2.0',
-              image_digest: `sha256:${'a'.repeat(64)}`,
-              installed_image_digest: null,
-              requested: ['containers:read', 'terminals:output'],
-            },
-            error: null,
+            candidate:
+              acquisitionState === 'ready'
+                ? {
+                    name: 'assistant',
+                    version: '1.2.0',
+                    image_digest: `sha256:${'a'.repeat(64)}`,
+                    installed_image_digest: null,
+                    requested: ['containers:read', 'terminals:output'],
+                  }
+                : null,
+            error: acquisitionState === 'failed' ? 'signature verification unavailable' : null,
           }),
           installAndWait: async (job, revision, granted) => {
             calls.push(['install', job, revision, granted]);
             installs += 1;
-            if (installs === 1) throw new Error('signature verification unavailable');
-            return { changed: true, extension: { name: 'assistant' } };
+            if (installs === 1) {
+              acquisitionState = 'failed';
+              throw new Error('signature verification unavailable');
+            }
+            committed = true;
+            acquisitionState = 'installed';
+            throw new Error('connection closed before install reply');
           },
         },
         watchExtensions: async () => () => {},
@@ -2391,15 +2413,26 @@ test('extension image entry submits from the keyboard and consent explains reque
   await settled();
   assert.ok(labelled(stage, 'signature verification unavailable'));
   assert.ok(
-    labelled(stage, 'Install with selected access'),
-    'failed installation retains a direct retry',
+    labelled(stage, 'Retry inspection'),
+    'a consumed failed job asks for a fresh inspection rather than replaying stale consent',
   );
+  invoke(stage, 'Retry inspection');
+  await settled();
+  await settled();
+  assert.ok(labelled(stage, 'No access selected · 2 requested'));
+  toggleSwitch(stage, 2, true);
+  toggleSwitch(stage, 3, true);
   invoke(stage, 'Install with selected access');
   await settled();
   await settled();
   assert.deepEqual(calls.at(-1).slice(0, 3), ['install', 'candidate', 7]);
   assert.deepEqual(calls.at(-1)[3].capabilities, ['containers:read', 'terminals:output']);
-  assert.ok(labelled(stage, 'assistant installed and verified.'));
+  assert.ok(
+    labelled(
+      stage,
+      'assistant installed, but the confirmation reply was lost. Current extension state was verified by refresh.',
+    ),
+  );
 });
 
 test('a ready extension review can be abandoned without granting authority', async () => {

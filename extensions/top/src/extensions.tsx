@@ -639,6 +639,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
     )
       return;
     const updating = Boolean(acquisition.candidate.installed_image_digest);
+    const reviewed = acquisition.candidate;
     setBusy(updating ? 'update' : 'install');
     setError('');
     setNotice(null);
@@ -671,7 +672,34 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
             },
       );
     } catch (cause) {
-      setError(message(cause));
+      try {
+        const status = await api.extensions.acquisition(acquisition.job);
+        if (status.state === 'failed' || status.state === 'cancelled') {
+          setAcquisition(status);
+          setError('');
+        } else if (status.state === 'installed' || status.state === 'updated') {
+          const listing = await api.extensions.list();
+          const committed = listing.find(
+            (extension) =>
+              extension.name === reviewed.name && extension.image_digest === reviewed.image_digest,
+          );
+          if (committed) {
+            setInstalled(listing);
+            setAcquisition(null);
+            setReference('');
+            setNotice({
+              label: `${reviewed.name} ${updating ? 'updated' : 'installed'}, but the confirmation reply was lost. Current extension state was verified by refresh.`,
+              uncertain: false,
+            });
+          } else {
+            setError(message(cause));
+          }
+        } else {
+          setError(message(cause));
+        }
+      } catch {
+        setError(message(cause));
+      }
     } finally {
       setBusy('');
     }
