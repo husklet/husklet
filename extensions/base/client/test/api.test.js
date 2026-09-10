@@ -3936,7 +3936,7 @@ test('terminal topology, bounded input, grid resize and retitle use exact typed 
     call: 'terminal_close_pane_observed',
     with: { slot: 's1', generation: 4, revision: 7 },
   });
-  const tree = { active_tab: 't1', tabs: [] };
+  const tree = { active_tab: null, tabs: [] };
   stage.host.write(
     encode({ channel: 2, kind: KIND.response, payload: { reply: 'topology', with: tree } }),
   );
