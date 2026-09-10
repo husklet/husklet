@@ -1,6 +1,6 @@
 //! First-party extensions installed while a workspace is provisioned.
 
-use hl_extension::{Activation, ExtensionName, Stage};
+use hl_extension::{Activation, ExtensionName, Manifest, Stage};
 
 use super::{Candidate, Roster};
 use crate::config::WorkspaceConfig;
@@ -44,9 +44,9 @@ fn install_defaults_with(
                 version = env!("CARGO_PKG_VERSION")
             ));
         }
-        if candidate.manifest.activation != Activation::Workspace || candidate.manifest.interface.is_none() {
+        if !provides_default_surface(&candidate.manifest) {
             return Err(format!(
-                "default extension {expected} {version} could not be installed from public image {reference}: its manifest must provide a workspace-activated interface; verify the image publisher and manifest, then retry workspace provisioning",
+                "default extension {expected} {version} could not be installed from public image {reference}: its manifest must provide an automatically activated interface; verify the image publisher and manifest, then retry workspace provisioning",
                 version = env!("CARGO_PKG_VERSION")
             ));
         }
@@ -96,6 +96,10 @@ fn install_defaults_with(
     Ok(())
 }
 
+fn provides_default_surface(manifest: &Manifest) -> bool {
+    manifest.interface.is_some() && matches!(manifest.activation, Activation::Workspace | Activation::Tab)
+}
+
 fn moment() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -105,7 +109,7 @@ fn moment() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hl_extension::{Activation, Capability, Grant, Manifest, Presentation, Resources};
+    use hl_extension::{Activation, Capability, Grant, Presentation, Resources};
 
     #[test]
     fn defaults_are_release_matched_and_sidebar_ordered() {
@@ -301,7 +305,7 @@ mod tests {
         .expect_err("manually activated default surface");
 
         assert!(error.contains(DEFAULT_EXTENSIONS[0].1));
-        assert!(error.contains("must provide a workspace-activated interface"));
+        assert!(error.contains("must provide an automatically activated interface"));
         assert!(error.contains("verify the image publisher and manifest"));
         assert!(error.contains("retry workspace provisioning"));
         assert!(Roster::workspace(&workspace).unwrap().entries().is_empty());
@@ -310,13 +314,13 @@ mod tests {
             Ok(candidate(reference, Activation::Workspace, None))
         })
         .expect_err("default without an interface");
-        assert!(error.contains("must provide a workspace-activated interface"));
+        assert!(error.contains("must provide an automatically activated interface"));
         assert!(Roster::workspace(&workspace).unwrap().entries().is_empty());
 
         install_defaults_with(&workspace, |_, reference| {
             Ok(candidate(
                 reference,
-                Activation::Workspace,
+                Activation::Tab,
                 Some(Presentation {
                     tab_title: "Top".into(),
                     icon: None,
@@ -329,6 +333,18 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].image_digest, "sha256:top");
         assert_eq!(entries[0].stage, Stage::Duty);
+    }
+
+    #[test]
+    fn checked_in_top_manifest_provides_the_default_surface_contract() {
+        let manifest = Manifest::parse(
+            include_str!("../../../../../extensions/top/extension.toml"),
+            hl_extension::PROTOCOL,
+        )
+        .expect("checked-in Top manifest");
+
+        assert_eq!(manifest.activation, Activation::Tab);
+        assert!(provides_default_surface(&manifest));
     }
 
     #[test]
