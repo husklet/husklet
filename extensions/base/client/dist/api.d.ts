@@ -707,6 +707,11 @@ export declare class ExecutionOutputProtocolError extends Error {
     readonly after: number;
     readonly next: number;
 }
+/** One bounded structured-output record was not valid JSON. */
+export declare class JsonLineParseError extends SyntaxError {
+    readonly line: number;
+    readonly cause: unknown;
+}
 export declare class TerminalOperationError extends Error {
     readonly operation: 'open-tab';
     readonly result: Readonly<{

@@ -11,6 +11,7 @@ import {
   ExecutionOperationError,
   ExecutionOutputGapError,
   ExecutionOutputProtocolError,
+  JsonLineParseError,
   Session,
   TerminalOperationError,
   workspace,
@@ -2729,6 +2730,104 @@ test('real Unix execution cancellation is one bounded ordered operation', async 
         call: 'execution_cancel',
         with: { id: executionId, signal: 'SIGINT', timeout_ms: 750 },
       },
+    ]);
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('real Unix structured execution identifies the malformed record and preserves recovery', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-json-line-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const containerId = 'c'.repeat(64);
+  const executionId = 'e'.repeat(32);
+  const requests = [];
+  const connections = new Set();
+  const server = net.createServer((socket) => {
+    connections.add(socket);
+    socket.on('close', () => connections.delete(socket));
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.kind !== KIND.request) continue;
+        requests.push(frame.payload.call);
+        const payload =
+          frame.payload.call === 'container_exec'
+            ? { reply: 'identity', with: executionId }
+            : frame.payload.call === 'execution_output'
+              ? {
+                  reply: 'execution_output',
+                  with: {
+                    entries: [
+                      {
+                        sequence: 1,
+                        timestamp_ms: 1,
+                        stream: 'stdout',
+                        bytes: [...Buffer.from('{"ok":true}\nnot-json\n')],
+                      },
+                    ],
+                    next: 1,
+                    more: false,
+                    eof: true,
+                    gap: false,
+                  },
+                }
+              : frame.payload.call === 'workspace_info'
+                ? {
+                    reply: 'workspace',
+                    with: { name: 'tests', image: 'toolbox', architecture: 'amd64' },
+                  }
+                : { reply: 'done' };
+        socket.write(encode({ channel: frame.channel, kind: KIND.response, payload }));
+      }
+    });
+    socket.write(
+      encode({
+        channel: CONTROL,
+        kind: KIND.open,
+        payload: {
+          protocol: 1,
+          peer: 'structured-test-runner',
+          granted: [
+            'containers:read',
+            'containers:execute',
+            'containers:lifecycle',
+            'workspaces:read',
+          ],
+        },
+      }),
+    );
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    const values = [];
+    await assert.rejects(
+      workspace(session).containers.execJsonLines(
+        containerId,
+        3,
+        { command: ['test', '--reporter=jsonl'], maxLineBytes: 4096 },
+        (value) => values.push(value),
+      ),
+      (error) =>
+        error instanceof ExecutionOperationError &&
+        error.executionId === executionId &&
+        error.phase === 'output' &&
+        error.cause instanceof JsonLineParseError &&
+        error.cause.line === 2 &&
+        error.cause.cause instanceof SyntaxError,
+    );
+    assert.deepEqual(values, [{ ok: true }]);
+    assert.deepEqual(requests, ['container_exec', 'execution_output', 'execution_cancel']);
+    assert.equal((await workspace(session).info()).name, 'tests');
+    assert.deepEqual(requests, [
+      'container_exec',
+      'execution_output',
+      'execution_cancel',
+      'workspace_info',
     ]);
     await session.close();
   } finally {

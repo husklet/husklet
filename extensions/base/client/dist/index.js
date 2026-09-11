@@ -44,6 +44,16 @@ export class ExecutionOutputProtocolError extends Error {
         this.next = next;
     }
 }
+/** One bounded structured-output record was not valid JSON. */
+export class JsonLineParseError extends SyntaxError {
+    line;
+    constructor(line, cause) {
+        super(`execution output line ${line} is not valid JSON`);
+        this.name = 'JsonLineParseError';
+        this.line = line;
+        this.cause = cause;
+    }
+}
 /** Catalogue discovery was bounded before it became a complete searchable set. */
 export class IncompleteCatalogueError extends Error {
     received;
@@ -1376,7 +1386,14 @@ export function workspace(session, { signal } = {}) {
                 if (typeof onValue !== 'function')
                     throw new TypeError('JSON lines execution requires a value callback');
                 return api.containers.execLines(id, generation, configuration, async (text, line) => {
-                    await onValue(JSON.parse(text), line);
+                    let value;
+                    try {
+                        value = JSON.parse(text);
+                    }
+                    catch (cause) {
+                        throw new JsonLineParseError(line, cause);
+                    }
+                    await onValue(value, line);
                 });
             },
             attachTerminal: (id, command) => session

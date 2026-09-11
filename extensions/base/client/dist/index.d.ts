@@ -24,6 +24,11 @@ export declare class ExecutionOutputProtocolError extends Error {
     readonly next: any;
     constructor(executionId: any, after: any, next: any, detail: any);
 }
+/** One bounded structured-output record was not valid JSON. */
+export declare class JsonLineParseError extends SyntaxError {
+    readonly line: any;
+    constructor(line: any, cause: any);
+}
 /** Catalogue discovery was bounded before it became a complete searchable set. */
 export declare class IncompleteCatalogueError extends Error {
     readonly received: any;
