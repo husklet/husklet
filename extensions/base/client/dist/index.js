@@ -83,6 +83,15 @@ function exactExecutionPageLimit(limit) {
     }
     return limit;
 }
+function exactExecutionOutputPage(page, limit) {
+    if (page.entries.length > limit) {
+        throw new TypeError('host returned an execution output page that exceeded its requested entry limit');
+    }
+    if (page.entries.some(({ stream }) => stream !== 'stdout' && stream !== 'stderr')) {
+        throw new TypeError('host returned an execution output entry with an unknown stream');
+    }
+    return page;
+}
 function exactExecutionPollInterval(pollIntervalMs) {
     if (!Number.isSafeInteger(pollIntervalMs) || pollIntervalMs < 10 || pollIntervalMs > 60_000) {
         throw new RangeError('execution output poll interval must be between 10 and 60000ms');
@@ -958,11 +967,11 @@ export function workspace(session, { signal } = {}) {
                 if (!Number.isSafeInteger(after) || after < 0)
                     throw new RangeError('execution output cursor must be a nonnegative safe integer');
                 exactExecutionPageLimit(limit);
-                return expect(await session.call('execution_output', {
+                return exactExecutionOutputPage(expect(await session.call('execution_output', {
                     id: immutableIdentity(id, [32], 'execution'),
                     after,
                     limit,
-                }), 'execution_output');
+                }), 'execution_output'), limit);
             },
             executionOutputPages: async function* (id, { after = 0, limit = 16, pollIntervalMs = 50, signal, } = {}) {
                 exactExecutionPollInterval(pollIntervalMs);

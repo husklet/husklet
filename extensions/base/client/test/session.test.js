@@ -3001,7 +3001,7 @@ test('real Unix output pages apply backpressure, cancel locally, and fail closed
   }
 });
 
-test('real Unix output iteration rejects oversized pages and unflagged sequence gaps', async () => {
+test('real Unix output iteration rejects oversized pages, sequence gaps, and unknown streams', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-output-integrity-'));
   const socketPath = path.join(directory, 'host.sock');
   const executionId = 'd'.repeat(32);
@@ -3023,7 +3023,12 @@ test('real Unix output iteration rejects oversized pages and unflagged sequence 
         if (frame.payload.call === 'execution_output') {
           outputCalls += 1;
           assert.deepEqual(frame.payload.with, { id: executionId, after: 0, limit: 1 });
-          const entries = outputCalls === 1 ? [entry(1), entry(2)] : [entry(2)];
+          const entries =
+            outputCalls === 1
+              ? [entry(1), entry(2)]
+              : outputCalls === 2
+                ? [entry(2)]
+                : [{ ...entry(1), stream: 'database' }];
           socket.write(
             encode({
               channel: 2,
@@ -3077,6 +3082,10 @@ test('real Unix output iteration rejects oversized pages and unflagged sequence 
     await assert.rejects(
       host.containers.executionOutputPages(executionId, { limit: 1 }).next(),
       /entry sequence is not contiguous/,
+    );
+    await assert.rejects(
+      host.containers.executionOutputPages(executionId, { limit: 1 }).next(),
+      /unknown stream/,
     );
     assert.equal((await host.info()).name, 'demo', 'semantic rejection leaves the session usable');
     await session.close();
