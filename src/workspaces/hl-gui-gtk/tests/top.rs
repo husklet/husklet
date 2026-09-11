@@ -1175,6 +1175,26 @@ mod unix {
         ));
         let update = find_button(&review_root, "Update with selected access");
         assert!(!update.is_sensitive(), "mandatory consent cannot be omitted");
+        let grants = find_expander(&review_root, "Exact grants · 0/2 selected");
+        if !grants.is_expanded() {
+            grants.set_expanded(true);
+            settle_toolkit();
+            send_report(surface, wire, 101, |event| {
+                matches!(event, hl_gui::Event::Change { .. })
+            });
+            apply_extension_update_until(
+                wire,
+                tree,
+                surface,
+                "Render this extension interface · Required",
+                |request| match request {
+                    Request::EventUnsubscribe { .. } => Reply::Done,
+                    other => panic!("unexpected extension grant expansion call: {other:?}"),
+                },
+                || None,
+            );
+        }
+        let review_root = surface.widget().clone().upcast::<gtk::Widget>();
         let interface = find_label(&review_root, "Render this extension interface · Required")
             .mnemonic_widget()
             .and_then(|widget| widget.downcast::<gtk::Switch>().ok())
