@@ -501,7 +501,7 @@ fn select_value(widget: &gtk::Widget, node: &Node) {
 
 #[cfg(test)]
 mod tests {
-    use super::{decimal_digits, grow, height};
+    use super::{decimal_digits, grow, height, width};
     use gtk::prelude::*;
     use hl_gui::{Length, PropValue};
 
@@ -512,6 +512,19 @@ mod tests {
         assert_eq!(decimal_digits(0.25), 2);
         assert_eq!(decimal_digits(0.001), 3);
         assert_eq!(decimal_digits(0.0), 0);
+    }
+
+    #[test]
+    fn select_is_compact_until_its_author_explicitly_enables_growth() {
+        let _ = crate::test_support::on_the_toolkit_thread(|| {
+            let control: gtk::Widget = crate::component::choice::widget().upcast();
+
+            width(&control, &PropValue::Length(Length::Chars(20)));
+            assert!(!control.hexpands(), "a character width must remain compact");
+
+            grow(&control, &PropValue::Number(1.0));
+            assert!(control.hexpands(), "Grow must retain explicit fill authority");
+        });
     }
 
     #[test]

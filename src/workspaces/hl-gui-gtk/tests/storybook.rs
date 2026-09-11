@@ -246,8 +246,7 @@ mod unix {
             let titles = descendants::<gtk::Label>(&root)
                 .into_iter()
                 .filter(|label| {
-                    label.has_css_class("hl-heading")
-                        && matches!(label.text().as_str(), "Data Table" | "DataTable")
+                    label.has_css_class("hl-heading") && matches!(label.text().as_str(), "Data Table" | "DataTable")
                 })
                 .map(|label| label.text().to_string())
                 .collect::<Vec<_>>();
@@ -706,8 +705,8 @@ mod unix {
                 search.height()
             );
             assert!(search.grab_focus(), "Search accepts keyboard focus");
-            let focus = gtk::prelude::RootExt::focus(&realized_window)
-                .expect("Search delegates focus to its native editable");
+            let focus =
+                gtk::prelude::RootExt::focus(&realized_window).expect("Search delegates focus to its native editable");
             assert!(
                 focus == search.clone().upcast::<gtk::Widget>() || focus.is_ancestor(&search),
                 "Search does not own the focused native editable"
@@ -735,7 +734,11 @@ mod unix {
             assert!(view.is_editable());
             assert!(view.is_monospace());
             assert_eq!(view.wrap_mode(), gtk::WrapMode::WordChar);
-            assert!((104..=120).contains(&editor.height()), "TextArea is {}px tall", editor.height());
+            assert!(
+                (104..=120).contains(&editor.height()),
+                "TextArea is {}px tall",
+                editor.height()
+            );
             assert!(view.grab_focus(), "TextArea accepts keyboard focus");
             capture_story(&realized_window, "TextArea before wide");
             realized_window.set_size_request(600, 800);
@@ -749,9 +752,8 @@ mod unix {
             settle_window_width(&realized_window, 1_200);
         }
         if story == "NumberEntry" {
-            let counter = find::<gtk::SpinButton>(&root, |spin| {
-                spin.tooltip_text().as_deref() == Some("Build workers")
-            });
+            let counter =
+                find::<gtk::SpinButton>(&root, |spin| spin.tooltip_text().as_deref() == Some("Build workers"));
             assert_eq!(counter.accessible_role(), gtk::AccessibleRole::SpinButton);
             assert_eq!(counter.value(), 4.0);
             assert_eq!(counter.adjustment().lower(), 1.0);
@@ -777,9 +779,8 @@ mod unix {
             settle_window_width(&realized_window, 1_200);
         }
         if story == "PasswordEntry" {
-            let field = find::<gtk::PasswordEntry>(&root, |entry| {
-                entry.tooltip_text().as_deref() == Some("Registry token")
-            });
+            let field =
+                find::<gtk::PasswordEntry>(&root, |entry| entry.tooltip_text().as_deref() == Some("Registry token"));
             assert_eq!(field.accessible_role(), gtk::AccessibleRole::TextBox);
             assert_eq!(field.text(), "local-token");
             assert!(field.shows_peek_icon(), "documented reveal policy exposes native peek");
@@ -799,9 +800,7 @@ mod unix {
             settle_window_width(&realized_window, 1_200);
         }
         if story == "Autocomplete" {
-            let choice = find::<gtk::DropDown>(&root, |drop| {
-                drop.tooltip_text().as_deref() == Some("Runtime")
-            });
+            let choice = find::<gtk::DropDown>(&root, |drop| drop.tooltip_text().as_deref() == Some("Runtime"));
             assert_eq!(choice.accessible_role(), gtk::AccessibleRole::ComboBox);
             assert!(choice.enables_search());
             assert_eq!(choice.model().expect("Autocomplete options").n_items(), 3);
@@ -1175,9 +1174,7 @@ mod unix {
                 natural_height >= text_height + 16,
                 "source example omitted its compact 8px vertical inset: text={text_height}, natural={natural_height}"
             );
-            let navigation = paned
-                .start_child()
-                .expect("wide Button documentation retains its rail");
+            let navigation = paned.start_child().expect("wide Button documentation retains its rail");
             let navigation_headers = descendants::<gtk::Label>(&navigation)
                 .into_iter()
                 .filter(|label| label.has_css_class("hl-listsubheader"))
@@ -1192,10 +1189,7 @@ mod unix {
                 .map(|header| header.text().to_string())
                 .collect::<Vec<_>>();
             header_labels.sort();
-            assert_eq!(
-                header_labels,
-                ["Browse", "Buttons", "Component family", "Components"]
-            );
+            assert_eq!(header_labels, ["Browse", "Buttons", "Component family", "Components"]);
             for header in &navigation_headers {
                 assert_eq!(header.accessible_role(), gtk::AccessibleRole::Heading);
                 assert_eq!(header.height(), 16, "Storybook group headings remain compact");
@@ -1209,8 +1203,7 @@ mod unix {
                     .compute_bounds(&navigation)
                     .expect("Storybook group heading belongs to the desktop rail");
                 assert!(
-                    bounds.x() >= 4.0
-                        && bounds.x() + bounds.width() <= (navigation.width() - 4) as f32,
+                    bounds.x() >= 4.0 && bounds.x() + bounds.width() <= (navigation.width() - 4) as f32,
                     "Storybook group heading escaped the rail's clipping-safe inset: {bounds:?}"
                 );
             }
@@ -1238,8 +1231,7 @@ mod unix {
                     .compute_bounds(&navigation)
                     .expect("component destination belongs to the Storybook rail");
                 assert!(
-                    bounds.x() >= 4.0
-                        && bounds.x() + bounds.width() <= (navigation.width() - 4) as f32,
+                    bounds.x() >= 4.0 && bounds.x() + bounds.width() <= (navigation.width() - 4) as f32,
                     "component destination escaped the rail's clipping-safe inset: {bounds:?}"
                 );
             }
@@ -1460,11 +1452,9 @@ mod unix {
                 .filter(|frame| frame.has_css_class("hl-card"))
                 .collect::<Vec<_>>();
             assert_eq!(cards.len(), 4, "Card workbench must render four bounded live specimens");
-            assert!(
-                cards
-                    .iter()
-                    .all(|card| card.accessible_role() != gtk::AccessibleRole::Generic)
-            );
+            assert!(cards
+                .iter()
+                .all(|card| card.accessible_role() != gtk::AccessibleRole::Generic));
             for card in &cards {
                 let header = card
                     .label_widget()
@@ -1716,9 +1706,8 @@ mod unix {
             capture_story(&realized_window, "TextArea changed narrow");
         }
         if story == "NumberEntry" {
-            let counter = find::<gtk::SpinButton>(&root, |spin| {
-                spin.tooltip_text().as_deref() == Some("Build workers")
-            });
+            let counter =
+                find::<gtk::SpinButton>(&root, |spin| spin.tooltip_text().as_deref() == Some("Build workers"));
             assert_eq!(counter.value(), 6.0);
             find::<gtk::Label>(&root, |label| label.text() == "6 concurrent workers");
             capture_story(&realized_window, "NumberEntry changed wide");
@@ -1729,9 +1718,8 @@ mod unix {
             capture_story(&realized_window, "NumberEntry changed narrow");
         }
         if story == "PasswordEntry" {
-            let field = find::<gtk::PasswordEntry>(&root, |entry| {
-                entry.tooltip_text().as_deref() == Some("Registry token")
-            });
+            let field =
+                find::<gtk::PasswordEntry>(&root, |entry| entry.tooltip_text().as_deref() == Some("Registry token"));
             assert_eq!(field.text(), "rotated-token");
             find::<gtk::Label>(&root, |label| label.text() == "13 characters · concealed");
             assert!(
@@ -1748,9 +1736,7 @@ mod unix {
             capture_story(&realized_window, "PasswordEntry changed narrow");
         }
         if story == "Autocomplete" {
-            let choice = find::<gtk::DropDown>(&root, |drop| {
-                drop.tooltip_text().as_deref() == Some("Runtime")
-            });
+            let choice = find::<gtk::DropDown>(&root, |drop| drop.tooltip_text().as_deref() == Some("Runtime"));
             assert_eq!(choice.selected(), 1);
             find::<gtk::Label>(&root, |label| label.text() == "Selected Python 3.13.");
             capture_story(&realized_window, "Autocomplete selected wide");
@@ -2163,10 +2149,7 @@ mod unix {
     fn emit_representative(story: &str, root: &gtk::Widget, surface: &Surface, tree: &Tree) -> hl_gui::Event {
         match story {
             "Autocomplete" => {
-                find::<gtk::DropDown>(root, |drop| {
-                    drop.tooltip_text().as_deref() == Some("Runtime")
-                })
-                .set_selected(1);
+                find::<gtk::DropDown>(root, |drop| drop.tooltip_text().as_deref() == Some("Runtime")).set_selected(1);
             }
             "Button" => {
                 find::<gtk::Button>(root, |button| button_caption(button).as_deref() == Some("Run task"))
@@ -2185,16 +2168,12 @@ mod unix {
                 search.set_text("runtime");
             }
             "NumberEntry" => {
-                find::<gtk::SpinButton>(root, |spin| {
-                    spin.tooltip_text().as_deref() == Some("Build workers")
-                })
-                .set_value(6.0);
+                find::<gtk::SpinButton>(root, |spin| spin.tooltip_text().as_deref() == Some("Build workers"))
+                    .set_value(6.0);
             }
             "PasswordEntry" => {
-                find::<gtk::PasswordEntry>(root, |entry| {
-                    entry.tooltip_text().as_deref() == Some("Registry token")
-                })
-                .set_text("rotated-token");
+                find::<gtk::PasswordEntry>(root, |entry| entry.tooltip_text().as_deref() == Some("Registry token"))
+                    .set_text("rotated-token");
             }
             "TextArea" => {
                 let editor = find::<gtk::ScrolledWindow>(root, |window| {
@@ -2229,7 +2208,24 @@ mod unix {
                 })
                 .set_expanded(true);
                 settle_toolkit();
-                find::<gtk::Button>(root, |button| button_caption(button).as_deref() == Some("display")).emit_clicked();
+                let choice = find::<gtk::ToggleButton>(root, |button| {
+                    button.accessible_role() == gtk::AccessibleRole::ComboBox
+                        && descendants::<gtk::Button>(button.upcast_ref())
+                            .iter()
+                            .any(|option| button_caption(option).as_deref() == Some("display"))
+                });
+                assert!(
+                    choice.width() <= 196,
+                    "Heading scale selector expanded to {}px",
+                    choice.width()
+                );
+                choice.emit_clicked();
+                settle_toolkit();
+                find::<gtk::Button>(choice.upcast_ref(), |button| {
+                    button_caption(button).as_deref() == Some("display")
+                })
+                .emit_clicked();
+                settle_toolkit();
             }
             "Expander" => {
                 let disclosure = find::<gtk::Expander>(root, |expander| {
@@ -2448,10 +2444,7 @@ mod unix {
             let hl_gui::Event::Change { value, .. } = &event else {
                 panic!("TextArea did not emit its typed Change interaction: {event:?}")
             };
-            assert_eq!(
-                value,
-                &hl_gui::PropValue::text("name: compile\ncommand: cargo test")
-            );
+            assert_eq!(value, &hl_gui::PropValue::text("name: compile\ncommand: cargo test"));
         }
         if story == "Extension acquisition" {
             let hl_gui::Event::Invoke { node, id } = &event else {

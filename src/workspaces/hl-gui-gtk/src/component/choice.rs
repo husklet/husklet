@@ -27,14 +27,12 @@ impl ObjectImpl for State {
     fn properties() -> &'static [glib::ParamSpec] {
         static PROPERTIES: OnceLock<Vec<glib::ParamSpec>> = OnceLock::new();
         PROPERTIES.get_or_init(|| {
-            vec![
-                glib::ParamSpecInt64::builder("selected")
-                    .minimum(NONE)
-                    .maximum(i64::from(u32::MAX))
-                    .default_value(NONE)
-                    .read_only()
-                    .build(),
-            ]
+            vec![glib::ParamSpecInt64::builder("selected")
+                .minimum(NONE)
+                .maximum(i64::from(u32::MAX))
+                .default_value(NONE)
+                .read_only()
+                .build()]
         })
     }
 
@@ -52,7 +50,7 @@ impl ObjectImpl for State {
         obj.add_css_class("choice");
         obj.set_accessible_role(gtk::AccessibleRole::ComboBox);
         obj.update_property(&[gtk::accessible::Property::HasPopup(true)]);
-        obj.set_hexpand(true);
+        obj.set_hexpand(false);
         obj.set_halign(gtk::Align::Fill);
 
         let closed = gtk::Box::new(gtk::Orientation::Horizontal, 8);

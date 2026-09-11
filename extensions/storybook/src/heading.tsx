@@ -86,6 +86,7 @@ export function HeadingWorkbench() {
       <Expander label="Playground" expanded={false} width="fill">
         <FieldSpecimen label="Scale" width={{ chars: 30 }}>
           <Select
+            width={{ chars: 20 }}
             value={scale}
             choices={scales.map((item) => ({ value: item.style, label: item.style }))}
             onChange={(event) => setScale(String(event.value ?? 'title') as Scale)}
