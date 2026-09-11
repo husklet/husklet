@@ -496,6 +496,35 @@ mod unix {
                 );
                 assert!(inspect.grab_focus(), "image Inspect action is keyboard reachable");
             }
+            if fixture == "populated" && name == "executions" {
+                let card = widgets_with_class(&root, "hl-card")
+                    .into_iter()
+                    .next()
+                    .expect("execution inventory renders a card");
+                let minimum = if width == 1_200 { 900 } else { 540 };
+                assert!(
+                    card.width() >= minimum,
+                    "{width_name} execution card collapsed to {}px instead of using the page width",
+                    card.width()
+                );
+                for label in ["Details", "Load output", "Wait up to 5s"] {
+                    let action = find_button(&card, label);
+                    assert!(action.has_css_class("size-small"));
+                    assert!(
+                        action.height() <= 32,
+                        "{width_name} execution action {label:?} exceeded 32px: {}",
+                        action.height()
+                    );
+                }
+                assert!(
+                    find_button(&card, "Details").grab_focus(),
+                    "execution Details action is keyboard reachable"
+                );
+                assert!(
+                    find_button(&card, "Load output").grab_focus(),
+                    "execution output action is keyboard reachable"
+                );
+            }
             if fixture != "error" && name == "processes" && width == 1_200 {
                 settle_toolkit();
                 let request = surface
@@ -1255,6 +1284,16 @@ mod unix {
                 assert!(
                     technical.allocation().width() <= detail_root.allocation().width(),
                     "technical disclosure stays within the {width_name} detail surface"
+                );
+                let card = widgets_with_class(&detail_root, "hl-card")
+                    .into_iter()
+                    .next()
+                    .expect("execution detail remains inside its record card");
+                let minimum = if width == 1_200 { 900 } else { 540 };
+                assert!(
+                    card.width() >= minimum,
+                    "{width_name} execution detail collapsed to {}px",
+                    card.width()
                 );
                 capture(&window, &format!("execution-detail-{width_name}"), width, 800);
             }

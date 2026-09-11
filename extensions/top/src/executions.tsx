@@ -3,6 +3,7 @@ import {
   Badge,
   Button,
   Card,
+  CardActions,
   CardContent,
   CardHeader,
   Column,
@@ -261,6 +262,7 @@ export function Executions({
           <Card
             key={`${inventoryVersion}:${item.id}`}
             variant={selected === item.id ? 'filled' : 'outline'}
+            width="fill"
           >
             <CardHeader
               label={item.command?.join(' ') || shortId(item.id)}
@@ -282,27 +284,28 @@ export function Executions({
                 />
               ) : null}
             </CardContent>
-            <CardContent>
-              <Row gap={1} wrap justify="end">
-                <Button
-                  label={selected === item.id ? 'Hide details' : 'Details'}
-                  variant="filled"
-                  tone="accent"
-                  enabled={!busy}
-                  onInvoke={() => (selected === item.id ? setSelected('') : void inspect(item.id))}
-                />
-                <Button
-                  label={busy === `logs:${item.id}` ? 'Loading logs…' : 'Load output'}
-                  enabled={!busy}
-                  onInvoke={() => void logs(item.id)}
-                />
-                <Button
-                  label={busy === `wait:${item.id}` ? 'Waiting…' : 'Wait up to 5s'}
-                  enabled={!busy && item.running}
-                  onInvoke={() => void wait(item.id)}
-                />
-              </Row>
-            </CardContent>
+            <CardActions>
+              <Button
+                label={selected === item.id ? 'Hide details' : 'Details'}
+                size="small"
+                variant="filled"
+                tone="accent"
+                enabled={!busy}
+                onInvoke={() => (selected === item.id ? setSelected('') : void inspect(item.id))}
+              />
+              <Button
+                label={busy === `logs:${item.id}` ? 'Loading logs…' : 'Load output'}
+                size="small"
+                enabled={!busy}
+                onInvoke={() => void logs(item.id)}
+              />
+              <Button
+                label={busy === `wait:${item.id}` ? 'Waiting…' : 'Wait up to 5s'}
+                size="small"
+                enabled={!busy && item.running}
+                onInvoke={() => void wait(item.id)}
+              />
+            </CardActions>
             <CardContent>
               <Expander label="More actions" width="fill" align="start">
                 <Column gap={1}>

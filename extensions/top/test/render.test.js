@@ -6795,12 +6795,13 @@ test('execution details, separate bounded streams, wait and retry are operationa
   const details = new ExecutionDetailsSource();
   const stage = host();
   stage.render(h(Executions, { api: controlled, resource, executionDetails: details }));
-  assert.deepEqual(ancestorTags(stage, 'Details').slice(0, 2), ['Row', 'CardContent']);
-  assert.equal(
-    ancestorProperty(stage, 'Details', 'Row', 'Wrap')?.Flag,
-    true,
-    'execution actions flow before the secondary-action disclosure in a narrow viewport',
-  );
+  assert.deepEqual(ancestorTags(stage, 'Details').slice(0, 2), ['CardActions', 'Card']);
+  assert.deepEqual(ancestorProperty(stage, 'Details', 'Card', 'Width'), { Length: 'Fill' });
+  for (const label of ['Details', 'Load output', 'Wait up to 5s']) {
+    assert.deepEqual(taggedProperty(stage, label, 'Button', 'Size'), {
+      ControlSize: 'Small',
+    });
+  }
   invoke(stage, 'Details');
   await settled();
   await settled();
