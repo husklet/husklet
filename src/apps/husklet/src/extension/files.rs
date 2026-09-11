@@ -248,6 +248,23 @@ impl WorkspaceDirectory {
         })
     }
 
+    fn mkdir_with(
+        &self,
+        path: &RelativePath,
+        before_create: impl FnOnce() -> io::Result<()>,
+    ) -> Result<(), HostError> {
+        let _mutation = self
+            .mutations
+            .lock()
+            .map_err(|_| HostError::Failed("filesystem mutation lock is poisoned".into()))?;
+        let entry = self.pinned(path)?;
+        before_create().map_err(|error| absence(path, &error))?;
+        rustix::fs::mkdirat(&entry.directory, &entry.name, rustix::fs::Mode::from_raw_mode(0o777))
+            .map_err(io::Error::from)
+            .and_then(|()| entry.directory.sync_all())
+            .map_err(|error| absence(path, &error))
+    }
+
     fn scan(
         &self,
         roots: &[hl_extension::FilesystemSelector],
@@ -759,11 +776,7 @@ impl WorkspaceFiles for WorkspaceDirectory {
     }
 
     fn mkdir(&self, path: &RelativePath) -> Result<(), HostError> {
-        let entry = self.pinned(path)?;
-        rustix::fs::mkdirat(&entry.directory, &entry.name, rustix::fs::Mode::from_raw_mode(0o777))
-            .map_err(io::Error::from)
-            .and_then(|()| entry.directory.sync_all())
-            .map_err(|error| absence(path, &error))
+        self.mkdir_with(path, || Ok(()))
     }
 
     fn rename(&self, from: &RelativePath, to: &RelativePath) -> Result<(), HostError> {
@@ -1238,6 +1251,8 @@ mod tests {
     use hl_extension::port::{HostError, WorkspaceFiles};
     use hl_extension::{FilesystemSelector, RelativePath};
     use std::sync::atomic::Ordering;
+    use std::sync::{mpsc, Arc};
+    use std::time::Duration;
 
     fn path(value: &str) -> RelativePath {
         RelativePath::new(value).expect("path")
@@ -1245,6 +1260,42 @@ mod tests {
 
     fn subtree(value: &str) -> FilesystemSelector {
         FilesystemSelector::Subtree { subtree: path(value) }
+    }
+
+    #[test]
+    fn directory_creation_cannot_cross_its_selector_during_an_authorized_rename() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let root = temporary.path().join("workspace");
+        std::fs::create_dir_all(root.join("allowed")).expect("allowed directory");
+        let files = Arc::new(WorkspaceDirectory::new(&root).expect("workspace"));
+        let (pinned, pinned_receiver) = mpsc::channel();
+        let (release, release_receiver) = mpsc::channel();
+        let creating = Arc::clone(&files);
+        let creation = std::thread::spawn(move || {
+            creating.mkdir_with(&path("allowed/new"), || {
+                pinned.send(()).expect("announce pinned parent");
+                release_receiver.recv().expect("release creation");
+                Ok(())
+            })
+        });
+        pinned_receiver.recv().expect("creation pinned its authorized parent");
+
+        let (renamed, renamed_receiver) = mpsc::channel();
+        let renaming = Arc::clone(&files);
+        let rename = std::thread::spawn(move || {
+            let result = renaming.rename(&path("allowed"), &path("restricted"));
+            renamed.send(()).expect("announce rename completion");
+            result
+        });
+        assert!(
+            renamed_receiver.recv_timeout(Duration::from_millis(100)).is_err(),
+            "rename crossed an in-flight exact-path creation"
+        );
+
+        release.send(()).expect("release creation");
+        creation.join().expect("creation thread").expect("directory creation");
+        rename.join().expect("rename thread").expect("authorized rename");
+        assert!(root.join("restricted/new").is_dir());
     }
 
     #[test]
