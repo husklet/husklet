@@ -1576,6 +1576,96 @@ test('real Unix container inspection rejects another identity without mutation a
   }
 });
 
+test('real Unix beginWalk captures the reconciliation cursor before recursive enumeration', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-index-walk-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const calls = [];
+  const connections = new Set();
+  const server = net.createServer((socket) => {
+    connections.add(socket);
+    socket.on('close', () => connections.delete(socket));
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.kind !== KIND.request) continue;
+        calls.push(frame.payload);
+        const payload =
+          frame.payload.call === 'filesystem_inventory'
+            ? {
+                reply: 'file_inventory',
+                with: {
+                  entries: [],
+                  complete: true,
+                  coalesced: 0,
+                  journal: FILE_JOURNAL,
+                  revision: 41,
+                },
+              }
+            : frame.payload.call === 'filesystem_list_page'
+              ? {
+                  reply: 'directory_page',
+                  with: {
+                    entries: [
+                      { path: 'src/document.md', directory: false, size: 12, identity: 'doc-v1' },
+                    ],
+                    identity: 'src-v1',
+                    next: 'src/document.md',
+                    more: false,
+                  },
+                }
+              : {
+                  reply: 'file_changes',
+                  with: {
+                    journal: FILE_JOURNAL,
+                    changes: [],
+                    next: 41,
+                    current: 41,
+                    more: false,
+                    truncated: false,
+                  },
+                };
+        socket.write(encode({ channel: frame.channel, kind: KIND.response, payload }));
+      }
+    });
+    socket.write(
+      encode({
+        channel: CONTROL,
+        kind: KIND.open,
+        payload: { protocol: 1, peer: 'index-walk', granted: ['filesystem:read'] },
+      }),
+    );
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    const scan = await workspace(session).files.beginWalk('src', { pageSize: 32 });
+    assert.deepEqual(calls, [{ call: 'filesystem_inventory' }]);
+    assert.deepEqual(scan.cursor, { journal: FILE_JOURNAL, revision: 41 });
+    assert.equal(scan.inventory.complete, true);
+    assert.deepEqual(
+      await Array.fromAsync(scan.entries),
+      [{ path: 'src/document.md', directory: false, size: 12, identity: 'doc-v1' }],
+    );
+    await workspace(session).files.changes(scan.cursor, 32);
+    assert.deepEqual(calls, [
+      { call: 'filesystem_inventory' },
+      {
+        call: 'filesystem_list_page',
+        with: { path: 'src', after: null, observed: null, limit: 32 },
+      },
+      {
+        call: 'filesystem_changes',
+        with: { observed: FILE_JOURNAL, after: 41, limit: 32 },
+      },
+    ]);
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('real Unix filesystem watcher publishes filtered cursor-only progress for restart', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-filtered-cursor-'));
   const socketPath = path.join(directory, 'host.sock');

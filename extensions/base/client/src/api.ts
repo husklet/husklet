@@ -1505,6 +1505,18 @@ export interface WorkspaceApi {
   files: {
     /** Returns the current bounded inventory for the exact consented read roots. */
     inventory(): Promise<FileInventory>;
+    /**
+     * Capture a journal cursor before beginning a recursive walk. Replaying changes from `cursor`
+     * after consuming `entries` closes the otherwise easy-to-miss initial-indexing race.
+     */
+    beginWalk(
+      path: string,
+      options?: { pageSize?: number; signal?: AbortSignal },
+    ): Promise<{
+      inventory: FileInventory;
+      cursor: FileCursor;
+      entries: AsyncGenerator<FileEntry, void, void>;
+    }>;
     changes(cursor: FileCursor, limit?: number): Promise<FileChangePage>;
     /**
      * Consumer-driven, cursor-safe change pages. Slow consumers apply polling backpressure;

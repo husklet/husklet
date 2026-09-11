@@ -1699,6 +1699,16 @@ export function workspace(session, { signal } = {}) {
                 exactFilesystemJournal(inventory.journal);
                 return inventory;
             },
+            beginWalk: async (path, options = {}) => {
+                requireFilesystemActive(options.signal);
+                const inventory = await api.files.inventory();
+                requireFilesystemActive(options.signal);
+                return {
+                    inventory,
+                    cursor: { journal: inventory.journal, revision: inventory.revision },
+                    entries: api.files.walk(path, options),
+                };
+            },
             changes: async ({ journal, revision: after }, limit = 256) => {
                 exactFilesystemJournal(journal);
                 if (!Number.isSafeInteger(after) || after < 0)
@@ -4066,6 +4076,7 @@ export const protocolCoverage = Object.freeze({
         ],
         files: [
             'inventory',
+            'beginWalk',
             'changes',
             'changePages',
             'watchChanges',
