@@ -297,7 +297,8 @@ const largeInstalledExtensions = [
 ];
 
 test('Top presents workspace, extensions, and every resource navigation choice', () => {
-  const frame = host().render(
+  const stage = host();
+  const frame = stage.render(
     h(Top, {
       api,
       initial: {
@@ -326,6 +327,11 @@ test('Top presents workspace, extensions, and every resource navigation choice',
     'Terminals',
   ])
     assert.ok(labels.includes(label), label);
+  assert.deepEqual(
+    ancestorProperty(stage, 'Section', 'Row', 'Justify'),
+    { Align: 'Start' },
+    'the compact chooser anchors inside its viewport instead of centering beyond it',
+  );
   assert.equal(
     frame.patches.some((patch) => 'Create' in patch && patch.Create.tag === 'Card'),
     true,

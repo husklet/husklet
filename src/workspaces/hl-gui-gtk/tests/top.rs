@@ -320,6 +320,18 @@ mod unix {
             settle_frame();
             assert_eq!(root.width(), width, "{fixture}/{name} rejected {width}px");
             assert_contained(&root, &format!("{fixture}/{name}/{width_name}"));
+            if width == 600 {
+                let section = find_label(&root, "Section");
+                let bounds = section
+                    .compute_bounds(&root)
+                    .expect("compact Section label belongs to the rendered root");
+                assert!(
+                    bounds.x() >= 0.0 && bounds.x() + bounds.width() <= width as f32,
+                    "{fixture}/{name} clipped the compact Section label at {bounds:?}"
+                );
+                let chooser = find_combobox(&root);
+                assert!(chooser.grab_focus(), "compact section chooser is keyboard reachable");
+            }
             if fixture == "populated" && name == "processes" && width == 1_200 {
                 let refresh = find_tooltip_button(&root, "Refresh processes");
                 assert_eq!(
@@ -2858,6 +2870,34 @@ mod unix {
             );
             assert_contained(&current, case);
         }
+    }
+
+    fn find_combobox(root: &gtk::Widget) -> gtk::Widget {
+        if root.is_mapped() && root.accessible_role() == gtk::AccessibleRole::ComboBox {
+            return root.clone();
+        }
+        let mut child = root.first_child();
+        while let Some(current) = child {
+            child = current.next_sibling();
+            if let Some(found) = find_combobox_optional(&current) {
+                return found;
+            }
+        }
+        panic!("compact section chooser was not rendered")
+    }
+
+    fn find_combobox_optional(root: &gtk::Widget) -> Option<gtk::Widget> {
+        if root.is_mapped() && root.accessible_role() == gtk::AccessibleRole::ComboBox {
+            return Some(root.clone());
+        }
+        let mut child = root.first_child();
+        while let Some(current) = child {
+            child = current.next_sibling();
+            if let Some(found) = find_combobox_optional(&current) {
+                return Some(found);
+            }
+        }
+        None
     }
 
     fn capture(window: &gtk::Window, name: &str, width: i32, height: i32) {
