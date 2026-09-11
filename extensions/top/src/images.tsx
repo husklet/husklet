@@ -299,12 +299,26 @@ export function Images({
         </Expander>
         {view.records.map((item) => (
           <Card key={item.id} variant={detail?.id === item.id ? 'filled' : 'outline'} width="fill">
-            <CardHeader
-              label={item.reference || '<untagged>'}
-              detail={shortId(item.id)}
-              align="start"
-              width="fill"
-            />
+            <Row gap={2} align="center" justify="start" wrap width="fill">
+              <CardHeader
+                label={item.reference || '<untagged>'}
+                detail={shortId(item.id)}
+                align="start"
+                width="fill"
+                grow
+              />
+              <Button
+                label={
+                  inspection.id === item.id && inspection.state === 'error'
+                    ? 'Retry inspect'
+                    : 'Inspect'
+                }
+                size="small"
+                variant="outline"
+                enabled={!busy}
+                onInvoke={() => inspect(item)}
+              />
+            </Row>
             <CardContent>
               <Text label={bytes(item.size)} color="text-dim" />
               {inspection.id === item.id ? (
@@ -336,20 +350,6 @@ export function Images({
                 </>
               ) : null}
             </CardContent>
-            <CardActions>
-              <Button
-                label={
-                  inspection.id === item.id && inspection.state === 'error'
-                    ? 'Retry inspect'
-                    : 'Inspect'
-                }
-                size="small"
-                variant="filled"
-                tone="accent"
-                enabled={!busy}
-                onInvoke={() => inspect(item)}
-              />
-            </CardActions>
             <CardContent>
               <Expander label="Danger zone" width="fill" align="start">
                 <Column gap={1}>

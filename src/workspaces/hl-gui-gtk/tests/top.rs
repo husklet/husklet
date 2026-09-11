@@ -495,8 +495,14 @@ mod unix {
                     "{width_name} image card collapsed to {}px instead of using the page width",
                     card.width()
                 );
+                assert!(
+                    card.height() <= 128,
+                    "{width_name} one-line image record is too tall: {}px",
+                    card.height()
+                );
                 let inspect = find_button(&card, "Inspect");
                 assert!(inspect.has_css_class("size-small"));
+                assert!(inspect.has_css_class("variant-outline"));
                 assert!(
                     inspect.height() <= 32,
                     "{width_name} image Inspect action exceeded 32px: {}",

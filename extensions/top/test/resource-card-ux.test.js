@@ -6,7 +6,7 @@ import { host } from './host.js';
 
 const resource = (data) => ({ data, loading: false, error: null, reload: async () => {} });
 
-test('image inventory is a full-width resource card with compact actions and disclosed destruction', async () => {
+test('image inventory is a full-width compact summary with secondary inspection and disclosed destruction', async () => {
   const stage = host();
   const frame = stage.render(
     h(Images, {
@@ -35,9 +35,10 @@ test('image inventory is a full-width resource card with compact actions and dis
     ),
     'the resource card consumes the readable page width',
   );
-  assert.ok(
+  assert.equal(
     frame.patches.some((patch) => patch.Create?.tag === 'CardActions'),
-    'resource operations use canonical card actions',
+    false,
+    'a lone inspection action does not create a detached footer band',
   );
   const inspect = frame.patches.find(
     (patch) => patch.SetProp?.prop === 'Label' && patch.SetProp.value?.Text === 'Inspect',
@@ -50,6 +51,15 @@ test('image inventory is a full-width resource card with compact actions and dis
         patch.SetProp.value?.ControlSize === 'Small',
     ),
     'the frequent inspect operation remains compact',
+  );
+  assert.ok(
+    frame.patches.some(
+      (patch) =>
+        patch.SetProp?.id === inspect &&
+        patch.SetProp.prop === 'Variant' &&
+        patch.SetProp.value?.Variant === 'Outline',
+    ),
+    'inspection remains a secondary action rather than competing with image pull',
   );
   invoke(stage, 'Inspect');
   await settled();
