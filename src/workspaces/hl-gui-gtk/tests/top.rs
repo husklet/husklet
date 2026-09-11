@@ -1180,11 +1180,12 @@ mod unix {
             .mnemonic_widget()
             .and_then(|widget| widget.downcast::<gtk::Switch>().ok())
             .expect("required capability label names its native switch");
-        surface.reports().drain();
+        let _ = surface.reports().drain();
+        let _: bool = interface.emit_by_name("state-set", &[&true]);
         interface.set_active(true);
         settle_toolkit();
         send_report(surface, wire, 102, |event| {
-            matches!(event, hl_gui::Event::Change { .. })
+            matches!(event, hl_gui::Event::Toggle { .. })
         });
         apply_extension_update_until(
             wire,
