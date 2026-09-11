@@ -11,6 +11,7 @@ import {
   FormControl,
   FormLabel,
   Heading,
+  IconButton,
   Meter,
   ResourceState,
   RecoveryState,
@@ -241,7 +242,15 @@ export function Images({
             }
             onInvoke={startPull}
           />
-          <Button label="Refresh" variant="outline" enabled={!busy} onInvoke={resource.reload} />
+          <IconButton
+            label="Refresh"
+            tooltip="Refresh images"
+            icon="view-refresh-symbolic"
+            size="large"
+            variant="ghost"
+            enabled={!busy}
+            onInvoke={resource.reload}
+          />
         </Row>
       </Column>
       {pull ? <PullStatus pull={pull} onCancel={cancelPull} /> : null}

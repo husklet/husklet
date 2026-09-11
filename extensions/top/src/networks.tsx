@@ -13,6 +13,7 @@ import {
   FormHelperText,
   FormLabel,
   Heading,
+  IconButton,
   InlineMessage,
   ResourceState,
   RecoveryState,
@@ -296,9 +297,12 @@ export function Networks({
             enabled={creation.state !== 'loading' && name.trim().length > 0}
             onInvoke={() => void create()}
           />
-          <Button
+          <IconButton
             label="Refresh"
-            variant="outline"
+            tooltip="Refresh networks"
+            icon="view-refresh-symbolic"
+            size="large"
+            variant="ghost"
             enabled={creation.state !== 'loading'}
             onInvoke={resource.reload}
           />

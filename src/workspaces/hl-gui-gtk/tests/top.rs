@@ -408,7 +408,9 @@ mod unix {
                 assert_eq!(title.accessible_role(), gtk::AccessibleRole::Heading);
                 let entry = find_entry_placeholder(&root, "Network name");
                 let create = find_button(&root, "Create");
-                let refresh = find_button(&root, "Refresh");
+                let refresh = find_tooltip_button(&root, "Refresh networks");
+                assert_eq!(refresh.icon_name().as_deref(), Some("view-refresh-symbolic"));
+                assert_eq!(refresh.accessible_role(), gtk::AccessibleRole::Button);
                 let widgets = [
                     entry.clone().upcast::<gtk::Widget>(),
                     create.clone().upcast(),
