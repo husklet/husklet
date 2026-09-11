@@ -32,6 +32,7 @@ pub struct ExtensionManagement {
     workspace: WorkspaceConfig,
     acquisitions: ExtensionAcquisitions,
     events: ExtensionEvents,
+    lifecycle: std::sync::Mutex<()>,
 }
 
 impl ExtensionManagement {
@@ -41,6 +42,7 @@ impl ExtensionManagement {
             workspace: workspace.clone(),
             acquisitions: ExtensionAcquisitions::new(workspace, events.clone()),
             events,
+            lifecycle: std::sync::Mutex::new(()),
         };
         if let Ok(entries) = management.list() {
             management.events.inventory(entries);
@@ -88,6 +90,10 @@ impl ExtensionManagement {
         image_digest: &str,
         cleanup: R,
     ) -> Result<(), HostError> {
+        let _lifecycle = self
+            .lifecycle
+            .lock()
+            .map_err(|_| HostError::Failed("extension lifecycle lock is poisoned".into()))?;
         // Runtime cleanup can fail transiently. Keep the exact digest-bound
         // record until it succeeds so the same uninstall remains retryable.
         cleanup.retire()?;
@@ -131,6 +137,10 @@ impl ExtensionStore for ExtensionManagement {
     }
 
     fn enable(&self, name: &str, image_digest: &str) -> Result<(), HostError> {
+        let _lifecycle = self
+            .lifecycle
+            .lock()
+            .map_err(|_| HostError::Failed("extension lifecycle lock is poisoned".into()))?;
         let result = self
             .roster()?
             .enable_if_digest(&Self::name(name)?, image_digest)
@@ -139,6 +149,10 @@ impl ExtensionStore for ExtensionManagement {
     }
 
     fn disable(&self, name: &str, image_digest: &str) -> Result<(), HostError> {
+        let _lifecycle = self
+            .lifecycle
+            .lock()
+            .map_err(|_| HostError::Failed("extension lifecycle lock is poisoned".into()))?;
         let result = self
             .roster()?
             .disable_if_digest(&Self::optional_name(name)?, image_digest)
@@ -147,6 +161,10 @@ impl ExtensionStore for ExtensionManagement {
     }
 
     fn retry(&self, name: &str, image_digest: &str) -> Result<(), HostError> {
+        let _lifecycle = self
+            .lifecycle
+            .lock()
+            .map_err(|_| HostError::Failed("extension lifecycle lock is poisoned".into()))?;
         let result = self
             .roster()?
             .retry_if_digest(&Self::name(name)?, image_digest)
@@ -194,6 +212,10 @@ impl ExtensionStore for ExtensionManagement {
     ) -> Result<ExtensionSummary, HostError> {
         let job = AcquisitionJob::parse(job)?;
         let name = ready_name(&self.acquisitions, job, revision, image_digest)?;
+        let _lifecycle = self
+            .lifecycle
+            .lock()
+            .map_err(|_| HostError::Failed("extension lifecycle lock is poisoned".into()))?;
         self.acquisitions.install_resource_scoped(
             job,
             revision,
@@ -228,6 +250,10 @@ impl ExtensionStore for ExtensionManagement {
     ) -> Result<ExtensionSummary, HostError> {
         let job = AcquisitionJob::parse(job)?;
         let name = ready_name(&self.acquisitions, job, revision, image_digest)?;
+        let _lifecycle = self
+            .lifecycle
+            .lock()
+            .map_err(|_| HostError::Failed("extension lifecycle lock is poisoned".into()))?;
         self.acquisitions.update_resource_scoped(
             job,
             revision,
@@ -378,6 +404,8 @@ fn failure(error: super::Refusal) -> HostError {
 mod tests {
     use super::*;
     use hl_extension::port::ExtensionStateStore as _;
+    use std::sync::{Arc, mpsc};
+    use std::time::Duration;
 
     struct Cleanup {
         data: std::path::PathBuf,
@@ -402,10 +430,91 @@ mod tests {
         }
     }
 
+    struct BlockingPurge {
+        entered: mpsc::Sender<()>,
+        release: mpsc::Receiver<()>,
+    }
+
+    impl RemovalCleanup for BlockingPurge {
+        fn retire(&self) -> Result<(), HostError> {
+            Ok(())
+        }
+
+        fn purge(self) -> Result<(), HostError> {
+            self.entered.send(()).expect("announce purge");
+            self.release.recv().expect("release purge");
+            Err(HostError::Failed("injected purge failure".into()))
+        }
+    }
+
     fn workspace(root: &std::path::Path) -> WorkspaceConfig {
         let mut workspace = WorkspaceConfig::new("test", "alpine", hl_ws::Arch::Amd64);
         workspace.storage = Some(root.to_owned());
         workspace
+    }
+
+    #[test]
+    fn lifecycle_mutation_cannot_occupy_a_name_during_uninstall_rollback() {
+        let root = tempfile::tempdir().unwrap();
+        let management = Arc::new(ExtensionManagement::new(&workspace(root.path())));
+        let name = ExtensionName::new("postgres").unwrap();
+        let digest = format!("sha256:{}", "a".repeat(64));
+        let manifest = hl_extension::Manifest {
+            name: name.clone(),
+            display_name: "Postgres".into(),
+            version: "1".into(),
+            protocol: hl_extension::PROTOCOL,
+            capabilities: Grant::default(),
+            activation: hl_extension::Activation::default(),
+            containers: hl_extension::ContainerGrant::default(),
+            images: hl_extension::ImageGrant::default(),
+            networks: hl_extension::NetworkGrant::default(),
+            volumes: hl_extension::VolumeGrant::default(),
+            entrypoint: None,
+            interface: None,
+            pane_providers: Vec::new(),
+            resources: hl_extension::Resources::default(),
+            filesystem: hl_extension::FilesystemGrant::default(),
+            workspace_environment: hl_extension::WorkspaceEnvironmentGrant::default(),
+        };
+        management
+            .roster()
+            .unwrap()
+            .register(&manifest, &digest, &manifest.capabilities, 1)
+            .unwrap();
+        let (entered, entered_receiver) = mpsc::channel();
+        let (release, release_receiver) = mpsc::channel();
+        let removing = Arc::clone(&management);
+        let removed_name = name.clone();
+        let removed_digest = digest.clone();
+        let removal = std::thread::spawn(move || {
+            removing.remove_with(
+                removed_name,
+                &removed_digest,
+                BlockingPurge {
+                    entered,
+                    release: release_receiver,
+                },
+            )
+        });
+        entered_receiver.recv().expect("uninstall reached purge");
+
+        let enabling = Arc::clone(&management);
+        let enabled_digest = digest.clone();
+        let (finished, finished_receiver) = mpsc::channel();
+        let enable = std::thread::spawn(move || {
+            let result = enabling.enable("postgres", &enabled_digest);
+            finished.send(()).expect("announce lifecycle completion");
+            result
+        });
+        assert!(
+            finished_receiver.recv_timeout(Duration::from_millis(100)).is_err(),
+            "another lifecycle mutation entered the uninstall rollback window"
+        );
+        release.send(()).expect("release uninstall");
+        assert!(removal.join().expect("removal thread").is_err());
+        enable.join().expect("enable thread").expect("restored extension enabled");
+        assert_eq!(management.inspect("postgres").unwrap().image_digest, digest);
     }
 
     #[test]
