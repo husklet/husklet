@@ -11,15 +11,15 @@ mod unix {
 
     use gtk::prelude::*;
     use hl_extension::port::{
-        ExtensionAcquisitionJob, ExtensionAcquisitionProgress, ExtensionAcquisitionStatus, ExtensionCandidate,
-        ExecutionSummary, ExtensionCatalogue, ExtensionCatalogueEntry, NetworkEndpointInventory, NetworkInventory,
+        ExecutionSummary, ExtensionAcquisitionJob, ExtensionAcquisitionProgress, ExtensionAcquisitionStatus,
+        ExtensionCandidate, ExtensionCatalogue, ExtensionCatalogueEntry, NetworkEndpointInventory, NetworkInventory,
         NetworkKind, NetworkSummary,
     };
     use hl_extension::{
         Capability, ChannelId, ExtensionName, ExtensionPreferences, ExtensionSummary, FilesystemGrant,
-        FilesystemSelector, Frame, Grant, Hello, PROTOCOL, RelativePath,
-        PaneProvider, PreferenceValue, Reply, Request, Snapshot, Welcome, Wire, WorkspaceConfiguration,
-        WorkspaceEnvironmentGrant, WorkspaceEnvironmentSelector, WorkspaceInfo, WorkspaceTerminal, codec,
+        FilesystemSelector, Frame, Grant, Hello, ImageGrant, ImageSelector, PROTOCOL, PaneProvider, PreferenceValue,
+        RelativePath, Reply, Request, Snapshot, Welcome, Wire, WorkspaceConfiguration, WorkspaceEnvironmentGrant,
+        WorkspaceEnvironmentSelector, WorkspaceInfo, WorkspaceTerminal, codec,
     };
     use hl_gui::{Renderer as _, SourceMutation, Theme, Tree};
     use hl_gui_gtk::Surface;
@@ -131,7 +131,11 @@ mod unix {
                     Capability::ExtensionInstall,
                     Capability::ContainerRead,
                     Capability::ImageRead,
-                    if name == "volumes" { Capability::Interface } else { Capability::VolumeRead },
+                    if name == "volumes" {
+                        Capability::Interface
+                    } else {
+                        Capability::VolumeRead
+                    },
                     Capability::NetworkRead,
                     Capability::NetworkWrite,
                     Capability::TerminalRead,
@@ -1161,10 +1165,7 @@ mod unix {
                     "Command · /bin/sh -lc npm test",
                 )
             {
-                let frame = match receive_until(
-                    &mut wire,
-                    (Instant::now() + Duration::from_millis(80)).min(deadline),
-                ) {
+                let frame = match receive_until(&mut wire, (Instant::now() + Duration::from_millis(80)).min(deadline)) {
                     Ok(frame) => frame,
                     Err(hl_extension::Transit::Pending) => continue,
                     Err(error) => panic!("execution detail request failed: {error:?}"),
@@ -1183,7 +1184,8 @@ mod unix {
                         user: "developer".into(),
                     }),
                     Request::InterfaceRender { frame } | Request::InterfaceRenderAt { frame, .. } => {
-                        tree.apply(&frame, &mut surface).expect("execution detail frame applies");
+                        tree.apply(&frame, &mut surface)
+                            .expect("execution detail frame applies");
                         Reply::Done
                     }
                     Request::SourceResize { mutation } | Request::SourceResizeAt { mutation, .. } => {
@@ -1300,7 +1302,8 @@ mod unix {
                     Ok(frame) => {
                         let reply = match codec::read_request(&frame).expect("Extensions route request decodes") {
                             Request::InterfaceRender { frame } | Request::InterfaceRenderAt { frame, .. } => {
-                                tree.apply(&frame, &mut surface).expect("Extensions route frame applies");
+                                tree.apply(&frame, &mut surface)
+                                    .expect("Extensions route frame applies");
                                 Reply::Done
                             }
                             other => panic!("unexpected Extensions route request: {other:?}"),
@@ -1415,12 +1418,18 @@ mod unix {
                             image_digest: next_digest.clone(),
                             requested: Grant::new([
                                 Capability::FilesystemRead,
+                                Capability::ImageRemove,
                                 Capability::Interface,
                                 Capability::WorkspaceControl,
                                 Capability::WorkspaceEnvironmentRead,
                             ]),
                             required: Grant::new([Capability::Interface]),
-                            requested_images: Default::default(),
+                            requested_images: ImageGrant {
+                                remove: vec![ImageSelector::Reference {
+                                    reference: "registry.example/test-runner:3".into(),
+                                }],
+                                ..ImageGrant::default()
+                            },
                             requested_containers: Default::default(),
                             requested_networks: Default::default(),
                             requested_volumes: Default::default(),
@@ -1450,11 +1459,8 @@ mod unix {
         drain_extension_renders(wire, tree, surface);
 
         let review_root = surface.widget().clone().upcast::<gtk::Widget>();
-        assert!(has_label(&review_root, "No access selected · 6 requested"));
-        assert!(has_label(
-            &review_root,
-            "Create, start, stop, and delete workspaces"
-        ));
+        assert!(has_label(&review_root, "No access selected · 8 requested"));
+        assert!(has_label(&review_root, "Create, start, stop, and delete workspaces"));
         assert!(has_label(
             &review_root,
             "Workspace lifecycle access requested. This extension could create or delete workspaces and start or stop their workloads."
@@ -1480,10 +1486,83 @@ mod unix {
             wire,
             tree,
             surface,
-            "Review decision · 1/6 selected",
+            "Review decision · 1/8 selected",
             |request| match request {
                 Request::EventUnsubscribe { .. } => Reply::Done,
                 other => panic!("unexpected extension consent call: {other:?}"),
+            },
+            || None,
+        );
+        let review_root = surface.widget().clone().upcast::<gtk::Widget>();
+        let exact_image = find_label(&review_root, "Remove image · registry.example/test-runner:3")
+            .mnemonic_widget()
+            .and_then(|widget| widget.downcast::<gtk::Switch>().ok())
+            .expect("exact-image label names its native switch");
+        let _ = surface.reports().drain();
+        let _: bool = exact_image.emit_by_name("state-set", &[&true]);
+        exact_image.set_active(true);
+        settle_toolkit();
+        send_report(surface, wire, 102, |event| {
+            matches!(event, hl_gui::Event::Toggle { .. })
+        });
+        apply_extension_update_until(
+            wire,
+            tree,
+            surface,
+            "Review decision · 3/8 selected",
+            |request| match request {
+                Request::EventUnsubscribe { .. } => Reply::Done,
+                other => panic!("unexpected exact-image consent call: {other:?}"),
+            },
+            || None,
+        );
+        let review_root = surface.widget().clone().upcast::<gtk::Widget>();
+        let image_capability = find_label(&review_root, "Remove images")
+            .mnemonic_widget()
+            .and_then(|widget| widget.downcast::<gtk::Switch>().ok())
+            .expect("image capability label names its native switch");
+        let _ = surface.reports().drain();
+        let _: bool = image_capability.emit_by_name("state-set", &[&false]);
+        image_capability.set_active(false);
+        settle_toolkit();
+        send_report(surface, wire, 102, |event| {
+            matches!(event, hl_gui::Event::Toggle { .. })
+        });
+        apply_extension_update_until(
+            wire,
+            tree,
+            surface,
+            "Review decision · 1/8 selected",
+            |request| match request {
+                Request::EventUnsubscribe { .. } => Reply::Done,
+                other => panic!("unexpected exact-image clearing call: {other:?}"),
+            },
+            || None,
+        );
+        let review_root = surface.widget().clone().upcast::<gtk::Widget>();
+        let exact_image = find_label(&review_root, "Remove image · registry.example/test-runner:3")
+            .mnemonic_widget()
+            .and_then(|widget| widget.downcast::<gtk::Switch>().ok())
+            .expect("cleared exact-image label names its native switch");
+        assert!(
+            !exact_image.is_active(),
+            "clearing image removal clears its exact selectors"
+        );
+        let _ = surface.reports().drain();
+        let _: bool = exact_image.emit_by_name("state-set", &[&true]);
+        exact_image.set_active(true);
+        settle_toolkit();
+        send_report(surface, wire, 102, |event| {
+            matches!(event, hl_gui::Event::Toggle { .. })
+        });
+        apply_extension_update_until(
+            wire,
+            tree,
+            surface,
+            "Review decision · 3/8 selected",
+            |request| match request {
+                Request::EventUnsubscribe { .. } => Reply::Done,
+                other => panic!("unexpected exact-image reselection call: {other:?}"),
             },
             || None,
         );
@@ -1496,9 +1575,14 @@ mod unix {
         let _: bool = exact.emit_by_name("state-set", &[&true]);
         exact.set_active(true);
         settle_toolkit();
-        send_report(surface, wire, 102, |event| matches!(event, hl_gui::Event::Toggle { .. }));
+        send_report(surface, wire, 102, |event| {
+            matches!(event, hl_gui::Event::Toggle { .. })
+        });
         apply_extension_update_until(
-            wire, tree, surface, "Review decision · 3/6 selected",
+            wire,
+            tree,
+            surface,
+            "Review decision · 5/8 selected",
             |request| match request {
                 Request::EventUnsubscribe { .. } => Reply::Done,
                 other => panic!("unexpected exact-file consent call: {other:?}"),
@@ -1514,9 +1598,14 @@ mod unix {
         let _: bool = file_capability.emit_by_name("state-set", &[&false]);
         file_capability.set_active(false);
         settle_toolkit();
-        send_report(surface, wire, 102, |event| matches!(event, hl_gui::Event::Toggle { .. }));
+        send_report(surface, wire, 102, |event| {
+            matches!(event, hl_gui::Event::Toggle { .. })
+        });
         apply_extension_update_until(
-            wire, tree, surface, "Review decision · 1/6 selected",
+            wire,
+            tree,
+            surface,
+            "Review decision · 3/8 selected",
             |request| match request {
                 Request::EventUnsubscribe { .. } => Reply::Done,
                 other => panic!("unexpected exact-file clearing call: {other:?}"),
@@ -1528,14 +1617,22 @@ mod unix {
             .mnemonic_widget()
             .and_then(|widget| widget.downcast::<gtk::Switch>().ok())
             .expect("cleared exact-file label names its native switch");
-        assert!(!exact.is_active(), "clearing file read authority clears its exact roots");
+        assert!(
+            !exact.is_active(),
+            "clearing file read authority clears its exact roots"
+        );
         let _ = surface.reports().drain();
         let _: bool = exact.emit_by_name("state-set", &[&true]);
         exact.set_active(true);
         settle_toolkit();
-        send_report(surface, wire, 102, |event| matches!(event, hl_gui::Event::Toggle { .. }));
+        send_report(surface, wire, 102, |event| {
+            matches!(event, hl_gui::Event::Toggle { .. })
+        });
         apply_extension_update_until(
-            wire, tree, surface, "Review decision · 3/6 selected",
+            wire,
+            tree,
+            surface,
+            "Review decision · 5/8 selected",
             |request| match request {
                 Request::EventUnsubscribe { .. } => Reply::Done,
                 other => panic!("unexpected exact-file reselection call: {other:?}"),
@@ -1551,9 +1648,14 @@ mod unix {
         let _: bool = environment.emit_by_name("state-set", &[&true]);
         environment.set_active(true);
         settle_toolkit();
-        send_report(surface, wire, 102, |event| matches!(event, hl_gui::Event::Toggle { .. }));
+        send_report(surface, wire, 102, |event| {
+            matches!(event, hl_gui::Event::Toggle { .. })
+        });
         apply_extension_update_until(
-            wire, tree, surface, "Review decision · 5/6 selected",
+            wire,
+            tree,
+            surface,
+            "Review decision · 7/8 selected",
             |request| match request {
                 Request::EventUnsubscribe { .. } => Reply::Done,
                 other => panic!("unexpected environment consent call: {other:?}"),
@@ -1592,12 +1694,18 @@ mod unix {
                             image_digest: next_digest.clone(),
                             requested: Grant::new([
                                 Capability::FilesystemRead,
+                                Capability::ImageRemove,
                                 Capability::Interface,
                                 Capability::WorkspaceControl,
                                 Capability::WorkspaceEnvironmentRead,
                             ]),
                             required: Grant::new([Capability::Interface]),
-                            requested_images: Default::default(),
+                            requested_images: ImageGrant {
+                                remove: vec![ImageSelector::Reference {
+                                    reference: "registry.example/test-runner:3".into(),
+                                }],
+                                ..ImageGrant::default()
+                            },
                             requested_containers: Default::default(),
                             requested_networks: Default::default(),
                             requested_volumes: Default::default(),
@@ -1626,6 +1734,7 @@ mod unix {
                     granted,
                     filesystem,
                     workspace_environment,
+                    images,
                     ..
                 } => {
                     assert_eq!(job, "gtk-update");
@@ -1635,9 +1744,19 @@ mod unix {
                         granted,
                         Grant::new([
                             Capability::FilesystemRead,
+                            Capability::ImageRemove,
                             Capability::Interface,
                             Capability::WorkspaceEnvironmentRead,
                         ])
+                    );
+                    assert_eq!(
+                        images,
+                        ImageGrant {
+                            remove: vec![ImageSelector::Reference {
+                                reference: "registry.example/test-runner:3".into(),
+                            }],
+                            ..ImageGrant::default()
+                        }
                     );
                     assert_eq!(
                         workspace_environment,

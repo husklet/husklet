@@ -64,6 +64,19 @@ const IMAGE_VERBS: { key: ImageVerb; label: string }[] = [
   { key: 'remove', label: 'Remove image' },
 ];
 
+function imageCapability(verb: ImageVerb): ExtensionCapability {
+  switch (verb) {
+    case 'read':
+      return 'images:read';
+    case 'use':
+      return 'containers:create';
+    case 'pull':
+      return 'images:pull';
+    case 'remove':
+      return 'images:remove';
+  }
+}
+
 const COPY_WIDTH = { maximum: { chars: 54 } } as const;
 const PAGE_WIDTH = { maximum: { chars: 110 } } as const;
 const CATALOGUE_PAGE_SIZE = 8;
@@ -1445,6 +1458,13 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                                   variant="ghost"
                                   onInvoke={() => {
                                     setGranted([]);
+                                    setGrantedImages({
+                                      read: [],
+                                      use: [],
+                                      pull: [],
+                                      remove: [],
+                                      prune_all_unused: false,
+                                    });
                                     setGrantedFilesystem(emptyFilesystemGrant());
                                     setGrantedWorkspaceEnvironment({ read: [], write: [] });
                                   }}
@@ -1486,6 +1506,20 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                                       delete: [],
                                       rename: [],
                                     }));
+                                  if (!enabled && capability === 'images:read')
+                                    setGrantedImages((current) => ({ ...current, read: [] }));
+                                  if (!enabled && capability === 'images:pull')
+                                    setGrantedImages((current) => ({ ...current, pull: [] }));
+                                  if (!enabled && capability === 'images:remove')
+                                    setGrantedImages((current) => ({ ...current, remove: [] }));
+                                  if (!enabled && capability === 'images:prune')
+                                    setGrantedImages((current) => ({
+                                      ...current,
+                                      prune_all_unused: false,
+                                    }));
+                                  if (!enabled && capability === 'containers:create') {
+                                    setGrantedImages((current) => ({ ...current, use: [] }));
+                                  }
                                 }}
                               />
                             </FormControlLabel>
@@ -1545,10 +1579,17 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                             </FormControlLabel>
                           )}
                           {imageGrantCount(requestedImages) > 0 && (
-                            <Text
-                              label={`Image access · ${imageGrantCount(grantedImages)}/${imageGrantCount(requestedImages)}`}
-                              color="text-dim"
-                            />
+                            <>
+                              <Text
+                                label={`Image access · ${imageGrantCount(grantedImages)}/${imageGrantCount(requestedImages)}`}
+                                color="text-dim"
+                              />
+                              <Text
+                                label="Each image switch includes only the matching product action."
+                                color="text-dim"
+                                wrap
+                              />
+                            </>
                           )}
                           {IMAGE_VERBS.flatMap(({ key: verb, label }) =>
                             requestedImages[verb].map((selector) => {
@@ -1564,20 +1605,26 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                                 >
                                   <Switch
                                     checked={selected}
-                                    onToggle={(event: Change) =>
-                                      setGrantedImages((current) => ({
-                                        ...current,
+                                    onToggle={(event: Change) => {
+                                      const next = {
+                                        ...grantedImages,
                                         [verb]: event.value
-                                          ? current[verb].some(
+                                          ? grantedImages[verb].some(
                                               (candidate) => imageSelectorKey(candidate) === key,
                                             )
-                                            ? current[verb]
-                                            : [...current[verb], selector]
-                                          : current[verb].filter(
+                                            ? grantedImages[verb]
+                                            : [...grantedImages[verb], selector]
+                                          : grantedImages[verb].filter(
                                               (candidate) => imageSelectorKey(candidate) !== key,
                                             ),
-                                      }))
-                                    }
+                                      };
+                                      const capability = imageCapability(verb);
+                                      const enabled = next[verb].length > 0;
+                                      setGranted((current) =>
+                                        withCapability(current, capability, enabled),
+                                      );
+                                      setGrantedImages(next);
+                                    }}
                                   />
                                 </FormControlLabel>
                               );
@@ -1587,12 +1634,16 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                             <FormControlLabel label="Prune every unused image" gap={2}>
                               <Switch
                                 checked={grantedImages.prune_all_unused}
-                                onToggle={(event: Change) =>
+                                onToggle={(event: Change) => {
+                                  const enabled = Boolean(event.value);
+                                  setGranted((current) =>
+                                    withCapability(current, 'images:prune', enabled),
+                                  );
                                   setGrantedImages((current) => ({
                                     ...current,
-                                    prune_all_unused: Boolean(event.value),
-                                  }))
-                                }
+                                    prune_all_unused: enabled,
+                                  }));
+                                }}
                               />
                             </FormControlLabel>
                           )}

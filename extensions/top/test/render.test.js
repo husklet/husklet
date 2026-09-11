@@ -1917,6 +1917,88 @@ test('extension review calls out destructive image authority before consent', as
   );
 });
 
+for (const updating of [false, true]) {
+  test(`extension ${updating ? 'update' : 'install'} keeps exact image consent tied to its action`, async () => {
+    const calls = [];
+    const candidate = {
+      name: 'image-tool',
+      version: '2.0.0',
+      image_digest: `sha256:${'a'.repeat(64)}`,
+      installed_image_digest: updating ? `sha256:${'c'.repeat(64)}` : null,
+      requested: [
+        'images:read',
+        'containers:create',
+        'images:pull',
+        'images:remove',
+        'images:prune',
+      ],
+      requested_images: {
+        read: [{ reference: 'registry.example/database:1' }],
+        use: [{ digest: `sha256:${'b'.repeat(64)}` }],
+        pull: [{ reference: 'registry.example/embeddings:2' }],
+        remove: [{ reference: 'registry.example/test-runner:3' }],
+        prune_all_unused: true,
+      },
+    };
+    const stage = host();
+    stage.render(
+      h(Extensions, {
+        api: {
+          extensions: {
+            list: async () => [],
+            startAcquisition: async () => ({ job: 'image-consent' }),
+            acquisition: async () => ({
+              job: 'image-consent',
+              reference: 'registry.example/image-tool:2',
+              revision: 3,
+              state: 'ready',
+              progress: null,
+              candidate,
+              error: null,
+            }),
+            [`${updating ? 'update' : 'install'}AndWait`]: async (...args) => {
+              calls.push(args);
+              return { changed: true, extension: { ...candidate, status: 'running' } };
+            },
+          },
+          watchExtensions: async () => () => {},
+        },
+      }),
+    );
+    await settled();
+    selectExtensionMode(stage, 'Discover');
+    await settled();
+    change(stage, 'registry.example/extension:version', 'registry.example/image-tool:2');
+    invoke(stage, 'Inspect');
+    await settled();
+    await settled();
+    expand(stage, 'Exact grants · 0/10 selected');
+    assert.ok(labelled(stage, 'Each image switch includes only the matching product action.'));
+    assert.deepEqual(latestSwitchValues(stage), Array(10).fill(false));
+
+    toggleSwitch(stage, 8, true);
+    assert.deepEqual(latestSwitchValues(stage).slice(0, 5), [false, false, false, true, false]);
+    assert.ok(labelled(stage, 'Review decision · 2/10 selected'));
+    toggleSwitch(stage, 3, false);
+    assert.deepEqual(latestSwitchValues(stage), Array(10).fill(false));
+
+    toggleSwitch(stage, 6, true);
+    toggleSwitch(stage, 9, true);
+    assert.deepEqual(latestSwitchValues(stage).slice(0, 5), [false, true, false, false, true]);
+    invoke(stage, updating ? 'Update with selected access' : 'Install with selected access');
+    await settled();
+    await settled();
+    assert.deepEqual(calls[0][2].capabilities, ['containers:create', 'images:prune']);
+    assert.deepEqual(calls[0][2].images, {
+      read: [],
+      use: [{ digest: `sha256:${'b'.repeat(64)}` }],
+      pull: [],
+      remove: [],
+      prune_all_unused: true,
+    });
+  });
+}
+
 test('extension discovery distinguishes catalogue loading from a complete empty catalogue', async () => {
   let resolveCatalogue;
   const catalogue = new Promise((resolve) => {
