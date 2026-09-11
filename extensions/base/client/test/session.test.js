@@ -537,7 +537,14 @@ test('real Unix range batch preserves ordered paths and one bounded frame', asyn
       workspace(session).files.readRanges([
         { path: 'src/a.rs', limit: 1, observed: 'review-snapshot-v1' },
       ]),
-      /inconsistent filesystem range batch/,
+      (error) => {
+        assert(error instanceof FileIdentityChangedError);
+        assert.equal(error.path, 'src/a.rs');
+        assert.equal(error.expected, 'review-snapshot-v1');
+        assert.equal(error.actual, 'id:src/a.rs');
+        assert.equal(error.offset, 0);
+        return true;
+      },
     );
     assert.equal(calls[1].with.ranges[0].observed, 'review-snapshot-v1');
     await assert.rejects(

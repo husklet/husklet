@@ -2285,6 +2285,17 @@ export function workspace(session, { signal } = {}) {
                 if (aggregate > 65536)
                     throw new RangeError('filesystem range batch exceeds 65536 requested bytes');
                 const values = expect(await session.call('filesystem_read_ranges', { ranges: exact }), 'file_ranges');
+                values.forEach((value, index) => {
+                    const requested = exact[index];
+                    if (requested &&
+                        requested.observed !== null &&
+                        value.path === requested.path &&
+                        value.identity &&
+                        new TextEncoder().encode(value.identity).byteLength <= 256 &&
+                        value.identity !== requested.observed) {
+                        throw new FileIdentityChangedError(requested.path, requested.observed, value.identity, requested.offset);
+                    }
+                });
                 const files = new Map();
                 if (values.length !== exact.length ||
                     values.some((value, index) => {
