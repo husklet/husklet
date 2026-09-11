@@ -4132,7 +4132,7 @@ test('real Unix output pages apply backpressure, cancel locally, and fail closed
   }
 });
 
-test('real Unix output iteration rejects oversized pages, sequence gaps, and unknown streams', async () => {
+test('real Unix output calls reject oversized pages, sequence gaps, and unknown streams', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-output-integrity-'));
   const socketPath = path.join(directory, 'host.sock');
   const executionId = 'd'.repeat(32);
@@ -4160,8 +4160,7 @@ test('real Unix output iteration rejects oversized pages, sequence gaps, and unk
               : outputCalls === 2
                 ? [entry(2)]
                 : [{ ...entry(1), stream: 'database' }];
-          socket.write(
-            encode({
+          const reply = encode({
               channel: 2,
               kind: KIND.response,
               payload: {
@@ -4174,8 +4173,8 @@ test('real Unix output iteration rejects oversized pages, sequence gaps, and unk
                   gap: false,
                 },
               },
-            }),
-          );
+            });
+          for (const byte of reply) socket.write(Uint8Array.of(byte));
         } else if (frame.payload.call === 'workspace_info') {
           socket.write(
             encode({
@@ -4210,10 +4209,12 @@ test('real Unix output iteration rejects oversized pages, sequence gaps, and unk
       host.containers.executionOutputPages(executionId, { limit: 1 }).next(),
       /exceeded its requested entry limit/,
     );
-    await assert.rejects(
-      host.containers.executionOutputPages(executionId, { limit: 1 }).next(),
-      /entry sequence is not contiguous/,
-    );
+    await assert.rejects(host.containers.executionOutput(executionId, { limit: 1 }), (error) => {
+      assert(error instanceof ExecutionOutputProtocolError);
+      assert.deepEqual([error.executionId, error.after, error.next], [executionId, 0, 2]);
+      assert.match(error.message, /entry sequence is not contiguous/);
+      return true;
+    });
     await assert.rejects(
       host.containers.executionOutputPages(executionId, { limit: 1 }).next(),
       /unknown stream/,

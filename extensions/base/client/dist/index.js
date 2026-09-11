@@ -139,12 +139,30 @@ function exactExecutionLineLimit(limit) {
     }
     return limit;
 }
-function exactExecutionOutputPage(page, limit) {
+function exactExecutionOutputPage(page, limit, executionId, after) {
     if (page.entries.length > limit) {
         throw new TypeError('host returned an execution output page that exceeded its requested entry limit');
     }
     if (page.entries.some(({ stream }) => stream !== 'stdout' && stream !== 'stderr')) {
         throw new TypeError('host returned an execution output entry with an unknown stream');
+    }
+    if (!page.gap) {
+        const sequences = page.entries.map((entry) => entry.sequence);
+        const contiguous = sequences.every((sequence, index) => sequence === after + index + 1);
+        const last = sequences.at(-1);
+        let invalid;
+        if (page.next < after)
+            invalid = 'cursor moved backwards';
+        else if (page.eof && page.more)
+            invalid = 'page is both final and continued';
+        else if (sequences.length === 0 && page.next !== after)
+            invalid = 'empty page advanced its cursor';
+        else if (sequences.length > 0 && (!contiguous || last !== page.next))
+            invalid = 'entry sequence is not contiguous with its continuation cursor';
+        else if (page.more && page.next === after)
+            invalid = 'continued page did not advance its cursor';
+        if (invalid)
+            throw new ExecutionOutputProtocolError(executionId, after, page.next, invalid);
     }
     return page;
 }
@@ -1129,11 +1147,12 @@ export function workspace(session, { signal } = {}) {
                 if (!Number.isSafeInteger(after) || after < 0)
                     throw new RangeError('execution output cursor must be a nonnegative safe integer');
                 exactExecutionPageLimit(limit);
+                const executionId = immutableIdentity(id, [32], 'execution');
                 return exactExecutionOutputPage(expect(await session.call('execution_output', {
-                    id: immutableIdentity(id, [32], 'execution'),
+                    id: executionId,
                     after,
                     limit,
-                }), 'execution_output'), limit);
+                }), 'execution_output'), limit, executionId, after);
             },
             executionOutputPages: async function* (id, { after = 0, limit = 16, pollIntervalMs = 50, signal, } = {}) {
                 exactExecutionPollInterval(pollIntervalMs);
@@ -1145,24 +1164,6 @@ export function workspace(session, { signal } = {}) {
                     requireOutputActive(signal);
                     if (page.gap)
                         throw new ExecutionOutputGapError(executionId, cursor, page.next);
-                    const sequences = page.entries.map((entry) => entry.sequence);
-                    const contiguous = sequences.every((sequence, index) => sequence === cursor + index + 1);
-                    const last = sequences.at(-1);
-                    let invalid;
-                    if (page.next < cursor)
-                        invalid = 'cursor moved backwards';
-                    else if (page.entries.length > limit)
-                        invalid = 'page exceeded its requested entry limit';
-                    else if (page.eof && page.more)
-                        invalid = 'page is both final and continued';
-                    else if (sequences.length === 0 && page.next !== cursor)
-                        invalid = 'empty page advanced its cursor';
-                    else if (sequences.length > 0 && (!contiguous || last !== page.next))
-                        invalid = 'entry sequence is not contiguous with its continuation cursor';
-                    else if (page.more && page.next === cursor)
-                        invalid = 'continued page did not advance its cursor';
-                    if (invalid)
-                        throw new ExecutionOutputProtocolError(executionId, cursor, page.next, invalid);
                     const next = page.next;
                     const eof = page.eof;
                     const more = page.more;
