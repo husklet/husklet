@@ -1770,6 +1770,20 @@ mod unix {
             capture_story(&realized_window, "Slider code expanded narrow");
         }
         if story == "Extension acquisition" {
+            let card = find::<gtk::Frame>(&root, |frame| frame.has_css_class("hl-card"));
+            assert!(
+                card.height() <= 180,
+                "a standalone acquisition card consumed {}px instead of staying content-sized",
+                card.height()
+            );
+            let action = find::<gtk::Button>(&card.clone().upcast(), |button| {
+                button_caption(button).as_deref() == Some("Cancel download")
+            });
+            assert!(
+                action.allocation().y() <= 100,
+                "the acquisition action drifted {}px away from its status",
+                action.allocation().y()
+            );
             assert!(
                 find::<gtk::Label>(&root, |label| label.text() == "Cancel download invoked for checking.").is_visible(),
                 "cancellation did not produce visible, state-specific acknowledgement"

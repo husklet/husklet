@@ -101,6 +101,10 @@ pub(crate) fn widget(tag: Tag) -> gtk::Widget {
 fn frame() -> gtk::Frame {
     let widget = gtk::Frame::new(None);
     widget.set_hexpand(true);
+    // Card content may expand inside a row whose peers establish a taller line,
+    // but that internal policy must not make a standalone card consume all
+    // vertical space offered by a page.
+    widget.set_vexpand(false);
     widget.set_child(Some(&axis::column(8)));
     widget
 }
