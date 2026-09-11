@@ -10,7 +10,7 @@ if (!configuration?.path || !configuration.slot || !configuration.prompt) {
 const session = await connect({ path: configuration.path, pendingLimit: 8, timeout: 5_000 });
 try {
   const terminal = workspace(session).terminal;
-  const context = await terminal.readAll({ lines: 80 });
+  const context = await terminal.readAllStable({ lines: 80, attempts: 3 });
   const selected = context.panes.find(({ pane }) => pane.slot === configuration.slot);
   if (!selected) throw new Error('pane is not available in the bounded inventory');
   const observed = selected.readable;

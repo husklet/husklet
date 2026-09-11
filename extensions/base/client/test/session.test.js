@@ -15,6 +15,7 @@ import {
   FilesystemJournalGapError,
   JsonLineDecodeError,
   JsonLineParseError,
+  PaneInventoryChangedError,
   PaneUnavailableError,
   Session,
   StateDecodeError,
@@ -10015,6 +10016,94 @@ test('real Unix execAndWait preserves execution identity when waiting fails and 
     );
     assert.deepEqual(calls, ['container_exec', 'execution_wait']);
     assert(!calls.includes('execution_remove'));
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('real Unix stable pane inventory retries a layout race and keeps the session reusable', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-pane-snapshot-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const connections = new Set();
+  const calls = [];
+  let lists = 0;
+  const pane = (revision) => ({
+    slot: 'shell', generation: 7, revision, kind: 'terminal', provider: null,
+    tab: 'tab-1', title: 'Shell', focused: true,
+  });
+  const screen = (revision) => ({
+    slot: 'shell', generation: 7, revision, columns: 80, rows: 24,
+    lines: [`revision ${revision}`], cursor_column: 0, cursor_row: 1, truncated: false,
+  });
+  const fragmented = (socket, frame) => {
+    socket.write(frame.subarray(0, 5));
+    setImmediate(() => socket.write(frame.subarray(5)));
+  };
+  const server = net.createServer((socket) => {
+    connections.add(socket);
+    socket.on('close', () => connections.delete(socket));
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.kind !== KIND.request) continue;
+        calls.push(frame.payload);
+        if (frame.payload.call === 'pane_list') {
+          lists += 1;
+          const revisions = [10, 11, 12, 13, 13, 13];
+          fragmented(socket, encode({
+            channel: 2, kind: KIND.response,
+            payload: { reply: 'panes', with: { panes: [pane(revisions[lists - 1])], truncated: false } },
+          }));
+        } else if (frame.payload.call === 'terminal_read_pane') {
+          assert.deepEqual(frame.payload.with, { slot: 'shell', lines: 40 });
+          fragmented(socket, encode({
+            channel: 2, kind: KIND.response,
+            payload: { reply: 'text', with: screen(lists === 3 ? 12 : lists >= 5 ? 13 : 10) },
+          }));
+        }
+      }
+    });
+    const greeting = encode({
+      channel: CONTROL, kind: KIND.open,
+      payload: { protocol: 1, peer: 'stable-pane-inventory', granted: ['panes:observe', 'terminals:output'] },
+    });
+    socket.write(greeting.subarray(0, 3));
+    setImmediate(() => socket.write(greeting.subarray(3)));
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    const terminal = workspace(session).terminal;
+    const cancelled = new AbortController();
+    cancelled.abort('agent stopped');
+    await assert.rejects(
+      terminal.readAllStable({ signal: cancelled.signal }),
+      (error) => error?.name === 'AbortError',
+    );
+    await assert.rejects(terminal.readAllStable({ attempts: 0 }), /within 1\.\.=16/);
+    assert.deepEqual(calls, [], 'invalid and pre-cancelled snapshots send no frames');
+
+    await assert.rejects(terminal.readAllStable({ lines: 40, attempts: 1 }), (error) => {
+      assert(error instanceof PaneInventoryChangedError);
+      assert.equal(error.attempts, 1);
+      assert.equal(error.before[0].revision, 10);
+      assert.equal(error.after[0].revision, 11);
+      return true;
+    });
+    const snapshot = await terminal.readAllStable({ lines: 40, attempts: 2 });
+    assert.equal(snapshot.complete, true);
+    assert.equal(snapshot.panes[0].pane.revision, 13);
+    assert.equal(snapshot.panes[0].readable.text, 'revision 13');
+    assert.deepEqual(calls.map(({ call }) => call), [
+      'pane_list', 'terminal_read_pane', 'pane_list',
+      'pane_list', 'terminal_read_pane', 'pane_list',
+      'pane_list', 'terminal_read_pane', 'pane_list',
+    ]);
+    assert.equal((await terminal.read('shell', 40)).revision, 13);
+    assert.equal(calls.at(-1).call, 'terminal_read_pane', 'the ordered session remains reusable');
     await session.close();
   } finally {
     for (const connection of connections) connection.destroy();

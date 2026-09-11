@@ -4572,7 +4572,7 @@ test('bounded all-pane conversion refuses a cursor race instead of mixing invent
       },
     }),
   );
-  await assert.rejects(pending, /changed during bounded text inventory/);
+  await assert.rejects(pending, /changed during bounded text conversion/);
   stage.session.close();
   stage.host.destroy();
   stage.server.close();

@@ -64,6 +64,13 @@ export declare class PaneChangedError extends Error {
     readonly observed: any;
     constructor(slot: any, expected: any, observed: any);
 }
+/** The pane layout kept changing while a bounded coherent inventory was assembled. */
+export declare class PaneInventoryChangedError extends Error {
+    readonly attempts: any;
+    readonly before: any;
+    readonly after: any;
+    constructor(attempts: any, before: any, after: any);
+}
 /** A requested pane is absent or cannot be resolved from a bounded inventory. */
 export declare class PaneUnavailableError extends Error {
     readonly slot: any;

@@ -476,6 +476,12 @@ export interface ReadablePaneInventory {
     /** False means bounded discovery omitted additional panes. */
     complete: boolean;
 }
+/** The pane layout kept changing while a bounded coherent inventory was assembled. */
+export declare class PaneInventoryChangedError extends Error {
+    readonly attempts: number;
+    readonly before: ReadonlyArray<Readonly<Pick<InspectablePane, 'slot' | 'generation' | 'revision' | 'focused'>>>;
+    readonly after: ReadonlyArray<Readonly<Pick<InspectablePane, 'slot' | 'generation' | 'revision' | 'focused'>>>;
+}
 export interface PaneSemanticAction {
     generation: number;
     revision: number;
@@ -1394,6 +1400,15 @@ export interface WorkspaceApi {
         /** Convert every pane in one bounded discovery pass without hiding truncation or cursor races. */
         readAll(options?: {
             lines?: number;
+        }): Promise<ReadablePaneInventory>;
+        /**
+         * Convert a pane inventory only when a second discovery proves the layout and every
+         * pane cursor remained unchanged. Retries are bounded and never return a mixed layout.
+         */
+        readAllStable(options?: {
+            lines?: number;
+            attempts?: number;
+            signal?: AbortSignal;
         }): Promise<ReadablePaneInventory>;
         /** Arm observation, reconcile already-unread state, then wait for a fresh bounded projection. */
         waitForText(slot: string, after: Pick<PaneText | PaneSemanticTree, 'generation' | 'revision'>, options?: {

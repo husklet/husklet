@@ -322,6 +322,25 @@ export class PaneChangedError extends Error {
   }
 }
 
+/** The pane layout kept changing while a bounded coherent inventory was assembled. */
+export class PaneInventoryChangedError extends Error {
+  readonly attempts;
+  readonly before;
+  readonly after;
+
+  constructor(attempts, before, after) {
+    super(
+      `pane inventory changed during ${attempts} bounded snapshot attempt${attempts === 1 ? '' : 's'}`,
+    );
+    this.name = 'PaneInventoryChangedError';
+    this.attempts = attempts;
+    const cursor = ({ slot, generation, revision, focused }) =>
+      Object.freeze({ slot, generation, revision, focused });
+    this.before = Object.freeze(before.panes.map(cursor));
+    this.after = Object.freeze(after.panes.map(cursor));
+  }
+}
+
 /** A requested pane is absent or cannot be resolved from a bounded inventory. */
 export class PaneUnavailableError extends Error {
   readonly slot;
@@ -2253,7 +2272,7 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
               snapshot.generation !== pane.generation ||
               snapshot.revision !== pane.revision
             ) {
-              throw new Error(`pane ${pane.slot} changed during bounded text inventory`);
+              throw new PaneChangedError(pane.slot, pane, snapshot);
             }
             panes.push({
               pane,
@@ -2269,7 +2288,7 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
               snapshot.generation !== pane.generation ||
               snapshot.revision !== pane.revision
             ) {
-              throw new Error(`pane ${pane.slot} changed during bounded text inventory`);
+              throw new PaneChangedError(pane.slot, pane, snapshot);
             }
             panes.push({
               pane,
@@ -3476,6 +3495,49 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
     watch('terminal', 'terminal', (tabs) => listener(exactTabs(tabs as TabSummary[])), 'terminal');
   api.watchPaneChanges = (listener) =>
     watch('pane-changes', 'pane_changes', listener, 'pane change');
+  api.terminal.readAllStable = async ({ lines, attempts = 3, signal: readSignal } = {}) => {
+    if (!Number.isSafeInteger(attempts) || attempts < 1 || attempts > 16) {
+      throw new RangeError('stable pane inventory attempts must be an integer within 1..=16');
+    }
+    if (lines !== undefined && (!Number.isSafeInteger(lines) || lines < 0)) {
+      throw new TypeError('stable pane inventory lines must be a nonnegative safe integer');
+    }
+    if (readSignal?.aborted) throw outputAbort(readSignal);
+
+    const scoped = readSignal === undefined ? api : workspace(hostSession, { signal: readSignal });
+    const samePane = (left, right) =>
+      left.slot === right.slot &&
+      left.generation === right.generation &&
+      left.revision === right.revision &&
+      left.kind === right.kind &&
+      left.provider?.extension === right.provider?.extension &&
+      left.provider?.provider === right.provider?.provider &&
+      left.tab === right.tab &&
+      left.title === right.title &&
+      left.focused === right.focused;
+
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      let readable;
+      try {
+        readable = await scoped.terminal.readAll({ lines });
+      } catch (error) {
+        if (error instanceof PaneChangedError && attempt < attempts) continue;
+        throw error;
+      }
+      const before = {
+        panes: readable.panes.map(({ pane }) => pane),
+        truncated: !readable.complete,
+      };
+      const after = await scoped.terminal.panes();
+      const unchanged =
+        before.truncated === after.truncated &&
+        before.panes.length === after.panes.length &&
+        before.panes.every((pane, index) => samePane(pane, after.panes[index]));
+      if (unchanged) return readable;
+      if (attempt === attempts) throw new PaneInventoryChangedError(attempts, before, after);
+    }
+    throw new Error('unreachable stable pane inventory attempt');
+  };
   api.paneChanges = async function* ({ signal: iteratorSignal } = {}) {
     if (iteratorSignal?.aborted) throw outputAbort(iteratorSignal);
     let pending: { value: PaneChange; acknowledge: () => void } | undefined;
