@@ -12,6 +12,7 @@ pub(super) struct Pane {
     breakpoint: Cell<i32>,
     wide_position: Cell<i32>,
     allocating: Cell<bool>,
+    expanded: Cell<Option<bool>>,
     layout: OnceCell<gtk::Box>,
     paned: OnceCell<gtk::Paned>,
 }
@@ -22,6 +23,7 @@ impl Default for Pane {
             breakpoint: Cell::new(640),
             wide_position: Cell::new(160),
             allocating: Cell::new(false),
+            expanded: Cell::new(None),
             layout: OnceCell::new(),
             paned: OnceCell::new(),
         }
@@ -39,12 +41,14 @@ impl ObjectImpl for Pane {
     fn properties() -> &'static [glib::ParamSpec] {
         static PROPERTIES: OnceLock<Vec<glib::ParamSpec>> = OnceLock::new();
         PROPERTIES.get_or_init(|| {
-            vec![glib::ParamSpecInt::builder("breakpoint")
-                .minimum(240)
-                .maximum(4096)
-                .default_value(640)
-                .read_only()
-                .build()]
+            vec![
+                glib::ParamSpecInt::builder("breakpoint")
+                    .minimum(240)
+                    .maximum(4096)
+                    .default_value(640)
+                    .read_only()
+                    .build(),
+            ]
         })
     }
 
@@ -119,6 +123,7 @@ impl WidgetImpl for Pane {
         let layout = self.layout();
         let paned = self.paned();
         let expanded = width >= self.breakpoint.get();
+        let branch_changed = self.expanded.replace(Some(expanded)) != Some(expanded);
         let wide_position = self.wide_position.get();
         if let Some(compact) = layout.first_child().filter(|child| !child.eq(paned)) {
             compact.set_visible(!expanded);
@@ -141,6 +146,13 @@ impl WidgetImpl for Pane {
         layout.measure(gtk::Orientation::Horizontal, -1);
         layout.measure(gtk::Orientation::Vertical, width);
         layout.allocate(width, height, baseline, None);
+        if branch_changed {
+            // The first allocation realizes the reparented branch; the second
+            // includes every newly mapped descendant in this same frame.
+            layout.measure(gtk::Orientation::Horizontal, -1);
+            layout.measure(gtk::Orientation::Vertical, width);
+            layout.allocate(width, height, baseline, None);
+        }
         paned.update_property(&[gtk::accessible::Property::ValueMax(f64::from(width))]);
         self.allocating.set(false);
     }

@@ -16,9 +16,9 @@ mod unix {
         NetworkSummary,
     };
     use hl_extension::{
-        codec, Capability, ChannelId, ExtensionName, ExtensionPreferences, ExtensionSummary, Frame, Grant, Hello,
+        Capability, ChannelId, ExtensionName, ExtensionPreferences, ExtensionSummary, Frame, Grant, Hello, PROTOCOL,
         PaneProvider, PreferenceValue, Reply, Request, Snapshot, Welcome, Wire, WorkspaceConfiguration, WorkspaceInfo,
-        WorkspaceTerminal, PROTOCOL,
+        WorkspaceTerminal, codec,
     };
     use hl_gui::{Renderer as _, SourceMutation, Theme, Tree};
     use hl_gui_gtk::Surface;
@@ -302,6 +302,8 @@ mod unix {
             root.measure(gtk::Orientation::Horizontal, -1);
             root.measure(gtk::Orientation::Vertical, width);
             root.allocate(width, 1_600, -1, None);
+            window.queue_draw();
+            settle_toolkit();
             assert_eq!(root.width(), width, "{fixture}/{name} rejected {width}px");
             assert_contained(&root, &format!("{fixture}/{name}/{width_name}"));
             if fixture == "populated" && name == "settings" {
@@ -726,6 +728,8 @@ mod unix {
                 window.set_size_request(width, 800);
                 settle_toolkit();
                 discover_root.allocate(width, 1_600, -1, None);
+                window.queue_draw();
+                settle_toolkit();
                 assert_contained(&discover_root, &format!("discover/extensions/{width_name}"));
                 for (label, action) in [("update", &review), ("access", &review_access)] {
                     assert_eq!(
@@ -846,6 +850,8 @@ mod unix {
                 expanded_root.measure(gtk::Orientation::Horizontal, -1);
                 expanded_root.measure(gtk::Orientation::Vertical, width);
                 expanded_root.allocate(width, 1_600, -1, None);
+                window.queue_draw();
+                settle_toolkit();
                 assert_contained(&expanded_root, &format!("expanded/networks/{width_name}"));
                 capture(&window, &format!("expanded-networks-{width_name}"), width, 800);
             }
@@ -953,7 +959,27 @@ mod unix {
                 success_root.measure(gtk::Orientation::Horizontal, -1);
                 success_root.measure(gtk::Orientation::Vertical, width);
                 success_root.allocate(width, 1_600, -1, None);
+                window.queue_draw();
+                settle_toolkit();
                 assert_contained(&success_root, &format!("post-success/networks/{width_name}"));
+                if width == 1_200 {
+                    assert_labels_painted(
+                        &window,
+                        &success_root,
+                        &[
+                            "Workspace",
+                            "Settings",
+                            "Extensions",
+                            "Containers",
+                            "Processes",
+                            "Executions",
+                            "Images",
+                            "Volumes",
+                            "Networks",
+                            "Terminals",
+                        ],
+                    );
+                }
                 capture(&window, &format!("post-success-networks-{width_name}"), width, 800);
             }
             assert!(has_label(&success_root, &success));
@@ -2153,6 +2179,47 @@ mod unix {
             .render_texture(&node, None)
             .save_to_png(directory.join(format!("{name}.png")))
             .expect("Top screenshot is written");
+    }
+
+    fn assert_labels_painted(window: &gtk::Window, root: &gtk::Widget, labels: &[&str]) {
+        let paintable = gtk::WidgetPaintable::new(Some(window.upcast_ref::<gtk::Widget>()));
+        let node = (0..20)
+            .find_map(|_| {
+                window.queue_draw();
+                settle_toolkit();
+                let snapshot = gtk::Snapshot::new();
+                paintable.snapshot(snapshot.upcast_ref::<gtk::gdk::Snapshot>(), 1_200.0, 800.0);
+                let node = snapshot.to_node();
+                if node.is_none() {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                node
+            })
+            .expect("Top window produces a render node");
+        let renderer = window.renderer().expect("Top window has a renderer");
+        let texture = renderer.render_texture(&node, None);
+        let width = texture.width() as usize;
+        let height = texture.height() as usize;
+        let stride = width * 4;
+        let mut pixels = vec![0_u8; stride * height];
+        texture.download(&mut pixels, stride);
+        for wanted in labels {
+            let label = find_mapped_labelled(root, wanted);
+            let bounds = label
+                .compute_bounds(root)
+                .expect("navigation label belongs to Top root");
+            let x0 = bounds.x().floor().max(0.0) as usize;
+            let y0 = bounds.y().floor().max(0.0) as usize;
+            let x1 = (bounds.x() + bounds.width()).ceil().min(width as f32) as usize;
+            let y1 = (bounds.y() + bounds.height()).ceil().min(height as f32) as usize;
+            let first = pixels[y0 * stride + x0 * 4..y0 * stride + x0 * 4 + 4].to_vec();
+            let painted =
+                (y0..y1).any(|y| (x0..x1).any(|x| pixels[y * stride + x * 4..y * stride + x * 4 + 4] != first));
+            assert!(
+                painted,
+                "navigation label {wanted:?} was mapped but absent from the rendered frame"
+            );
+        }
     }
 
     fn find_button(root: &gtk::Widget, label: &str) -> gtk::Button {
