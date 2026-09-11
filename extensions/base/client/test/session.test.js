@@ -1705,13 +1705,16 @@ test('real Unix latest-change watcher supersedes long test work without blocking
   await new Promise((resolve) => server.listen(socketPath, resolve));
   const controller = new AbortController();
   const started = [];
+  const delivered = [];
   const superseded = [];
   let stop;
   try {
     const session = await connect({ path: socketPath, timeout: 1_000 });
     stop = await workspace(session).files.watchLatestChanges(
       async (page, signal) => {
-        const revision = page.changes[0].revision;
+        const revisions = page.changes.map(({ revision }) => revision);
+        delivered.push(revisions);
+        const revision = revisions.at(-1);
         started.push(revision);
         if (revision === 2) {
           controller.abort('latest revision observed');
@@ -1743,6 +1746,11 @@ test('real Unix latest-change watcher supersedes long test work without blocking
       ),
     ]);
     assert.deepEqual(started, [1, 2]);
+    assert.deepEqual(
+      delivered,
+      [[1], [1, 2]],
+      'replacement work retains the change whose prior generation was superseded',
+    );
     assert.deepEqual(superseded, [1]);
     assert.deepEqual(
       calls

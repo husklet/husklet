@@ -1793,9 +1793,13 @@ export function workspace(session, { signal } = {}) {
                 Object.defineProperty(stop, 'done', { value: running, enumerable: true });
                 return stop;
             },
-            watchLatestChanges: async (listener, { cursor, pageSize = 256, pollMs = 250, signal, }) => {
+            watchLatestChanges: async (listener, { cursor, pageSize = 256, pollMs = 250, maxBufferedChanges = 1_024, signal, }) => {
                 if (typeof listener !== 'function')
                     throw new TypeError('filesystem latest-change listener must be a function');
+                if (!Number.isSafeInteger(maxBufferedChanges) ||
+                    maxBufferedChanges < 1 ||
+                    maxBufferedChanges > 65_536)
+                    throw new RangeError('filesystem latest-change buffer must contain between 1 and 65536 changes');
                 const stopped = new AbortController();
                 const abort = () => stopped.abort(signal?.reason);
                 if (signal?.aborted)
@@ -1803,6 +1807,7 @@ export function workspace(session, { signal } = {}) {
                 else
                     signal?.addEventListener('abort', abort, { once: true });
                 const pending = new Map();
+                let buffered = [];
                 let current;
                 let failure;
                 const running = (async () => {
@@ -1814,13 +1819,35 @@ export function workspace(session, { signal } = {}) {
                             signal: stopped.signal,
                         })) {
                             current?.abort('superseded by a newer filesystem revision');
+                            if (page.truncated)
+                                buffered = [page];
+                            else
+                                buffered.push(page);
+                            const bufferedChanges = buffered.reduce((total, retained) => total + retained.changes.length, 0);
+                            if (bufferedChanges > maxBufferedChanges) {
+                                throw new RangeError(`filesystem latest-change buffer exceeded ${maxBufferedChanges} changes`);
+                            }
                             if (pending.size >= 2) {
                                 throw new Error('filesystem latest-change listener retained two superseded generations');
                             }
                             const generation = new AbortController();
                             current = generation;
+                            const included = buffered.length;
+                            const latest = buffered.at(-1);
+                            const changed = new Map(buffered
+                                .flatMap((retained) => retained.changes)
+                                .map((change) => [change.path, change]));
+                            const accumulated = {
+                                ...latest,
+                                changes: [...changed.values()].sort((left, right) => left.revision - right.revision),
+                                truncated: buffered.some((retained) => retained.truncated),
+                            };
                             const task = Promise.resolve()
-                                .then(() => listener(page, generation.signal))
+                                .then(() => listener(accumulated, generation.signal))
+                                .then(() => {
+                                if (!generation.signal.aborted)
+                                    buffered.splice(0, included);
+                            })
                                 .catch((error) => {
                                 if (generation.signal.aborted)
                                     return;

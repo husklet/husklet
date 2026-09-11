@@ -1578,6 +1578,54 @@ test('filesystem change watcher exposes a cursor advance with no visible paths',
   ]);
 });
 
+test('latest filesystem work bounds the uncommitted changes retained across supersession', async () => {
+  let revision = 0;
+  const calls = [];
+  const api = workspace({
+    granted: ['filesystem:read'],
+    async call(name, payload) {
+      calls.push([name, payload]);
+      revision += 1;
+      return {
+        reply: 'file_changes',
+        with: {
+          journal: FILE_JOURNAL,
+          changes: [{ revision, kind: 'modify', path: `src/${revision}.ts`, entry: null }],
+          next: revision,
+          current: revision,
+          more: false,
+          truncated: false,
+        },
+      };
+    },
+    onEvent() {
+      return () => {};
+    },
+  });
+  const stop = await api.files.watchLatestChanges(
+    (_page, signal) =>
+      new Promise((resolve) => signal.addEventListener('abort', resolve, { once: true })),
+    {
+      cursor: { journal: FILE_JOURNAL, revision: 0 },
+      pollMs: 1,
+      maxBufferedChanges: 1,
+    },
+  );
+  await assert.rejects(stop.done, /latest-change buffer exceeded 1 changes/);
+  assert.deepEqual(
+    calls.slice(0, 2).map(([, { after }]) => after),
+    [0, 1],
+  );
+  await assert.rejects(
+    api.files.watchLatestChanges(() => {}, {
+      cursor: { journal: FILE_JOURNAL, revision: 0 },
+      maxBufferedChanges: 0,
+    }),
+    /between 1 and 65536 changes/,
+  );
+  assert.equal(calls.length, 2, 'an invalid local bound must not be framed');
+});
+
 test('real Unix change-page iteration applies backpressure and surfaces overflow, malformed cursors, and abort', async () => {
   const stage = await pair();
   const next = frames(stage.host);

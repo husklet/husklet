@@ -57,25 +57,22 @@ try {
   const wanted = (entry: FileEntry) =>
     !entry.directory && suffixes.some((suffix) => entry.path.endsWith(suffix));
 
-  const index = async (entry: FileEntry, persist = true) => {
+  const index = async (
+    entry: FileEntry,
+    persist = true,
+    signal: AbortSignal = controller.signal,
+  ) => {
     const exact = entry.identity ? entry : await host.files.stat(entry.path);
     if (!exact.identity || checkpoint.documents[entry.path]?.identity === exact.identity) return;
     const document = await host.files.readText(entry.path, {
       maxBytes: maxDocumentBytes,
       chunkBytes,
       observed: exact.identity,
-      signal: controller.signal,
+      signal,
     });
     let digest: string;
     if (configuration.model) {
-      const executionId = await host.containers.exec(
-        configuration.model.container,
-        configuration.model.generation,
-        {
-          command: [...configuration.model.command, entry.path],
-          stdin: true,
-        },
-      );
+      let executionId: string | undefined;
       try {
         async function* documentChunks() {
           // 16k UTF-16 code units can never exceed the protocol's 64 KiB UTF-8 chunk limit.
@@ -83,30 +80,28 @@ try {
             yield document.text.slice(offset, offset + 16 * 1024);
           }
         }
-        await host.containers.pipeExecutionStdin(executionId, documentChunks(), {
-          signal: controller.signal,
-        });
-        const execution = await host.containers.waitExecution(executionId, { timeoutMs: 30_000 });
-        const output = await host.containers.executionLogs(executionId, {
-          stdout: true,
-          stderr: true,
-        });
-        if (output.truncated || output.stdout.length > 1024 * 1024) {
-          throw new RangeError('embedding model output exceeded its 1 MiB result bound');
+        const result = await host.containers.execText(
+          configuration.model.container,
+          configuration.model.generation,
+          {
+            command: [...configuration.model.command, entry.path],
+            input: documentChunks(),
+            maxBytes: 1024 * 1024,
+            signal,
+            onStarted(id) {
+              executionId = id;
+            },
+          },
+        );
+        if (result.execution.exit_code !== 0) {
+          throw new Error(
+            `embedding model exited with status ${result.execution.exit_code ?? 'unknown'}`,
+          );
         }
-        if (execution.exit_code !== 0) {
-          throw new Error(`embedding model exited with status ${execution.exit_code ?? 'unknown'}`);
-        }
-        digest = new TextDecoder('utf-8', { fatal: true })
-          .decode(Uint8Array.from(output.stdout))
-          .trim();
-      } catch (error) {
-        await host.containers
-          .cancelExecution(executionId, { signal: 'SIGTERM', timeoutMs: 1_000 })
-          .catch(() => {});
-        throw error;
+        digest = result.stdout.trim();
       } finally {
-        await host.containers.removeExecution(executionId).catch(() => {});
+        if (executionId)
+          await host.containers.removeExecution(executionId).catch(() => {});
       }
     } else {
       digest = Array.from(
@@ -160,11 +155,11 @@ try {
   ).value;
 
   if (!configuration.once) {
-    const stop = await host.files.watchChanges(
-      async (page) => {
+    const stop = await host.files.watchLatestChanges(
+      async (page, signal) => {
         if (page.truncated) throw new Error('filesystem journal gap requires a full rescan');
         for (const change of page.changes) {
-          if (change.entry && wanted(change.entry)) await index(change.entry);
+          if (change.entry && wanted(change.entry)) await index(change.entry, true, signal);
           if (!change.entry && checkpoint.documents[change.path]) {
             const { [change.path]: _removed, ...documents } = checkpoint.documents;
             void _removed;
@@ -180,6 +175,7 @@ try {
         checkpoint = (
           await host.state.updateJson(checkpointCodec, (current) => ({
             ...current,
+            journal: page.journal,
             revision: page.next,
           }))
         ).value;
