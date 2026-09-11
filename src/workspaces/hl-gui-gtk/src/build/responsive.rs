@@ -95,6 +95,11 @@ impl ObjectImpl for Pane {
         paned.set_shrink_start_child(false);
         paned.set_resize_end_child(true);
         paned.set_shrink_end_child(true);
+        // The paned is the entire wide branch, not a naturally-sized row in
+        // the private vertical box. Without vertical expansion GTK stops the
+        // rendered surface at the content's minimum height, which leaves the
+        // rest of a desktop pane blank and needlessly scrolls its navigation.
+        paned.set_vexpand(true);
         paned.set_visible(false);
         layout.append(&paned);
         layout.set_parent(&*self.obj());

@@ -408,6 +408,24 @@ mod unix {
                 assert!(entry.allocation().x() < create.allocation().x());
                 assert!(create.allocation().x() < refresh.allocation().x());
                 assert!(vertical_end(&root, refresh.upcast_ref()) <= 240);
+                if width == 1_200 {
+                    assert_labels_painted(
+                        &window,
+                        &root,
+                        &[
+                            "Workspace",
+                            "Settings",
+                            "Extensions",
+                            "Containers",
+                            "Processes",
+                            "Executions",
+                            "Images",
+                            "Volumes",
+                            "Networks",
+                            "Terminals",
+                        ],
+                    );
+                }
             }
             if fixture != "error" && name == "processes" && width == 1_200 {
                 settle_toolkit();
@@ -548,6 +566,10 @@ mod unix {
                     .next()
                     .and_then(|widget| widget.downcast::<gtk::Paned>().ok())
                     .expect("Top desktop navigation owns a responsive divider");
+                assert!(
+                    paned.vexpands(),
+                    "Top desktop divider must expand through the available pane height"
+                );
                 assert_eq!(paned.accessible_role(), gtk::AccessibleRole::Separator);
                 assert!(paned.is_focusable(), "Top divider is keyboard reachable");
                 let navigation = paned.start_child().expect("Top divider retains navigation");
@@ -2223,18 +2245,35 @@ mod unix {
         let stride = width * 4;
         let mut pixels = vec![0_u8; stride * height];
         texture.download(&mut pixels, stride);
+        let mut previous_bottom = 0.0_f32;
         for wanted in labels {
-            let label = find_mapped_labelled(root, wanted);
+            let destination = widgets_with_class(root, "hl-navigationmenuitem")
+                .into_iter()
+                .find(|widget| has_label(widget, wanted))
+                .unwrap_or_else(|| panic!("navigation destination {wanted:?} is rendered"));
+            let label = find_mapped_labelled(&destination, wanted);
             let bounds = label
                 .compute_bounds(root)
                 .expect("navigation label belongs to Top root");
+            assert!(
+                bounds.height() >= 10.0,
+                "navigation label {wanted:?} was mapped without a drawable line: {bounds:?}"
+            );
+            assert!(
+                bounds.y() >= previous_bottom,
+                "navigation label {wanted:?} overlaps the destination before it: {bounds:?}"
+            );
+            previous_bottom = bounds.y() + bounds.height();
             let x0 = bounds.x().floor().max(0.0) as usize;
             let y0 = bounds.y().floor().max(0.0) as usize;
             let x1 = (bounds.x() + bounds.width()).ceil().min(width as f32) as usize;
             let y1 = (bounds.y() + bounds.height()).ceil().min(height as f32) as usize;
-            let first = pixels[y0 * stride + x0 * 4..y0 * stride + x0 * 4 + 4].to_vec();
-            let painted =
-                (y0..y1).any(|y| (x0..x1).any(|x| pixels[y * stride + x * 4..y * stride + x * 4 + 4] != first));
+            let painted = (y0..y1).any(|y| {
+                (x0..x1).any(|x| {
+                    let pixel = &pixels[y * stride + x * 4..y * stride + x * 4 + 3];
+                    pixel.iter().all(|channel| *channel >= 128)
+                })
+            });
             assert!(
                 painted,
                 "navigation label {wanted:?} was mapped but absent from the rendered frame"
