@@ -77,6 +77,16 @@ const FILESYSTEM_VERBS = [
 ] as const;
 type FilesystemVerb = (typeof FILESYSTEM_VERBS)[number]['key'];
 
+function withCapability(
+  current: ExtensionCapability[],
+  capability: ExtensionCapability,
+  enabled: boolean,
+) {
+  return enabled
+    ? [...new Set([...current, capability])]
+    : current.filter((item) => item !== capability);
+}
+
 function emptyFilesystemGrant(): Required<FilesystemGrant> {
   return { read: [], write: [], create: [], delete: [], rename: [] };
 }
@@ -1442,13 +1452,22 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                             >
                               <Switch
                                 checked={granted.includes(capability)}
-                                onToggle={(event: Change) =>
+                                onToggle={(event: Change) => {
+                                  const enabled = Boolean(event.value);
                                   setGranted((current) =>
-                                    event.value
-                                      ? [...new Set([...current, capability])]
-                                      : current.filter((item) => item !== capability),
-                                  )
-                                }
+                                    withCapability(current, capability, enabled),
+                                  );
+                                  if (!enabled && capability === 'workspace-environment:read')
+                                    setGrantedWorkspaceEnvironment((current) => ({
+                                      ...current,
+                                      read: [],
+                                    }));
+                                  if (!enabled && capability === 'workspace-environment:write')
+                                    setGrantedWorkspaceEnvironment((current) => ({
+                                      ...current,
+                                      write: [],
+                                    }));
+                                }}
                               />
                             </FormControlLabel>
                           ))}
@@ -1705,18 +1724,29 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                                 >
                                   <Switch
                                     checked={checked}
-                                    onToggle={(event: Change) =>
+                                    onToggle={(event: Change) => {
+                                      const enabled = Boolean(event.value);
+                                      const selected = enabled
+                                        ? [...grantedWorkspaceEnvironment[verb], selector]
+                                        : grantedWorkspaceEnvironment[verb].filter(
+                                            (candidate) =>
+                                              JSON.stringify(candidate) !==
+                                              JSON.stringify(selector),
+                                          );
                                       setGrantedWorkspaceEnvironment((current) => ({
                                         ...current,
-                                        [verb]: event.value
-                                          ? [...current[verb], selector]
-                                          : current[verb].filter(
-                                              (candidate) =>
-                                                JSON.stringify(candidate) !==
-                                                JSON.stringify(selector),
-                                            ),
-                                      }))
-                                    }
+                                        [verb]: selected,
+                                      }));
+                                      setGranted((capabilities) =>
+                                        withCapability(
+                                          capabilities,
+                                          verb === 'read'
+                                            ? 'workspace-environment:read'
+                                            : 'workspace-environment:write',
+                                          selected.length > 0,
+                                        ),
+                                      );
+                                    }}
                                   />
                                 </FormControlLabel>
                               );

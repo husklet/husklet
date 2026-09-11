@@ -18,8 +18,8 @@ mod unix {
     use hl_extension::{
         Capability, ChannelId, ExtensionName, ExtensionPreferences, ExtensionSummary, FilesystemGrant,
         FilesystemSelector, Frame, Grant, Hello, PROTOCOL, RelativePath,
-        PaneProvider, PreferenceValue, Reply, Request, Snapshot, Welcome, Wire, WorkspaceConfiguration, WorkspaceInfo,
-        WorkspaceTerminal, codec,
+        PaneProvider, PreferenceValue, Reply, Request, Snapshot, Welcome, Wire, WorkspaceConfiguration,
+        WorkspaceEnvironmentGrant, WorkspaceEnvironmentSelector, WorkspaceInfo, WorkspaceTerminal, codec,
     };
     use hl_gui::{Renderer as _, SourceMutation, Theme, Tree};
     use hl_gui_gtk::Surface;
@@ -1230,6 +1230,7 @@ mod unix {
                                 Capability::FilesystemRead,
                                 Capability::Interface,
                                 Capability::WorkspaceControl,
+                                Capability::WorkspaceEnvironmentRead,
                             ]),
                             required: Grant::new([Capability::Interface]),
                             requested_images: Default::default(),
@@ -1242,7 +1243,13 @@ mod unix {
                                 }],
                                 ..FilesystemGrant::default()
                             },
-                            requested_workspace_environment: Default::default(),
+                            requested_workspace_environment: WorkspaceEnvironmentGrant {
+                                read: vec![WorkspaceEnvironmentSelector::Exact {
+                                    workspace: "development".into(),
+                                    name: "DATABASE_URL".into(),
+                                }],
+                                write: Vec::new(),
+                            },
                             installed_image_digest: Some(old_digest.clone()),
                         }),
                         error: None,
@@ -1256,7 +1263,7 @@ mod unix {
         drain_extension_renders(wire, tree, surface);
 
         let review_root = surface.widget().clone().upcast::<gtk::Widget>();
-        assert!(has_label(&review_root, "No access selected · 4 requested"));
+        assert!(has_label(&review_root, "No access selected · 6 requested"));
         assert!(has_label(
             &review_root,
             "Create, start, stop, and delete workspaces"
@@ -1286,7 +1293,7 @@ mod unix {
             wire,
             tree,
             surface,
-            "Review decision · 1/4 selected",
+            "Review decision · 1/6 selected",
             |request| match request {
                 Request::EventUnsubscribe { .. } => Reply::Done,
                 other => panic!("unexpected extension consent call: {other:?}"),
@@ -1304,10 +1311,28 @@ mod unix {
         settle_toolkit();
         send_report(surface, wire, 102, |event| matches!(event, hl_gui::Event::Toggle { .. }));
         apply_extension_update_until(
-            wire, tree, surface, "Review decision · 3/4 selected",
+            wire, tree, surface, "Review decision · 3/6 selected",
             |request| match request {
                 Request::EventUnsubscribe { .. } => Reply::Done,
                 other => panic!("unexpected exact-file consent call: {other:?}"),
+            },
+            || None,
+        );
+        let review_root = surface.widget().clone().upcast::<gtk::Widget>();
+        let environment = find_label(&review_root, "Read DATABASE_URL in workspace development")
+            .mnemonic_widget()
+            .and_then(|widget| widget.downcast::<gtk::Switch>().ok())
+            .expect("exact environment label names its native switch");
+        let _ = surface.reports().drain();
+        let _: bool = environment.emit_by_name("state-set", &[&true]);
+        environment.set_active(true);
+        settle_toolkit();
+        send_report(surface, wire, 102, |event| matches!(event, hl_gui::Event::Toggle { .. }));
+        apply_extension_update_until(
+            wire, tree, surface, "Review decision · 5/6 selected",
+            |request| match request {
+                Request::EventUnsubscribe { .. } => Reply::Done,
+                other => panic!("unexpected environment consent call: {other:?}"),
             },
             || None,
         );
@@ -1345,6 +1370,7 @@ mod unix {
                                 Capability::FilesystemRead,
                                 Capability::Interface,
                                 Capability::WorkspaceControl,
+                                Capability::WorkspaceEnvironmentRead,
                             ]),
                             required: Grant::new([Capability::Interface]),
                             requested_images: Default::default(),
@@ -1357,7 +1383,13 @@ mod unix {
                                 }],
                                 ..FilesystemGrant::default()
                             },
-                            requested_workspace_environment: Default::default(),
+                            requested_workspace_environment: WorkspaceEnvironmentGrant {
+                                read: vec![WorkspaceEnvironmentSelector::Exact {
+                                    workspace: "development".into(),
+                                    name: "DATABASE_URL".into(),
+                                }],
+                                write: Vec::new(),
+                            },
                             installed_image_digest: Some(old_digest.clone()),
                         }),
                         error: None,
@@ -1369,6 +1401,7 @@ mod unix {
                     image_digest,
                     granted,
                     filesystem,
+                    workspace_environment,
                     ..
                 } => {
                     assert_eq!(job, "gtk-update");
@@ -1376,7 +1409,21 @@ mod unix {
                     assert_eq!(image_digest, next_digest);
                     assert_eq!(
                         granted,
-                        Grant::new([Capability::FilesystemRead, Capability::Interface])
+                        Grant::new([
+                            Capability::FilesystemRead,
+                            Capability::Interface,
+                            Capability::WorkspaceEnvironmentRead,
+                        ])
+                    );
+                    assert_eq!(
+                        workspace_environment,
+                        WorkspaceEnvironmentGrant {
+                            read: vec![WorkspaceEnvironmentSelector::Exact {
+                                workspace: "development".into(),
+                                name: "DATABASE_URL".into(),
+                            }],
+                            write: Vec::new(),
+                        }
                     );
                     assert_eq!(
                         filesystem,

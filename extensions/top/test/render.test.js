@@ -2220,6 +2220,67 @@ test('a stale cancellation refreshes the authoritative phase and remains cancell
   assert.ok(labelled(stage, 'Cancel inspection'));
 });
 
+test('exact workspace environment consent carries its required verb and clears coherently', async () => {
+  const installs = [];
+  const selector = { workspace: 'development', name: 'DATABASE_URL' };
+  const candidate = {
+    name: 'environment-reader',
+    version: '1.0.0',
+    image_digest: `sha256:${'f'.repeat(64)}`,
+    installed_image_digest: null,
+    requested: ['workspace-environment:read'],
+    requested_workspace_environment: { read: [selector], write: [] },
+  };
+  const stage = host();
+  stage.render(
+    h(Extensions, {
+      api: {
+        extensions: {
+          list: async () => [],
+          startAcquisition: async () => ({ job: 'environment-review' }),
+          acquisition: async () => ({
+            job: 'environment-review',
+            reference: 'registry.example/environment-reader:1',
+            revision: 3,
+            state: 'ready',
+            progress: null,
+            candidate,
+            error: null,
+          }),
+          installAndWait: async (...arguments_) => {
+            installs.push(arguments_);
+            return { changed: true, extension: { ...candidate, status: 'standby' } };
+          },
+        },
+        watchExtensions: async () => () => {},
+      },
+    }),
+  );
+  await settled();
+  selectExtensionMode(stage, 'Discover');
+  await settled();
+  change(stage, 'registry.example/extension:version', 'registry.example/environment-reader:1');
+  invoke(stage, 'Inspect');
+  await settled();
+  await settled();
+  expand(stage, 'Exact grants · 0/2 selected');
+
+  toggleSwitch(stage, 1, true);
+  assert.deepEqual(latestSwitchValues(stage), [true, true]);
+  assert.ok(labelled(stage, 'Review decision · 2/2 selected'));
+
+  toggleSwitch(stage, 0, false);
+  assert.deepEqual(latestSwitchValues(stage), [false, false]);
+  assert.ok(labelled(stage, 'No access selected · 2 requested'));
+
+  toggleSwitch(stage, 1, true);
+  invoke(stage, 'Install with selected access');
+  await settled();
+  await settled();
+  assert.deepEqual(installs[0][2].capabilities, ['workspace-environment:read']);
+  assert.deepEqual(installs[0][2].workspaceEnvironment, { read: [selector], write: [] });
+});
+
 test('a long extension acquisition stays attached to its host job until review is ready', async () => {
   const originalNow = Date.now;
   let clock = 0;
