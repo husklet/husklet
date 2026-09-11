@@ -570,27 +570,34 @@ mod unix {
                     if frame.kind == hl_extension::Kind::Credit {
                         continue;
                     }
-                    let request = codec::read_request(&frame).expect("concurrent Top call decodes");
-                    let mut delivered = false;
-                    let reply = match request {
+                    if frame.kind == hl_extension::Kind::Response {
+                        assert_eq!(frame.channel, channel, "Top answers the exact row channel");
+                        let window: hl_gui::RowWindow =
+                            serde_json::from_slice(&frame.payload).expect("process row window decodes");
+                        assert_eq!(window.source, request.source);
+                        assert_eq!(window.version, request.version);
+                        assert_eq!(window.request, request.id);
+                        assert_eq!(window.range, request.range);
+                        surface.rows(&window).expect("GTK accepts process rows");
+                        break;
+                    }
+                    let concurrent = codec::read_request(&frame).expect("concurrent Top call decodes");
+                    let reply = match concurrent {
                         Request::InterfaceRender { frame } | Request::InterfaceRenderAt { frame, .. } => {
                             tree.apply(&frame, &mut surface).expect("process rerender applies");
                             Reply::Done
                         }
                         Request::SourceResize { mutation } | Request::SourceResizeAt { mutation, .. } => {
-                            if let SourceMutation::Window(window) = mutation {
-                                surface.rows(&window).expect("GTK accepts process rows");
-                                delivered = true;
-                            }
+                            assert!(
+                                !matches!(mutation, SourceMutation::Window(_)),
+                                "Top must answer row requests on their correlated response channel"
+                            );
                             Reply::Done
                         }
                         other => panic!("unexpected call awaiting process rows: {other:?}"),
                     };
                     wire.send(&codec::reply(&reply).expect("concurrent reply encodes"))
                         .expect("concurrent reply sends");
-                    if delivered {
-                        break;
-                    }
                 }
                 settle_toolkit();
             }
@@ -1418,8 +1425,7 @@ mod unix {
             ))
             .expect("Inspect invocation reaches Top");
             let deadline = Instant::now() + DEADLINE;
-            while Instant::now() < deadline
-                && !has_label(surface.widget().upcast_ref::<gtk::Widget>(), "Review access")
+            while Instant::now() < deadline && !has_label(surface.widget().upcast_ref::<gtk::Widget>(), "Review access")
             {
                 match receive_until(&mut wire, (Instant::now() + Duration::from_millis(80)).min(deadline)) {
                     Ok(frame) if frame.kind == hl_extension::Kind::Credit => {}

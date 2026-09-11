@@ -1,9 +1,10 @@
 // Paint through the framework-neutral client before loading the component catalogue.
 
 import { bootstrapSurface, connect } from '@husklet/client';
+import type { RowRequest, RowWindow } from '@husklet/client';
 import type { InterfaceSourceMutation, RenderHandle } from '@husklet/react';
 
-type RowSource = { answer(request: unknown): unknown; publish(): Promise<unknown> };
+type RowSource = { answer(request: unknown): RowWindow | null; publish(): Promise<unknown> };
 type SourceSender = (
   _call: string,
   argument: { mutation: InterfaceSourceMutation },
@@ -15,9 +16,19 @@ let sources: RowSource[] = [];
 const session = await connect({
   onRows(request, channel) {
     const window = sources.map((source) => source.answer(request)).find(Boolean);
-    if (window) session.answer(channel, window);
+    session.answer(channel, window ?? emptyWindow(request));
   },
 });
+
+function emptyWindow(request: RowRequest): RowWindow {
+  return {
+    source: request.source,
+    version: request.version,
+    request: request.id,
+    range: request.range,
+    rows: [],
+  };
+}
 const bootstrap = await bootstrapSurface(session, {
   title: 'Components',
   label: 'Loading component playground…',

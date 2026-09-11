@@ -1,5 +1,7 @@
 export {
   ExtensionError,
+  RowReplyMismatchError,
+  RowRequestUnavailableError,
   Session,
   DATA,
   SOCKET,

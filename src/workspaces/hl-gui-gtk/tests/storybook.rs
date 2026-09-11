@@ -10,9 +10,9 @@ mod unix {
 
     use gtk::prelude::*;
     use hl_extension::{
-        codec, Capability, ChannelId, ExtensionName, Frame, Grant, Hello, Kind, Reply, Request, Welcome, Wire, PROTOCOL,
+        Capability, ChannelId, ExtensionName, Frame, Grant, Hello, Kind, PROTOCOL, Reply, Request, Welcome, Wire, codec,
     };
-    use hl_gui::{Renderer as _, SourceMutation, Theme, Tree, LOG_VIEW_CHARACTER_LIMIT};
+    use hl_gui::{LOG_VIEW_CHARACTER_LIMIT, Renderer as _, SourceMutation, Theme, Tree};
     use hl_gui_gtk::Surface;
 
     const STORIES: &[&str] = &[
@@ -1294,17 +1294,11 @@ mod unix {
                 if carried.kind == Kind::Credit {
                     continue;
                 }
-                if carried.channel == channel {
+                if carried.kind == Kind::Response && carried.channel == channel {
                     break carried;
                 }
                 let follow_up = codec::read_request(&carried).expect("concurrent Storybook call decodes");
-                assert!(
-                    matches!(
-                        follow_up,
-                        Request::InterfaceRenderAt { .. } | Request::SourceResizeAt { .. }
-                    ),
-                    "unexpected call while awaiting row data: {follow_up:?}"
-                );
+                apply_concurrent(&follow_up, &mut tree, &mut surface);
                 wire.send(&codec::reply(&Reply::Done).expect("follow-up reply encodes"))
                     .expect("follow-up reply sends");
             };
@@ -1451,9 +1445,11 @@ mod unix {
                 .filter(|frame| frame.has_css_class("hl-card"))
                 .collect::<Vec<_>>();
             assert_eq!(cards.len(), 5, "Card workbench must render five bounded live specimens");
-            assert!(cards
-                .iter()
-                .all(|card| card.accessible_role() != gtk::AccessibleRole::Generic));
+            assert!(
+                cards
+                    .iter()
+                    .all(|card| card.accessible_role() != gtk::AccessibleRole::Generic)
+            );
             for card in &cards {
                 let header = card
                     .label_widget()
@@ -1903,9 +1899,16 @@ mod unix {
                 let answer = loop {
                     let carried =
                         receive_until(&mut wire, edit_deadline).expect("Storybook answers the accepted-edit window");
-                    if carried.kind != Kind::Credit && carried.channel == channel {
+                    if carried.kind == Kind::Response && carried.channel == channel {
                         break carried;
                     }
+                    if carried.kind == Kind::Credit {
+                        continue;
+                    }
+                    let follow_up = codec::read_request(&carried).expect("concurrent Storybook call decodes");
+                    apply_concurrent(&follow_up, &mut tree, &mut surface);
+                    wire.send(&codec::reply(&Reply::Done).expect("follow-up reply encodes"))
+                        .expect("follow-up reply sends");
                 };
                 let window: hl_gui::RowWindow =
                     serde_json::from_slice(&answer.payload).expect("accepted-edit row window decodes");
@@ -2162,6 +2165,19 @@ mod unix {
         panic!("stale edit produced no visible rejection")
     }
 
+    fn apply_concurrent(request: &Request, tree: &mut Tree, surface: &mut Surface) {
+        match request {
+            Request::InterfaceRenderAt { slot, frame } => {
+                assert_eq!(slot, PRIMARY_SLOT);
+                tree.apply(frame, surface).expect("concurrent Storybook render applies");
+            }
+            Request::SourceResizeAt { slot, .. } => {
+                assert_eq!(slot, PRIMARY_SLOT);
+            }
+            other => panic!("unexpected concurrent Storybook call: {other:?}"),
+        }
+    }
+
     fn emit_representative(story: &str, root: &gtk::Widget, surface: &Surface, tree: &Tree) -> hl_gui::Event {
         match story {
             "Autocomplete" => {
@@ -2219,11 +2235,7 @@ mod unix {
             "Heading" => {
                 let document = descendants::<gtk::ScrolledWindow>(root)
                     .into_iter()
-                    .max_by(|left, right| {
-                        left.vadjustment()
-                            .upper()
-                            .total_cmp(&right.vadjustment().upper())
-                    })
+                    .max_by(|left, right| left.vadjustment().upper().total_cmp(&right.vadjustment().upper()))
                     .expect("Heading document owns a scrolling viewport");
                 let adjustment = document.vadjustment();
                 adjustment.set_value(adjustment.upper() - adjustment.page_size());
@@ -2257,7 +2269,10 @@ mod unix {
                     settle_toolkit();
                     std::thread::sleep(Duration::from_millis(5));
                 }
-                assert!(option.is_mapped(), "Heading option must finish opening before interaction");
+                assert!(
+                    option.is_mapped(),
+                    "Heading option must finish opening before interaction"
+                );
                 option.emit_clicked();
                 settle_toolkit();
             }

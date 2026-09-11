@@ -72,6 +72,7 @@ test('the shipped entrypoint connects and renders the complete playground over a
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'husklet-storybook-live-'));
   const socket = path.join(directory, 'extension.sock');
   const calls = [];
+  const answers = [];
   let accepted;
   const server = net.createServer((stream) => {
     accepted = stream;
@@ -79,6 +80,10 @@ test('the shipped entrypoint connects and renders the complete playground over a
     stream.on('data', (chunk) => {
       for (const frame of reader.take(chunk)) {
         if (frame.channel === 0) continue;
+        if (frame.kind === KIND.response) {
+          answers.push(frame);
+          continue;
+        }
         if (frame.kind !== KIND.request) continue;
         calls.push(frame.payload);
         const payload = { reply: 'done' };
@@ -115,8 +120,11 @@ test('the shipped entrypoint connects and renders the complete playground over a
 
   context.after(async () => {
     accepted?.destroy();
-    if (child.exitCode === null) child.kill('SIGTERM');
-    await new Promise((resolve) => child.once('exit', resolve));
+    if (child.exitCode === null) {
+      const exited = new Promise((resolve) => child.once('exit', resolve));
+      child.kill('SIGTERM');
+      await exited;
+    }
     await new Promise((resolve) => server.close(resolve));
     fs.rmSync(directory, { recursive: true, force: true });
   });
@@ -135,6 +143,44 @@ test('the shipped entrypoint connects and renders the complete playground over a
   assert.equal(rendered.with.frame.sequence, 2);
   assert.equal(length.with.slot, '');
   assert.deepEqual(length.with.mutation.Length, { source: 100, version: 1, rows: 1_000_000 });
+  const rowFrame = encode({
+    channel: 71,
+    kind: KIND.event,
+    payload: {
+      id: 44,
+      source: 100,
+      version: 1,
+      range: { start: 999_999, count: 1 },
+      sort: null,
+      filter: null,
+    },
+  });
+  accepted.write(rowFrame.subarray(0, 7));
+  accepted.write(rowFrame.subarray(7, 19));
+  accepted.write(rowFrame.subarray(19));
+  const rowAnswer = await until(
+    () => answers.find((frame) => frame.channel === 71),
+    `storybook never answered its row request; stderr=${stderr}`,
+  );
+  assert.deepEqual(rowAnswer.payload, {
+    source: 100,
+    version: 1,
+    request: 44,
+    range: { start: 999_999, count: 1 },
+    rows: [
+      {
+        key: 999_999,
+        cells: [
+          { Number: 999_999 },
+          { Text: 'record-999999' },
+          { Text: 'platform' },
+          { Number: 9.9 },
+          { Bytes: 128_065_408 },
+          { Badge: { label: 'busy', tone: 'Warning' } },
+        ],
+      },
+    ],
+  });
   assert.ok(
     rendered.with.frame.patches.length < 1_200,
     'the live frame exceeded the host patch budget',

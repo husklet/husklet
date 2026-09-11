@@ -15,6 +15,17 @@ export declare class ExtensionError extends Error {
     readonly capability: any;
     constructor(failure: any);
 }
+/** A row answer does not belong to the outstanding host request on its channel. */
+export declare class RowReplyMismatchError extends Error {
+    readonly channel: any;
+    readonly request: any;
+    constructor(channel: any, request: any);
+}
+/** A row channel has no unanswered request and cannot accept a late or duplicate answer. */
+export declare class RowRequestUnavailableError extends Error {
+    readonly channel: any;
+    constructor(channel: any);
+}
 /**
  * One connected extension.
  *

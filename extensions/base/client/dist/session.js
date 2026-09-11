@@ -240,6 +240,31 @@ export class ExtensionError extends Error {
         this.capability = failure?.capability;
     }
 }
+/** A row answer does not belong to the outstanding host request on its channel. */
+export class RowReplyMismatchError extends Error {
+    channel;
+    request;
+    constructor(channel, request) {
+        super(`row answer on channel ${channel} does not match its outstanding request`);
+        this.name = 'RowReplyMismatchError';
+        this.channel = channel;
+        this.request = Object.freeze({
+            id: request.id,
+            source: request.source,
+            version: request.version,
+            range: Object.freeze({ ...request.range }),
+        });
+    }
+}
+/** A row channel has no unanswered request and cannot accept a late or duplicate answer. */
+export class RowRequestUnavailableError extends Error {
+    channel;
+    constructor(channel) {
+        super(`row channel ${channel} has no outstanding request`);
+        this.name = 'RowRequestUnavailableError';
+        this.channel = channel;
+    }
+}
 /**
  * One connected extension.
  *
@@ -260,6 +285,7 @@ export class Session {
     #eventChannels = new Map();
     #pending = [];
     #pings = new Map();
+    #rows = new Map();
     #nextPing = 1;
     #limit;
     #timeout;
@@ -497,7 +523,24 @@ export class Session {
     }
     /** Answers a row window the host asked for. */
     answer(channel, window) {
+        safeUnsigned(channel, 'row answer channel');
+        const request = this.#rows.get(channel);
+        if (!request)
+            throw new RowRequestUnavailableError(channel);
+        const answer = requiredObject(window, 'row answer');
+        const range = requiredObject(answer.range, 'row answer range');
+        if (answer.source !== request.source ||
+            answer.version !== request.version ||
+            answer.request !== request.id ||
+            range.start !== request.range.start ||
+            range.count !== request.range.count) {
+            throw new RowReplyMismatchError(channel, request);
+        }
+        if (!Array.isArray(answer.rows) || answer.rows.length > request.range.count) {
+            throw new RangeError('row answer rows must fit the requested window');
+        }
         this.#write({ channel, kind: KIND.response, payload: window });
+        this.#rows.delete(channel);
     }
     /** Round-trips an opaque bounded heartbeat without consuming call ordering. */
     ping() {
@@ -626,6 +669,7 @@ export class Session {
                 this.#socket.destroy();
             }
             else {
+                this.#rows.delete(frame.channel);
                 const topic = this.#eventTopics.get(frame.channel);
                 this.#eventTopics.delete(frame.channel);
                 this.#eventChannels.delete(frame.channel);
@@ -638,7 +682,15 @@ export class Session {
             return this.#greet(frame);
         // A row request is the one thing the host pushes rather than answers.
         if (frame.kind === KIND.event && frame.payload && frame.payload.range !== undefined) {
-            const delivered = this.#onRows(validateRowRequest(frame.payload), frame.channel);
+            if (this.#rows.has(frame.channel)) {
+                throw new Error(`row channel ${frame.channel} already has an outstanding request`);
+            }
+            if (this.#rows.size >= this.#limit) {
+                throw new Error(`outstanding row request limit of ${this.#limit} is exhausted`);
+            }
+            const request = validateRowRequest(frame.payload);
+            this.#rows.set(frame.channel, request);
+            const delivered = this.#onRows(request, frame.channel);
             if (delivered && typeof delivered.then === 'function') {
                 Promise.resolve(delivered).catch((error) => {
                     this.#finish(error);
@@ -802,6 +854,7 @@ export class Session {
             pending.reject(error);
         }
         this.#pings.clear();
+        this.#rows.clear();
         this.#events.clear();
         this.#topics.clear();
         this.#eventTopics.clear();

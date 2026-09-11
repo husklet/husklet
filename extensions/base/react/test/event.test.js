@@ -16,18 +16,24 @@ async function host({ reuseSlots = false, rejectFirstRender = false } = {}) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'husklet-react-'));
   const socket = path.join(directory, 'extension.sock');
   const calls = [];
+  const answers = [];
   let connected;
   const arrived = new Promise((resolve) => {
     connected = resolve;
   });
   let accepted = null;
   let slot = 0;
+  let eventChannel = 1;
   let rejectedRender = false;
   const server = net.createServer((stream) => {
     accepted = stream;
     const reader = new Reader();
     stream.on('data', (chunk) => {
       for (const frame of reader.take(chunk)) {
+        if (frame.kind === KIND.response && frame.channel !== 0) {
+          answers.push({ channel: frame.channel, window: frame.payload });
+          continue;
+        }
         if (frame.kind === KIND.request && frame.channel !== 0) {
           calls.push(frame.payload);
           const payload = ['interface_open_tab', 'interface_split'].includes(frame.payload.call)
@@ -70,9 +76,11 @@ async function host({ reuseSlots = false, rejectFirstRender = false } = {}) {
   return {
     socket,
     calls,
+    answers,
     stream: () => arrived,
     async push(payload) {
-      (await arrived).write(encode({ channel: 2, kind: KIND.event, payload }));
+      eventChannel += 1;
+      (await arrived).write(encode({ channel: eventChannel, kind: KIND.event, payload }));
     },
     close() {
       accepted?.destroy();
@@ -293,29 +301,19 @@ test('virtualized row requests route to their owning surface with the exact curs
     filter: 'active',
     slot: 'surface-2',
   });
-  await until(() =>
-    stage.calls.some((call) => call.call === 'source_resize_at' && call.with.mutation.Window),
-  );
+  await until(() => stage.answers.length === 1);
   assert.equal(firstRequests.length, 0);
   assert.equal(secondRequests.length, 1);
-  assert.deepEqual(
-    stage.calls.find((call) => call.call === 'source_resize_at' && call.with.mutation.Window),
-    {
-      call: 'source_resize_at',
-      with: {
-        slot: 'surface-2',
-        mutation: {
-          Window: {
-            source: 9,
-            version: 4,
-            request: 71,
-            range: { start: 999_936, count: 128 },
-            rows: [{ key: 999_936, cells: [{ Text: 'millionth row' }] }],
-          },
-        },
-      },
+  assert.deepEqual(stage.answers[0], {
+    channel: 2,
+    window: {
+      source: 9,
+      version: 4,
+      request: 71,
+      range: { start: 999_936, count: 128 },
+      rows: [{ key: 999_936, cells: [{ Text: 'millionth row' }] }],
     },
-  );
+  });
   assert.deepEqual(errors, []);
   await Promise.all([first.close(), second.close()]);
   await session.close();
@@ -344,10 +342,8 @@ test('row provider rejection is reported and the surface still closes cleanly', 
   });
   await until(() => errors.length === 1);
   assert.match(String(errors[0]), /more rows than the requested window/);
-  assert.equal(
-    stage.calls.some((call) => call.call === 'source_resize_at'),
-    false,
-  );
+  await until(() => stage.answers.length === 1);
+  assert.deepEqual(stage.answers[0].window.rows, []);
   await surface.close();
   assert.equal(stage.calls.at(-1).call, 'interface_withdraw');
   await session.close();
@@ -383,10 +379,7 @@ test('closing a surface discards its in-flight row provider result', async () =>
   assert.equal(signal.aborted, true, 'closing cooperatively cancels database/file work');
   release([{ key: 0, cells: [] }]);
   await new Promise((resolve) => setTimeout(resolve, 20));
-  assert.equal(
-    stage.calls.some((call) => call.call === 'source_resize_at'),
-    false,
-  );
+  assert.deepEqual(stage.answers[0].window.rows, []);
   await session.close();
   stage.close();
 });
@@ -503,11 +496,7 @@ test('a newer source version cancels every stale range and rejects late stale re
     seen.filter(({ request }) => request.version === 1).every(({ signal }) => signal.aborted),
     true,
   );
-  await until(() =>
-    stage.calls.some(
-      (call) => call.call === 'source_resize_at' && call.with.mutation.Window?.version === 2,
-    ),
-  );
+  await until(() => stage.answers.some(({ window }) => window.version === 2));
 
   await stage.push({
     id: 7,
@@ -577,11 +566,7 @@ test('replacing a row provider cancels stale query work without blocking the new
     slot: surface.slot,
   });
   await until(() => freshRequests.length === 1);
-  await until(() =>
-    stage.calls.some(
-      (call) => call.call === 'source_resize_at' && call.with.mutation.Window?.version === 2,
-    ),
-  );
+  await until(() => stage.answers.some(({ window }) => window.version === 2));
   assert.equal(freshRequests[0].version, 2);
   assert.equal(staleSignals.length, 4, 'the queued old window never reaches either provider');
 

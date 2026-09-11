@@ -33,7 +33,14 @@ const capabilities = [
   'interface:render',
 ];
 
-async function scenario(name, configuration, reply, expectedCode = 0, granted = capabilities) {
+async function scenario(
+  name,
+  configuration,
+  reply,
+  expectedCode = 0,
+  granted = capabilities,
+  onResponse,
+) {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-product-scenario-'));
   const socketPath = path.join(directory, 'host.sock');
   const calls = [];
@@ -44,6 +51,10 @@ async function scenario(name, configuration, reply, expectedCode = 0, granted = 
     const reader = new Reader();
     socket.on('data', (chunk) => {
       for (const frame of reader.take(chunk)) {
+        if (frame.kind === KIND.response) {
+          if (onResponse) onResponse(socket, frame);
+          continue;
+        }
         if (frame.kind !== KIND.request) continue;
         calls.push(frame.payload);
         reply(socket, frame);
@@ -888,6 +899,20 @@ test('Postgres GUI stays live and serves a scrolled database window before host 
         }
       } else respond(socket, frame, { reply: 'done' });
     },
+    0,
+    capabilities,
+    (socket, frame) => {
+      if (frame.channel === CONTROL) return;
+      assert.equal(frame.channel, 17);
+      assert.deepEqual(frame.payload, {
+        source: 1,
+        version: 1,
+        request: 41,
+        range: { start: 999999, count: 1 },
+        rows: [{ key: 999999, cells: [{ Text: '1' }, { Text: 'alpha' }] }],
+      });
+      socket.end();
+    },
   );
   assert.deepEqual(run.result, {
     container: id,
@@ -901,15 +926,8 @@ test('Postgres GUI stays live and serves a scrolled database window before host 
   const mutations = run.calls
     .filter(({ call }) => call === 'source_resize_at')
     .map(({ with: value }) => value.mutation);
-  assert.equal(mutations.length, 3);
+  assert.equal(mutations.length, 2);
   assert.equal(mutations[1].Length.rows, 1000000);
-  assert.deepEqual(mutations[2].Window, {
-    source: 1,
-    version: 1,
-    request: 41,
-    range: { start: 999999, count: 1 },
-    rows: [{ key: 999999, cells: [{ Text: '1' }, { Text: 'alpha' }] }],
-  });
   const execs = run.calls.filter(({ call }) => call === 'container_exec_credential');
   assert.equal(execs.length, 3);
   assert.equal(run.calls.filter(({ call }) => call === 'execution_inspect').length, 3);

@@ -676,12 +676,29 @@ export interface RowRequest {
   /** Present for extension-owned tabs and splits; identifies the surface that asked. */
   slot?: string;
 }
+/** One bounded response correlated to an exact host row request. */
+export interface RowWindow {
+  source: number;
+  version: number;
+  request: number;
+  range: { start: number; count: number };
+  rows: unknown[];
+}
 export declare function validateRowRequest(value: unknown): RowRequest;
 export declare function validateUiEvent(value: unknown): PaneSelection | InterfaceEvent;
 
 export declare class ExtensionError extends Error {
   readonly kind: 'denied' | 'unavailable' | 'absent' | 'conflict' | 'failed' | 'unsupported';
   readonly capability?: string;
+}
+/** A row answer does not belong to the outstanding host request on its channel. */
+export declare class RowReplyMismatchError extends Error {
+  readonly channel: number;
+  readonly request: Readonly<Pick<RowRequest, 'id' | 'source' | 'version' | 'range'>>;
+}
+/** A row channel has no unanswered request and cannot accept a late or duplicate answer. */
+export declare class RowRequestUnavailableError extends Error {
+  readonly channel: number;
 }
 
 export declare class ExecutionOperationError extends Error {
@@ -830,7 +847,7 @@ export declare class Session {
   ): Promise<WireReplyFor<C>>;
   /** Round-trip a bounded opaque heartbeat without consuming ordered call replies. */
   ping(): Promise<void>;
-  answer(channel: number, window: unknown): void;
+  answer(channel: number, window: RowWindow): void;
   onEvent(listener: (event: HostEvent, channel: number) => void | Promise<void>): () => boolean;
   close(): Promise<void>;
 }

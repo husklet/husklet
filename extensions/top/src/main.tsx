@@ -19,14 +19,23 @@ let volumeDetails: VolumeDetailsSource | undefined;
 let processTable: ProcessTableSource | undefined;
 const send = (mutation: InterfaceSourceMutation) => surface.source(mutation);
 const session = await connect({
-  onRows(request) {
+  onRows(request, channel) {
     const window =
       imageDetails?.answer(request) ??
       containerDetails?.answer(request) ??
       executionDetails?.answer(request) ??
       volumeDetails?.answer(request) ??
       processTable?.answer(request);
-    if (window) void surface.source({ Window: window });
+    session.answer(
+      channel,
+      window ?? {
+        source: request.source,
+        version: request.version,
+        request: request.id,
+        range: request.range,
+        rows: [],
+      },
+    );
   },
   onEvent(payload) {
     if (payload && typeof payload === 'object') providerSelections.publish(payload);

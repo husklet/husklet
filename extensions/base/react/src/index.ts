@@ -59,13 +59,19 @@ interface RenderHandle {
   close(): Promise<void>;
   rowProvider: RenderOptions['rows'];
   rowActive: Set<RowTask>;
-  rowQueue: RowRequest[];
+  rowQueue: RowPending[];
   /** Highest host revision observed for each source on this surface. */
   rowVersions: Map<number, number>;
 }
 interface RowTask {
   request: RowRequest;
+  channel: number;
   controller: AbortController;
+  answered: boolean;
+}
+interface RowPending {
+  request: RowRequest;
+  channel: number;
 }
 interface Registry {
   handles: Set<RenderHandle>;
@@ -92,9 +98,16 @@ export async function connect({
   timeout,
   connectTimeout,
 }: ConnectOptions = {}) {
+  const connected: { session?: Session } = {};
+  const pendingRows: Array<{ request: RowRequest; channel: number }> = [];
   const session = await Session.connect(path, {
     onRows: (request, channel) => {
-      if (!deliverRows(session, request, onEventError) && onRows) onRows(request, channel);
+      if (connected.session === undefined) {
+        pendingRows.push({ request, channel });
+        return;
+      }
+      if (!deliverRows(connected.session, request, channel, onEventError) && onRows)
+        onRows(request, channel);
     },
     pendingLimit,
     timeout,
@@ -102,25 +115,31 @@ export async function connect({
     onEventError,
     onClose,
     onEvent: (payload, channel) => {
-      deliver(session, payload);
+      if (connected.session !== undefined) deliver(connected.session, payload);
       if (onEvent) onEvent(payload, channel);
     },
     onReply: (payload) => {
-      if (!deliver(session, payload) && onReply) onReply(payload);
+      if ((connected.session === undefined || !deliver(connected.session, payload)) && onReply)
+        onReply(payload);
     },
   });
+  connected.session = session;
   attached.set(session, {
     handles: new Set(),
     slots: new Map(),
     retiredSlots: new Set(),
     routesEvents: true,
   });
+  for (const { request, channel } of pendingRows) {
+    if (!deliverRows(session, request, channel, onEventError) && onRows) onRows(request, channel);
+  }
   return session;
 }
 
 function deliverRows(
   session: Session,
   request: RowRequest,
+  channel: number,
   onError: ConnectOptions['onEventError'],
 ): boolean {
   const registry = attached.get(session);
@@ -128,15 +147,23 @@ function deliverRows(
   const provider = handle?.rowProvider;
   if (!registry || !handle || !provider) return false;
   const latestVersion = handle.rowVersions.get(request.source);
-  if (latestVersion !== undefined && request.version < latestVersion) return true;
+  if (latestVersion !== undefined && request.version < latestVersion) {
+    answerRows(session, { request, channel }, []);
+    return true;
+  }
   if (latestVersion === undefined || request.version > latestVersion) {
     handle.rowVersions.set(request.source, request.version);
-    handle.rowQueue = handle.rowQueue.filter(
-      (candidate) => candidate.source !== request.source || candidate.version >= request.version,
-    );
+    const retained = [];
+    for (const pending of handle.rowQueue) {
+      if (pending.request.source === request.source && pending.request.version < request.version)
+        answerRows(session, pending, []);
+      else retained.push(pending);
+    }
+    handle.rowQueue = retained;
     for (const task of handle.rowActive) {
       if (task.request.source === request.source && task.request.version < request.version) {
         task.controller.abort(new Error('row source version was superseded'));
+        answerRows(session, task, []);
       }
     }
   }
@@ -145,28 +172,53 @@ function deliverRows(
     candidate.version === request.version &&
     candidate.range.start === request.range.start &&
     candidate.range.count === request.range.count;
-  handle.rowQueue = handle.rowQueue.filter((candidate) => !sameWindow(candidate));
+  const retained = [];
+  for (const pending of handle.rowQueue) {
+    if (sameWindow(pending.request)) answerRows(session, pending, []);
+    else retained.push(pending);
+  }
+  handle.rowQueue = retained;
   for (const task of handle.rowActive) {
     if (sameWindow(task.request)) {
       task.controller.abort(new Error('row window was superseded'));
+      answerRows(session, task, []);
     }
   }
-  handle.rowQueue.push(request);
-  if (handle.rowQueue.length > ROW_PROVIDER_QUEUE_LIMIT) handle.rowQueue.shift();
-  drainRows(registry, handle, onError);
+  handle.rowQueue.push({ request, channel });
+  if (handle.rowQueue.length > ROW_PROVIDER_QUEUE_LIMIT) {
+    const dropped = handle.rowQueue.shift();
+    if (dropped) answerRows(session, dropped, []);
+  }
+  drainRows(session, registry, handle, onError);
   return true;
 }
 
+function answerRows(session: Session, pending: RowPending | RowTask, rows: readonly DataRow[]) {
+  if ('answered' in pending) {
+    if (pending.answered) return;
+    pending.answered = true;
+  }
+  session.answer(pending.channel, {
+    source: pending.request.source,
+    version: pending.request.version,
+    request: pending.request.id,
+    range: pending.request.range,
+    rows: [...rows],
+  });
+}
+
 function drainRows(
+  session: Session,
   registry: Registry,
   handle: RenderHandle,
   onError: ConnectOptions['onEventError'],
 ) {
   while (handle.rowActive.size < ROW_PROVIDER_CONCURRENCY && handle.rowQueue.length > 0) {
-    const request = handle.rowQueue.shift();
-    if (!request || !handle.rowProvider) return;
+    const pending = handle.rowQueue.shift();
+    if (!pending || !handle.rowProvider) return;
+    const { request, channel } = pending;
     const controller = new AbortController();
-    const task = { request, controller };
+    const task = { request, channel, controller, answered: false };
     handle.rowActive.add(task);
     void (async () => {
       const rows = await handle.rowProvider?.(request, { signal: controller.signal });
@@ -177,22 +229,21 @@ function drainRows(
       if (rows.length > request.range.count) {
         throw new RangeError('surface row provider returned more rows than the requested window');
       }
-      await handle.source({
-        Window: {
-          source: request.source,
-          version: request.version,
-          request: request.id,
-          range: request.range,
-          rows,
-        },
-      });
+      answerRows(session, task, rows);
     })()
       .catch((error) => {
-        if (!controller.signal.aborted) onError?.(error);
+        if (!controller.signal.aborted) {
+          try {
+            answerRows(session, task, []);
+          } catch (answerError) {
+            onError?.(answerError);
+          }
+          onError?.(error);
+        }
       })
       .finally(() => {
         handle.rowActive.delete(task);
-        drainRows(registry, handle, onError);
+        drainRows(session, registry, handle, onError);
       });
   }
 }
@@ -359,10 +410,12 @@ export function render(
         throw new Error(`host replied ${reply?.reply ?? 'without a tag'}, expected done`);
     },
     setRowProvider(provider: RowProvider | null) {
+      for (const pending of handle.rowQueue) answerRows(session, pending, []);
       handle.rowQueue.length = 0;
       handle.rowVersions.clear();
       for (const task of handle.rowActive) {
         task.controller.abort(new Error('row provider was replaced'));
+        answerRows(session, task, []);
       }
       handle.rowActive.clear();
       handle.rowProvider = provider;
@@ -370,9 +423,13 @@ export function render(
     close() {
       if (closed) return withdrawal ?? Promise.resolve();
       closed = true;
+      for (const pending of handle.rowQueue) answerRows(session, pending, []);
       handle.rowQueue.length = 0;
       handle.rowVersions.clear();
-      for (const task of handle.rowActive) task.controller.abort(new Error('surface closed'));
+      for (const task of handle.rowActive) {
+        task.controller.abort(new Error('surface closed'));
+        answerRows(session, task, []);
+      }
       handle.rowActive.clear();
       reconciler.updateContainer(null, container, null, null);
       registry.handles.delete(handle);
