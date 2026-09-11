@@ -492,6 +492,10 @@ export declare class PaneInventoryChangedError extends Error {
     readonly before: ReadonlyArray<Readonly<Pick<InspectablePane, 'slot' | 'generation' | 'revision' | 'focused'>>>;
     readonly after: ReadonlyArray<Readonly<Pick<InspectablePane, 'slot' | 'generation' | 'revision' | 'focused'>>>;
 }
+/** Bounded pane discovery omitted identities, so whole-layout stability cannot be proven. */
+export declare class IncompletePaneInventoryError extends Error {
+    readonly panes: ReadonlyArray<Readonly<Pick<InspectablePane, 'slot' | 'generation' | 'revision'>>>;
+}
 export interface PaneSemanticAction {
     generation: number;
     revision: number;
@@ -1454,7 +1458,8 @@ export interface WorkspaceApi {
         }): Promise<ReadablePaneInventory>;
         /**
          * Convert a pane inventory only when a second discovery proves the layout and every
-         * pane cursor remained unchanged. Retries are bounded and never return a mixed layout.
+         * pane cursor remained unchanged. Retries are bounded, and incomplete discovery rejects rather
+         * than claiming omitted panes were stable.
          */
         readAllStable(options?: {
             lines?: number;

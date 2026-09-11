@@ -77,6 +77,11 @@ export declare class PaneInventoryChangedError extends Error {
     readonly after: any;
     constructor(attempts: any, before: any, after: any);
 }
+/** Bounded pane discovery omitted identities, so whole-layout stability cannot be proven. */
+export declare class IncompletePaneInventoryError extends Error {
+    readonly panes: any;
+    constructor(panes: any);
+}
 /** A requested pane is absent or cannot be resolved from a bounded inventory. */
 export declare class PaneUnavailableError extends Error {
     readonly slot: any;

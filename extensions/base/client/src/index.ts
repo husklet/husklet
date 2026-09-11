@@ -381,6 +381,21 @@ export class PaneInventoryChangedError extends Error {
   }
 }
 
+/** Bounded pane discovery omitted identities, so whole-layout stability cannot be proven. */
+export class IncompletePaneInventoryError extends Error {
+  readonly panes;
+
+  constructor(panes) {
+    super(
+      `stable pane inventory omitted additional panes after observing ${panes.length} identities`,
+    );
+    this.name = 'IncompletePaneInventoryError';
+    this.panes = Object.freeze(
+      panes.map(({ slot, generation, revision }) => Object.freeze({ slot, generation, revision })),
+    );
+  }
+}
+
 /** A requested pane is absent or cannot be resolved from a bounded inventory. */
 export class PaneUnavailableError extends Error {
   readonly slot;
@@ -3703,6 +3718,9 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
       } catch (error) {
         if (error instanceof PaneChangedError && attempt < attempts) continue;
         throw error;
+      }
+      if (!readable.complete) {
+        throw new IncompletePaneInventoryError(readable.panes.map(({ pane }) => pane));
       }
       const before = {
         panes: readable.panes.map(({ pane }) => pane),
