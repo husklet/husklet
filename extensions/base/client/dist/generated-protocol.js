@@ -1,5 +1,5 @@
 // Generated from Rust hl-extension protocol/v1.json. Do not edit.
-// Protocol artifact fnv1a64:c13aad2eb5beb184
+// Protocol artifact fnv1a64:c6f5cbf712173d02
 export const PROTOCOL_SPECIFICATION_VERSION = 1;
 export const PROTOCOL_VERSION = 1;
 export const PROTOCOL_BOUNDS = Object.freeze({
@@ -1411,6 +1411,54 @@ const definitions = {
     "kind": "struct",
     "serde": {}
   },
+  "ContainerPublishedPort": {
+    "fields": [
+      {
+        "name": "container",
+        "optional": false,
+        "schema": {
+          "bits": 16,
+          "kind": "integer",
+          "maximum": 65535,
+          "minimum": 0,
+          "signed": false
+        }
+      },
+      {
+        "name": "host",
+        "optional": true,
+        "schema": {
+          "kind": "optional",
+          "of": {
+            "bits": 16,
+            "kind": "integer",
+            "maximum": 65535,
+            "minimum": 0,
+            "signed": false
+          }
+        }
+      },
+      {
+        "name": "host_ip",
+        "optional": true,
+        "schema": {
+          "kind": "optional",
+          "of": {
+            "kind": "string"
+          }
+        }
+      },
+      {
+        "name": "protocol",
+        "optional": false,
+        "schema": {
+          "kind": "string"
+        }
+      }
+    ],
+    "kind": "struct",
+    "serde": {}
+  },
   "ContainerSelector": {
     "kind": "enum",
     "serde": {
@@ -1523,7 +1571,7 @@ const definitions = {
           "kind": "array",
           "of": {
             "kind": "ref",
-            "name": "ContainerPort"
+            "name": "ContainerPublishedPort"
           }
         }
       }

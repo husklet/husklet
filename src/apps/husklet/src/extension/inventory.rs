@@ -9,7 +9,8 @@ use std::{
 
 use hl_client::model::{Container, InspectContainer, List};
 use hl_extension::port::{
-    ContainerInventory, ContainerOutput, ContainerPort, ContainerSummary, ExecutionList, ExecutionSummary, HostError,
+    ContainerInventory, ContainerOutput, ContainerPublishedPort, ContainerSummary, ExecutionList, ExecutionSummary,
+    HostError,
     ProcessList, ProcessPidIdentity, ProcessScope,
 };
 use sha2::{Digest, Sha256};
@@ -360,9 +361,10 @@ fn summary(container: &Container) -> ContainerSummary {
         ports: container.ports.iter()
             .filter(|port| matches!(port.protocol.as_str(), "tcp" | "udp"))
             .take(64)
-            .map(|port| ContainerPort {
+            .map(|port| ContainerPublishedPort {
                 container: port.private_port,
                 host: port.public_port,
+                host_ip: port.ip.clone(),
                 protocol: port.protocol.clone(),
             })
             .collect(),
@@ -386,16 +388,21 @@ fn inspection(container: &InspectContainer) -> ContainerSummary {
     }
 }
 
-fn inspected_ports(ports: &std::collections::BTreeMap<String, Option<Vec<hl_client::model::PortBinding>>>) -> Vec<ContainerPort> {
+fn inspected_ports(ports: &std::collections::BTreeMap<String, Option<Vec<hl_client::model::PortBinding>>>) -> Vec<ContainerPublishedPort> {
     ports.iter().flat_map(|(declaration, bindings)| {
         let Some((container, protocol)) = declaration.split_once('/') else { return Vec::new() };
         let Ok(container) = container.parse::<u16>() else { return Vec::new() };
         if !matches!(protocol, "tcp" | "udp") { return Vec::new() }
         match bindings {
             Some(bindings) if !bindings.is_empty() => bindings.iter().filter_map(|binding| {
-                binding.host_port.parse::<u16>().ok().map(|host| ContainerPort { container, host: Some(host), protocol: protocol.to_owned() })
+                binding.host_port.parse::<u16>().ok().map(|host| ContainerPublishedPort {
+                    container,
+                    host: Some(host),
+                    host_ip: Some(binding.host_ip.clone()),
+                    protocol: protocol.to_owned(),
+                })
             }).collect(),
-            _ => vec![ContainerPort { container, host: None, protocol: protocol.to_owned() }],
+            _ => vec![ContainerPublishedPort { container, host: None, host_ip: None, protocol: protocol.to_owned() }],
         }
     }).take(64).collect()
 }
@@ -438,7 +445,7 @@ mod tests {
         epoch_seconds, inspection, output, process_snapshot, summary,
     };
     use hl_client::model::{Container, InspectContainer};
-    use hl_extension::port::{ContainerInventory as _, ContainerPort, HostError};
+    use hl_extension::port::{ContainerInventory as _, ContainerPublishedPort, HostError};
 
     fn listing() -> Container {
         serde_json::from_value(serde_json::json!({
@@ -449,7 +456,7 @@ mod tests {
             "Created": 1_700_000_000_i64,
             "State": "running",
             "Status": "Up 3 minutes",
-            "Ports": [{"PrivatePort": 5432, "PublicPort": 15432, "Type": "tcp"}],
+            "Ports": [{"IP": "0.0.0.0", "PrivatePort": 5432, "PublicPort": 15432, "Type": "tcp"}],
             "Mounts": [],
             "Labels": {}
         }))
@@ -464,7 +471,7 @@ mod tests {
         assert_eq!(mapped.image, "ubuntu:24.04");
         assert_eq!(mapped.state, "running");
         assert_eq!(mapped.created, 1_700_000_000);
-        assert_eq!(mapped.ports, vec![ContainerPort { container: 5432, host: Some(15432), protocol: "tcp".into() }]);
+        assert_eq!(mapped.ports, vec![ContainerPublishedPort { container: 5432, host: Some(15432), host_ip: Some("0.0.0.0".into()), protocol: "tcp".into() }]);
     }
 
     #[test]
@@ -512,7 +519,7 @@ mod tests {
         assert_eq!(mapped.name, "demo");
         assert_eq!(mapped.state, "exited");
         assert_eq!(mapped.created, 1_700_000_000, "the same instant the listing reports");
-        assert_eq!(mapped.ports, vec![ContainerPort { container: 5432, host: Some(15432), protocol: "tcp".into() }]);
+        assert_eq!(mapped.ports, vec![ContainerPublishedPort { container: 5432, host: Some(15432), host_ip: Some("127.0.0.1".into()), protocol: "tcp".into() }]);
     }
 
     #[test]

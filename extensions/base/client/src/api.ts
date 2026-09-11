@@ -277,7 +277,7 @@ export interface ContainerSummary {
   created: number;
   generation: number;
   /** Bounded exposed and host-published ports observed for this container. */
-  ports?: ContainerPort[];
+  ports?: ContainerPublishedPort[];
 }
 export interface ContainerInventory {
   containers: ContainerSummary[];
@@ -292,6 +292,10 @@ export interface ContainerPort {
   container: number;
   host?: number | null;
   protocol: 'tcp' | 'udp';
+}
+export interface ContainerPublishedPort extends ContainerPort {
+  /** Exact host binding reported by the runtime; absent for an exposed-only port. */
+  host_ip?: string | null;
 }
 export interface ContainerCreateSpec {
   image: string;

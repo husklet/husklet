@@ -48,7 +48,7 @@ pub struct ContainerSummary {
     pub generation: u64,
     /// Bounded exposed and host-published ports for this exact container.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub ports: Vec<ContainerPort>,
+    pub ports: Vec<ContainerPublishedPort>,
 }
 
 /// The process table reported by a running container.
@@ -167,6 +167,18 @@ pub struct ContainerVolumeMount {
 pub struct ContainerPort {
     pub container: u16,
     pub host: Option<u16>,
+    pub protocol: String,
+}
+
+/// One exposed container port and, when published, its exact host binding.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct ContainerPublishedPort {
+    pub container: u16,
+    pub host: Option<u16>,
+    /// Host address reported by the runtime. `None` means the port is exposed
+    /// only; wildcard and loopback bindings remain distinct strings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_ip: Option<String>,
     pub protocol: String,
 }
 

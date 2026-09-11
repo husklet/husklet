@@ -1080,6 +1080,54 @@
       "kind": "struct",
       "serde": {}
     },
+    "ContainerPublishedPort": {
+      "fields": [
+        {
+          "name": "container",
+          "optional": false,
+          "schema": {
+            "bits": 16,
+            "kind": "integer",
+            "maximum": 65535,
+            "minimum": 0,
+            "signed": false
+          }
+        },
+        {
+          "name": "host",
+          "optional": true,
+          "schema": {
+            "kind": "optional",
+            "of": {
+              "bits": 16,
+              "kind": "integer",
+              "maximum": 65535,
+              "minimum": 0,
+              "signed": false
+            }
+          }
+        },
+        {
+          "name": "host_ip",
+          "optional": true,
+          "schema": {
+            "kind": "optional",
+            "of": {
+              "kind": "string"
+            }
+          }
+        },
+        {
+          "name": "protocol",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
     "ContainerSelector": {
       "kind": "enum",
       "serde": {
@@ -1192,7 +1240,7 @@
             "kind": "array",
             "of": {
               "kind": "ref",
-              "name": "ContainerPort"
+              "name": "ContainerPublishedPort"
             }
           }
         }
@@ -13723,7 +13771,7 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:6a310b8b648718a3",
+  "source_fingerprint": "fnv1a64:139a62076c08cb1e",
   "specification_version": 1,
   "topics": [
     {

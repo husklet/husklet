@@ -1,5 +1,5 @@
 // Generated from Rust hl-extension protocol/v1.json. Do not edit.
-// Protocol artifact fnv1a64:c13aad2eb5beb184
+// Protocol artifact fnv1a64:c6f5cbf712173d02
 export const PROTOCOL_SPECIFICATION_VERSION: 1;
 export const PROTOCOL_VERSION: 1;
 export const PROTOCOL_BOUNDS: Readonly<{ "extension_job_bytes": number; "extension_reference_bytes": number; "pane_input_bytes": number; "pane_inventory_items": number; "pane_text_bytes": number; "resource_inventory_items": number; "semantic_action_value_bytes": number; "semantic_depth": number; "semantic_nodes": number; "semantic_text_bytes": number; "terminal_command_argument_bytes": number; "terminal_command_bytes": number }>;
@@ -22,8 +22,9 @@ export type ContainerGrant = { "selectors"?: Array<ContainerSelector>; "create"?
 export type ContainerInventory = { "containers": Array<ContainerSummary>; "complete": boolean };
 export type ContainerOutput = { "stdout": Array<number>; "stderr": Array<number>; "truncated": boolean; "stdout_truncated"?: boolean; "stderr_truncated"?: boolean; "eof"?: boolean };
 export type ContainerPort = { "container": number; "host"?: number | null; "protocol": string };
+export type ContainerPublishedPort = { "container": number; "host"?: number | null; "host_ip"?: string | null; "protocol": string };
 export type ContainerSelector = { "id": string } | { "name": string } | { "all": boolean };
-export type ContainerSummary = { "id": string; "name": string; "image": string; "state": string; "created": number; "generation"?: number; "ports"?: Array<ContainerPort> };
+export type ContainerSummary = { "id": string; "name": string; "image": string; "state": string; "created": number; "generation"?: number; "ports"?: Array<ContainerPublishedPort> };
 export type ContainerVolumeMount = { "volume": string; "target": string; "read_only": boolean };
 export type ControlSize = "Small" | "Medium" | "Large";
 export type DirectoryPage = { "entries": Array<Entry>; "identity": string; "next"?: RelativePath | null; "more": boolean };

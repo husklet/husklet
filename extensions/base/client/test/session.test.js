@@ -1325,19 +1325,21 @@ test('real Unix credential read rejects another key without mutation and preserv
   }
 });
 
-test('real Unix container inventory preserves a published PostgreSQL port', async () => {
+test('real Unix PostgreSQL discovery preserves exact list and inspection host bindings', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-postgres-port-'));
   const socketPath = path.join(directory, 'host.sock');
   const connections = new Set();
+  const id = 'd'.repeat(64);
   const container = {
-    id: 'db-id',
+    id,
     name: 'postgres',
     image: 'postgres:17',
     state: 'running',
     created: 1,
     generation: 4,
-    ports: [{ container: 5432, host: 15432, protocol: 'tcp' }],
+    ports: [{ container: 5432, host: 15432, host_ip: '0.0.0.0', protocol: 'tcp' }],
   };
+  const calls = [];
   const server = net.createServer((socket) => {
     connections.add(socket);
     socket.on('close', () => connections.delete(socket));
@@ -1345,15 +1347,24 @@ test('real Unix container inventory preserves a published PostgreSQL port', asyn
     socket.on('data', (chunk) => {
       for (const frame of reader.take(chunk)) {
         if (frame.kind !== KIND.request) continue;
-        assert.deepEqual(frame.payload, { call: 'container_list' });
+        calls.push(frame.payload);
+        const payload =
+          frame.payload.call === 'container_list'
+            ? { reply: 'containers', with: [container] }
+            : {
+                reply: 'container',
+                with: {
+                  ...container,
+                  ports: [
+                    { container: 5432, host: 15432, host_ip: '127.0.0.1', protocol: 'tcp' },
+                  ],
+                },
+              };
         socket.write(
           encode({
             channel: frame.channel,
             kind: KIND.response,
-            payload: {
-              reply: 'containers',
-              with: [container],
-            },
+            payload,
           }),
         );
       }
@@ -1373,7 +1384,13 @@ test('real Unix container inventory preserves a published PostgreSQL port', asyn
   await new Promise((resolve) => server.listen(socketPath, resolve));
   try {
     const session = await connect({ path: socketPath });
-    assert.deepEqual(await workspace(session).containers.list(), [container]);
+    const containers = workspace(session).containers;
+    assert.equal((await containers.list())[0].ports[0].host_ip, '0.0.0.0');
+    assert.equal((await containers.inspect(id)).ports[0].host_ip, '127.0.0.1');
+    assert.deepEqual(calls, [
+      { call: 'container_list' },
+      { call: 'container_inspect', with: { id } },
+    ]);
     await session.close();
   } finally {
     for (const connection of connections) connection.destroy();
