@@ -24,6 +24,164 @@ import {
 import { CONTROL, KIND, Reader, encode } from '../dist/wire.js';
 
 const FILE_JOURNAL = '0123456789abcdef0123456789abcdef';
+const REPLACEMENT_FILE_JOURNAL = 'fedcba9876543210fedcba9876543210';
+
+test('real Unix filesystem catch-up is bounded, resumable, and journal-gap safe', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-file-catch-up-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const requests = [];
+  const connections = new Set();
+  const server = net.createServer((socket) => {
+    connections.add(socket);
+    socket.on('close', () => connections.delete(socket));
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.kind !== KIND.request) continue;
+        requests.push(frame.payload);
+        const input = frame.payload.with;
+        let payload;
+        if (frame.payload.call !== 'filesystem_changes') {
+          payload = {
+            reply: 'workspace',
+            with: { name: 'index', image: 'toolbox', architecture: 'amd64' },
+          };
+        } else if (input.observed === FILE_JOURNAL && input.after < 2) {
+          const revision = input.after + 1;
+          payload = {
+            reply: 'file_changes',
+            with: {
+              changes: [
+                {
+                  revision,
+                  kind: revision === 1 ? 'create' : 'modify',
+                  path: 'src/a.ts',
+                  entry: {
+                    path: 'src/a.ts',
+                    directory: false,
+                    size: revision * 4,
+                    identity: `a-v${revision}`,
+                  },
+                },
+              ],
+              journal: FILE_JOURNAL,
+              next: revision,
+              current: 4,
+              more: true,
+              truncated: false,
+            },
+          };
+        } else if (input.observed === FILE_JOURNAL) {
+          payload = {
+            reply: 'file_changes',
+            with: {
+              changes: [],
+              journal: REPLACEMENT_FILE_JOURNAL,
+              next: 8,
+              current: 8,
+              more: false,
+              truncated: true,
+            },
+          };
+        } else {
+          payload = {
+            reply: 'file_changes',
+            with: {
+              changes: [
+                { revision: 9, kind: 'remove', path: 'src/old.ts', entry: null },
+              ],
+              journal: REPLACEMENT_FILE_JOURNAL,
+              next: 9,
+              current: 9,
+              more: false,
+              truncated: false,
+            },
+          };
+        }
+        const response = encode({ channel: frame.channel, kind: KIND.response, payload });
+        socket.write(response.subarray(0, 5));
+        socket.write(response.subarray(5));
+      }
+    });
+    const greeting = encode({
+      channel: CONTROL,
+      kind: KIND.open,
+      payload: {
+        protocol: 1,
+        peer: 'embeddings-catch-up',
+        granted: ['filesystem:read', 'workspaces:read'],
+      },
+    });
+    socket.write(greeting.subarray(0, 3));
+    socket.write(greeting.subarray(3));
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    const files = workspace(session).files;
+    await assert.rejects(
+      files.catchUpChanges({
+        cursor: { journal: FILE_JOURNAL, revision: 0 },
+        maxPages: 0,
+      }),
+      /maxPages.*1.*256/,
+    );
+    const controller = new AbortController();
+    controller.abort('indexer stopped');
+    await assert.rejects(
+      files.catchUpChanges({
+        cursor: { journal: FILE_JOURNAL, revision: 0 },
+        signal: controller.signal,
+      }),
+      (error) => error.name === 'AbortError' && error.cause === controller.signal.reason,
+    );
+    assert.deepEqual(requests, [], 'invalid and cancelled catch-up must not read history');
+
+    const partial = await files.catchUpChanges({
+      cursor: { journal: FILE_JOURNAL, revision: 0 },
+      pageSize: 1,
+      maxChanges: 4,
+      maxPages: 2,
+    });
+    assert.equal(partial.caughtUp, false);
+    assert.deepEqual(partial.cursor, { journal: FILE_JOURNAL, revision: 2 });
+    assert.equal(partial.current, 4);
+    assert.deepEqual(
+      partial.changes.map(({ revision, kind }) => [revision, kind]),
+      [
+        [1, 'create'],
+        [2, 'modify'],
+      ],
+    );
+
+    let recovery;
+    await assert.rejects(files.catchUpChanges({ cursor: partial.cursor, pageSize: 1 }), (error) => {
+      assert(error instanceof FilesystemJournalGapError);
+      assert.deepEqual(error.requested, partial.cursor);
+      assert.deepEqual(error.replacement, {
+        journal: REPLACEMENT_FILE_JOURNAL,
+        revision: 8,
+      });
+      recovery = error.replacement;
+      return true;
+    });
+    const resumed = await files.catchUpChanges({ cursor: recovery, pageSize: 1 });
+    assert.equal(resumed.caughtUp, true);
+    assert.deepEqual(resumed.cursor, {
+      journal: REPLACEMENT_FILE_JOURNAL,
+      revision: 9,
+    });
+    assert.deepEqual(resumed.changes.map(({ kind, path }) => [kind, path]), [
+      ['remove', 'src/old.ts'],
+    ]);
+    assert.equal((await workspace(session).info()).name, 'index');
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 test('real Unix query deadline cancels its exact execution and preserves the session', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-query-deadline-'));

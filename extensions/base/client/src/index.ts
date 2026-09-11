@@ -2457,6 +2457,61 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
           throw new TypeError('host returned an inconsistent filesystem change page');
         return page;
       },
+      catchUpChanges: async ({
+        cursor,
+        pageSize = 256,
+        maxChanges = 4_096,
+        maxPages = 64,
+        signal,
+      }) => {
+        exactFilesystemJournal(cursor?.journal);
+        if (!Number.isSafeInteger(cursor?.revision) || cursor.revision < 0)
+          throw new TypeError('filesystem change cursor must be a nonnegative safe integer');
+        exactFilesystemPageSize(pageSize);
+        if (!Number.isSafeInteger(maxChanges) || maxChanges < 1 || maxChanges > 65_536)
+          throw new RangeError(
+            'filesystem catch-up maxChanges must be an integer between 1 and 65536',
+          );
+        if (!Number.isSafeInteger(maxPages) || maxPages < 1 || maxPages > 256)
+          throw new RangeError('filesystem catch-up maxPages must be an integer between 1 and 256');
+        requireFilesystemActive(signal);
+        let journal = cursor.journal;
+        let revision = cursor.revision;
+        let current = revision;
+        const changes = [];
+        for (let pageIndex = 0; pageIndex < maxPages; pageIndex += 1) {
+          requireFilesystemActive(signal);
+          const requested = { journal, revision };
+          const remaining = maxChanges - changes.length;
+          const page = await api.files.changes(requested, Math.min(pageSize, remaining));
+          requireFilesystemActive(signal);
+          if (page.truncated) {
+            throw new FilesystemJournalGapError(requested, {
+              journal: page.journal,
+              revision: page.current,
+            });
+          }
+          changes.push(...page.changes);
+          journal = page.journal;
+          revision = page.next;
+          current = page.current;
+          if (!page.more) {
+            return {
+              changes,
+              cursor: { journal, revision },
+              current,
+              caughtUp: true,
+            };
+          }
+          if (changes.length === maxChanges) break;
+        }
+        return {
+          changes,
+          cursor: { journal, revision },
+          current,
+          caughtUp: false,
+        };
+      },
       changePages: async function* ({
         cursor,
         pageSize = 256,
@@ -5153,6 +5208,7 @@ export const protocolCoverage = Object.freeze({
       'inventory',
       'beginWalk',
       'changes',
+      'catchUpChanges',
       'changePages',
       'watchChanges',
       'watchLatestChanges',

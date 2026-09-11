@@ -137,19 +137,22 @@ try {
       }
     }
   }
-  const caughtUp = await host.files.changes({
-    journal: inventory.journal,
-    revision: inventory.revision,
+  const caughtUp = await host.files.catchUpChanges({
+    cursor: { journal: inventory.journal, revision: inventory.revision },
+    maxChanges: 4_096,
+    maxPages: 64,
+    signal: controller.signal,
   });
-  if (caughtUp.truncated) throw new Error('filesystem journal gap requires a full rescan');
+  if (!caughtUp.caughtUp)
+    throw new Error('filesystem catch-up exceeded its bound; resume before publishing');
   if (caughtUp.changes.length > 0) {
     throw new Error('document changed after inventory; refusing a stale checkpoint');
   }
   checkpoint = (
     await host.state.updateJson(checkpointCodec, (current) => ({
       ...current,
-      revision: caughtUp.next,
-      journal: caughtUp.journal,
+      revision: caughtUp.cursor.revision,
+      journal: caughtUp.cursor.journal,
       documents: { ...current.documents, ...scanned },
     }))
   ).value;

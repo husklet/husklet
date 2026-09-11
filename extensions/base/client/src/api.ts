@@ -574,6 +574,13 @@ export interface FileChangePage {
   more: boolean;
   truncated: boolean;
 }
+export interface FileChangeCatchUp {
+  changes: FileChange[];
+  cursor: FileCursor;
+  current: number;
+  /** False when a caller-owned page or change budget stopped reconciliation. */
+  caughtUp: boolean;
+}
 export interface FileRange {
   path: string;
   identity: string;
@@ -1594,6 +1601,17 @@ export interface WorkspaceApi {
       entries: AsyncGenerator<FileEntry, void, void>;
     }>;
     changes(cursor: FileCursor, limit?: number): Promise<FileChangePage>;
+    /**
+     * Drain a finite, bounded portion of filesystem history. An incomplete result carries the exact
+     * continuation cursor; journal replacement throws FilesystemJournalGapError with its rescan cursor.
+     */
+    catchUpChanges(options: {
+      cursor: FileCursor;
+      pageSize?: number;
+      maxChanges?: number;
+      maxPages?: number;
+      signal?: AbortSignal;
+    }): Promise<FileChangeCatchUp>;
     /**
      * Consumer-driven, cursor-safe change pages. Slow consumers apply polling backpressure;
      * host/transport failures reject the pending `next()`, and abort interrupts polling.
