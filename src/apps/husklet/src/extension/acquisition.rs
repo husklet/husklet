@@ -248,6 +248,20 @@ impl ExtensionAcquisitions {
                     break;
                 }
             }
+            let mut registry = registry.lock().unwrap_or_else(PoisonError::into_inner);
+            let Some(current) = registry.jobs.get_mut(&job) else {
+                return;
+            };
+            if !current.snapshot.state.terminal()
+                && !matches!(current.snapshot.state, AcquisitionState::Ready(_) | AcquisitionState::Committing)
+            {
+                current.candidate = None;
+                current.snapshot.revision = current.snapshot.revision.saturating_add(1);
+                current.snapshot.state = AcquisitionState::Failed(
+                    "extension image inspection ended before producing a result; retry inspection".into(),
+                );
+                events.acquisition(job, current.snapshot.clone());
+            }
         });
         Ok(job)
     }
@@ -617,6 +631,26 @@ mod tests {
         std::thread::sleep(Duration::from_millis(10));
         assert_eq!(service.status(job).unwrap().state, AcquisitionState::Cancelled);
         assert!(service.install(job, 1, &Grant::default()).is_err());
+    }
+
+    #[test]
+    fn abandoned_worker_becomes_retryable_failure_instead_of_consuming_an_active_slot() {
+        let root = tempfile::tempdir().unwrap();
+        let service = ExtensionAcquisitions::with_acquirer(&workspace(root.path()), |_, _, _, _| {});
+        let job = service.start("registry/sample:latest").unwrap();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            let snapshot = service.status(job).unwrap();
+            if let AcquisitionState::Failed(detail) = snapshot.state {
+                assert!(detail.contains("retry inspection"));
+                break;
+            }
+            assert!(Instant::now() < deadline, "abandoned acquisition remained active");
+            std::thread::yield_now();
+        }
+        for _ in 0..ExtensionAcquisitions::ACTIVE_LIMIT {
+            service.start("registry/retry:latest").expect("abandoned job released its slot");
+        }
     }
 
     #[test]
