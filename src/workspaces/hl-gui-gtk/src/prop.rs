@@ -45,7 +45,10 @@ pub(crate) fn apply(widget: &gtk::Widget, node: &Node, prop: Prop, value: &PropV
         Prop::Gap => gap(widget, value),
         Prop::Pad => pad(widget, value),
         Prop::Grow => grow(widget, value),
-        Prop::Width => width(widget, value),
+        Prop::Width => {
+            width(widget, value);
+            crate::component::table::authored_width(widget, value);
+        }
         Prop::Height => height(widget, value),
         Prop::Align | Prop::Justify => build::layout::alignment(widget, prop, value),
         Prop::Span | Prop::RowSpan => build::layout::span(widget, prop, value),

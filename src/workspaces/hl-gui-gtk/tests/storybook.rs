@@ -341,6 +341,45 @@ mod unix {
                         > 0,
                     "Button Playground remains reachable after API"
                 );
+                let property = find::<gtk::Label>(&root, |label| label.text() == "Property");
+                let description = find::<gtk::Label>(&root, |label| label.text() == "Description");
+                let row = property
+                    .parent()
+                    .and_then(|parent| parent.downcast::<gtk::Box>().ok())
+                    .expect("Button API header is a table row");
+                assert!(
+                    !row.is_homogeneous(),
+                    "authored API column widths were replaced with equal shares"
+                );
+                assert!(
+                    description.width() > property.width(),
+                    "narrow API description remained a word-wide tower: property={}, description={}",
+                    property.width(),
+                    description.width()
+                );
+                let table = row
+                    .parent()
+                    .and_then(|head| head.parent())
+                    .expect("Button API header belongs to a table");
+                let rows = descendants::<gtk::Box>(&table)
+                    .into_iter()
+                    .filter(|candidate| candidate.has_css_class("hl-tablerow"))
+                    .collect::<Vec<_>>();
+                let positions = |candidate: &gtk::Box| {
+                    let mut positions = Vec::new();
+                    let mut child = candidate.first_child();
+                    while let Some(cell) = child {
+                        child = cell.next_sibling();
+                        positions.push(cell.allocation().x());
+                    }
+                    positions
+                };
+                let columns = positions(rows.first().expect("Button API table has a header"));
+                let row_columns = rows.iter().map(positions).collect::<Vec<_>>();
+                assert!(
+                    row_columns.iter().all(|candidate| candidate == &columns),
+                    "authored API columns did not remain aligned across rows: {row_columns:?}"
+                );
                 capture_story(&realized_window, "Button narrow bottom");
                 vertical.set_value(0.0);
                 settle_toolkit();

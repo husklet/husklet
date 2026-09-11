@@ -203,7 +203,7 @@ fn part(parent: &gtk::Widget, child: &gtk::Widget, tag: Tag, index: usize) -> bo
         || card::slotted(parent, child, tag)
         || navigation::slotted(parent, child, tag)
         || dialog::slotted(parent, child, tag)
-        || table::slotted(parent, child, tag)
+        || table::slotted(parent, child, tag, index)
         || list::slotted(parent, child, tag)
         || form::slotted(parent, child, tag)
         || field::slotted(parent, child, tag, index)

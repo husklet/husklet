@@ -69,7 +69,7 @@ pub(crate) fn attach(parent: &gtk::Widget, child: &gtk::Widget, tag: Tag, index:
     layout::attach(parent, child, index)
 }
 
-fn insert_into(container: &gtk::Box, child: &gtk::Widget, index: usize) {
+pub(crate) fn insert_into(container: &gtk::Box, child: &gtk::Widget, index: usize) {
     let sibling = container.first_child();
     let mut cursor = sibling;
     let mut position = 0;

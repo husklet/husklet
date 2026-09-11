@@ -28,6 +28,9 @@ const INHERITED_LAYOUT = new Set([
   'rowSpan',
 ]);
 const INHERITED_BEHAVIOR = new Set(['destructive', 'visible', 'tooltip']);
+const API_PROPERTY_WIDTH = { chars: 10 } as const;
+const API_TYPE_WIDTH = { chars: 12 } as const;
+const API_DEFAULT_WIDTH = { chars: 7 } as const;
 
 export function ComponentDocument({
   name,
@@ -137,18 +140,22 @@ function ApiTable({ rows }: { rows: ControlRow[] }) {
     <Table width="fill">
       <TableHead>
         <TableRow>
-          <TableCell label="Property" width={{ chars: 12 }} wrap ellipsize={false} />
-          <TableCell label="Type" width={{ chars: 13 }} wrap ellipsize={false} />
-          <TableCell label="Default" width={{ chars: 8 }} wrap ellipsize={false} />
+          <TableCell label="Property" width={API_PROPERTY_WIDTH} />
+          <TableCell label="Type" width={API_TYPE_WIDTH} />
+          <TableCell label="Default" width={API_DEFAULT_WIDTH} />
           <TableCell label="Description" width="fill" wrap ellipsize={false} />
         </TableRow>
       </TableHead>
       <TableBody>
         {rows.map((row) => (
           <TableRow key={row.name}>
-            <TableCell label={row.name} width={{ chars: 12 }} wrap ellipsize={false} />
-            <TableCell label={publicType(row)} width={{ chars: 13 }} wrap ellipsize={false} />
-            <TableCell label={defaultValue(row)} width={{ chars: 8 }} wrap ellipsize={false} />
+            <TableCell label={row.name} tooltip={row.name} width={API_PROPERTY_WIDTH} />
+            <TableCell label={publicType(row)} tooltip={publicType(row)} width={API_TYPE_WIDTH} />
+            <TableCell
+              label={defaultValue(row)}
+              tooltip={defaultValue(row)}
+              width={API_DEFAULT_WIDTH}
+            />
             <TableCell label={row.note} width="fill" wrap ellipsize={false} />
           </TableRow>
         ))}
