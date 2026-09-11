@@ -65,6 +65,68 @@ pub struct Record {
     pub declaration: Option<Manifest>,
 }
 
+impl Record {
+    fn remove_inert_resource_grants(&mut self) {
+        let holds = |capability| self.granted.holds(capability);
+        if ![
+            Capability::ContainerRead,
+            Capability::ContainerCreate,
+            Capability::ContainerExecute,
+            Capability::ContainerLifecycle,
+            Capability::ContainerRemove,
+            Capability::ContainerAttach,
+        ]
+        .into_iter()
+        .any(|capability| holds(capability))
+        {
+            self.containers.selectors.clear();
+        }
+        if !holds(Capability::ContainerCreate) {
+            self.containers.create = false;
+            self.images.r#use.clear();
+        }
+        if !holds(Capability::NetworkRead) && !holds(Capability::NetworkWrite) {
+            self.networks.selectors.clear();
+        }
+        if !holds(Capability::NetworkWrite) {
+            self.networks.create = false;
+        }
+        if !holds(Capability::VolumeRead) && !holds(Capability::VolumeWrite) {
+            self.volumes.selectors.clear();
+        }
+        if !holds(Capability::VolumeWrite) {
+            self.volumes.create = false;
+        }
+        if !holds(Capability::ImageRead) {
+            self.images.read.clear();
+        }
+        if !holds(Capability::ImagePull) {
+            self.images.pull.clear();
+        }
+        if !holds(Capability::ImageRemove) {
+            self.images.remove.clear();
+        }
+        if !holds(Capability::ImagePrune) {
+            self.images.prune_all_unused = false;
+        }
+        if !holds(Capability::FilesystemRead) {
+            self.filesystem.read.clear();
+        }
+        if !holds(Capability::FilesystemWrite) {
+            self.filesystem.write.clear();
+            self.filesystem.create.clear();
+            self.filesystem.delete.clear();
+            self.filesystem.rename.clear();
+        }
+        if !holds(Capability::WorkspaceEnvironmentRead) {
+            self.workspace_environment.read.clear();
+        }
+        if !holds(Capability::WorkspaceEnvironmentWrite) {
+            self.workspace_environment.write.clear();
+        }
+    }
+}
+
 /// Where an extension stands right now.
 ///
 /// `Fault` is separate from a record that is merely not enabled, because the
@@ -322,7 +384,7 @@ impl Installation {
         }
         let granted = manifest.capabilities.intersect(consented);
         let mut containers = manifest.containers.intersect(consented_containers);
-        let images = manifest.images.intersect(consented_images);
+        let mut images = manifest.images.intersect(consented_images);
         let mut networks = manifest.networks.intersect(consented_networks);
         let mut volumes = manifest.volumes.intersect(consented_volumes);
         if ![
@@ -353,11 +415,41 @@ impl Installation {
         if !granted.holds(Capability::VolumeWrite) {
             volumes.create = false;
         }
-        let filesystem = manifest.filesystem.intersect(consented_filesystem);
-        let workspace_environment = manifest.workspace_environment.intersect(consented_environment);
+        if !granted.holds(Capability::ImageRead) {
+            images.read.clear();
+        }
+        if !granted.holds(Capability::ContainerCreate) {
+            images.r#use.clear();
+        }
+        if !granted.holds(Capability::ImagePull) {
+            images.pull.clear();
+        }
+        if !granted.holds(Capability::ImageRemove) {
+            images.remove.clear();
+        }
+        if !granted.holds(Capability::ImagePrune) {
+            images.prune_all_unused = false;
+        }
+        let mut filesystem = manifest.filesystem.intersect(consented_filesystem);
+        if !granted.holds(Capability::FilesystemRead) {
+            filesystem.read.clear();
+        }
+        if !granted.holds(Capability::FilesystemWrite) {
+            filesystem.write.clear();
+            filesystem.create.clear();
+            filesystem.delete.clear();
+            filesystem.rename.clear();
+        }
+        let mut workspace_environment = manifest.workspace_environment.intersect(consented_environment);
+        if !granted.holds(Capability::WorkspaceEnvironmentRead) {
+            workspace_environment.read.clear();
+        }
+        if !granted.holds(Capability::WorkspaceEnvironmentWrite) {
+            workspace_environment.write.clear();
+        }
         // The name is vacant, checked above, so this always inserts.
-        let entry = self.entries.entry(manifest.name.clone()).or_insert_with(|| Entry {
-            record: Record {
+        let entry = self.entries.entry(manifest.name.clone()).or_insert_with(|| {
+            let mut record = Record {
                 name: manifest.name.clone(),
                 image_digest: digest.to_owned(),
                 version: manifest.version.clone(),
@@ -372,8 +464,12 @@ impl Installation {
                 installed_at: at,
                 pane_providers: manifest.pane_providers.clone(),
                 declaration: Some(manifest.clone()),
-            },
-            restarts: Restarts::default(),
+            };
+            record.remove_inert_resource_grants();
+            Entry {
+                record,
+                restarts: Restarts::default(),
+            }
         });
         Ok(&entry.record)
     }
@@ -479,7 +575,7 @@ impl Installation {
         if !missing.is_empty() {
             return Err(UpdateFailure::Refused(Objection::Consent(missing)));
         }
-        let next = Record {
+        let mut next = Record {
             name: update.name,
             image_digest: update.candidate_digest,
             version: update.candidate_version,
@@ -495,6 +591,7 @@ impl Installation {
             pane_providers: update.manifest.pane_providers.clone(),
             declaration: Some(update.manifest),
         };
+        next.remove_inert_resource_grants();
         replace(&entry.record, &next).map_err(UpdateFailure::Replacement)?;
         entry.record = next;
         entry.restarts = Restarts::default();
@@ -837,6 +934,24 @@ mod tests {
             selectors: vec![crate::VolumeSelector::All { all: true }],
             create: true,
         };
+        asked.images = crate::ImageGrant {
+            read: vec![crate::ImageSelector::All { all: true }],
+            pull: vec![crate::ImageSelector::All { all: true }],
+            ..crate::ImageGrant::default()
+        };
+        asked.filesystem = crate::FilesystemGrant {
+            read: vec![crate::FilesystemSelector::Exact {
+                exact: hl_rpc::RelativePath::new("index/database.sqlite").unwrap(),
+            }],
+            ..crate::FilesystemGrant::default()
+        };
+        asked.workspace_environment = crate::WorkspaceEnvironmentGrant {
+            read: vec![crate::WorkspaceEnvironmentSelector::Exact {
+                workspace: "development".into(),
+                name: "DATABASE_URL".into(),
+            }],
+            write: Vec::new(),
+        };
 
         let record = installation
             .install_resource_scoped(
@@ -844,11 +959,11 @@ mod tests {
                 "sha256:inert",
                 &Grant::default(),
                 &asked.containers,
-                &crate::ImageGrant::default(),
+                &asked.images,
                 &asked.networks,
                 &asked.volumes,
-                &crate::FilesystemGrant::default(),
-                &crate::WorkspaceEnvironmentGrant::default(),
+                &asked.filesystem,
+                &asked.workspace_environment,
                 1,
             )
             .unwrap();
@@ -856,6 +971,37 @@ mod tests {
         assert_eq!(record.containers, crate::ContainerGrant::default());
         assert_eq!(record.networks, crate::NetworkGrant::default());
         assert_eq!(record.volumes, crate::VolumeGrant::default());
+        assert_eq!(record.images, crate::ImageGrant::default());
+        assert_eq!(record.filesystem, crate::FilesystemGrant::default());
+        assert_eq!(
+            record.workspace_environment,
+            crate::WorkspaceEnvironmentGrant::default()
+        );
+
+        let update = installation.prepare_update(&asked, "sha256:still-inert").unwrap();
+        let record = installation
+            .commit_update_resource_scoped(
+                update,
+                &Grant::default(),
+                &asked.containers,
+                &asked.images,
+                &asked.networks,
+                &asked.volumes,
+                &asked.filesystem,
+                &asked.workspace_environment,
+                2,
+                |_, _| Ok::<_, ()>(()),
+            )
+            .unwrap();
+        assert_eq!(record.containers, crate::ContainerGrant::default());
+        assert_eq!(record.networks, crate::NetworkGrant::default());
+        assert_eq!(record.volumes, crate::VolumeGrant::default());
+        assert_eq!(record.images, crate::ImageGrant::default());
+        assert_eq!(record.filesystem, crate::FilesystemGrant::default());
+        assert_eq!(
+            record.workspace_environment,
+            crate::WorkspaceEnvironmentGrant::default()
+        );
     }
 
     #[test]
