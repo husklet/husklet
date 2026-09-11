@@ -5,7 +5,13 @@ import path from 'node:path';
 import { mkdtemp, rm } from 'node:fs/promises';
 import test from 'node:test';
 
-import { connect, FileTextDecodeError, FileTextLimitError, workspace } from '../dist/index.js';
+import {
+  connect,
+  FileIdentityChangedError,
+  FileTextDecodeError,
+  FileTextLimitError,
+  workspace,
+} from '../dist/index.js';
 import { CONTROL, KIND, Reader, encode } from '../dist/wire.js';
 
 test('readText decodes split UTF-8 over fragmented real Unix frames and enforces its bound', async () => {
@@ -17,6 +23,7 @@ test('readText decodes split UTF-8 over fragmented real Unix frames and enforces
     ['docs/good.txt', { identity: 'good-v1', bytes: [0x41, 0xe2, 0x82, 0xac, 0x42] }],
     ['docs/large.txt', { identity: 'large-v1', bytes: [0x61, 0x62, 0x63] }],
     ['docs/bad.txt', { identity: 'bad-v1', bytes: [0x61, 0xc3, 0x28] }],
+    ['docs/churn.txt', { identity: 'churn-v1', bytes: [0x61, 0x62] }],
   ]);
   const server = net.createServer((socket) => {
     connections.add(socket);
@@ -29,6 +36,8 @@ test('readText decodes split UTF-8 over fragmented real Unix frames and enforces
         requests.push(input);
         const document = documents.get(input.path);
         const contents = document.bytes.slice(input.offset, input.offset + input.limit);
+        const identity =
+          input.path === 'docs/churn.txt' && input.offset > 0 ? 'churn-v2' : document.identity;
         const eof = input.offset + contents.length >= document.bytes.length;
         const reply = encode({
           channel: frame.channel,
@@ -37,7 +46,7 @@ test('readText decodes split UTF-8 over fragmented real Unix frames and enforces
             reply: 'file_range',
             with: {
               path: input.path,
-              identity: document.identity,
+              identity,
               offset: input.offset,
               total: document.bytes.length,
               contents,
@@ -93,6 +102,18 @@ test('readText decodes split UTF-8 over fragmented real Unix frames and enforces
       },
     );
     assert.equal(requests.length, beforeLarge + 1, 'reported total stops the read after one page');
+
+    await assert.rejects(
+      files.readText('docs/churn.txt', { maxBytes: 2, chunkBytes: 1 }),
+      (error) => {
+        assert(error instanceof FileIdentityChangedError);
+        assert.equal(error.path, 'docs/churn.txt');
+        assert.equal(error.expected, 'churn-v1');
+        assert.equal(error.actual, 'churn-v2');
+        assert.equal(error.offset, 1);
+        return true;
+      },
+    );
 
     await assert.rejects(files.readText('docs/bad.txt', { maxBytes: 3, chunkBytes: 1 }), (error) => {
       assert(error instanceof FileTextDecodeError);

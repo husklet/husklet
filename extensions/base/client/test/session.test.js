@@ -12,6 +12,7 @@ import {
   ExecutionOperationError,
   ExecutionOutputGapError,
   ExecutionOutputProtocolError,
+  FileIdentityChangedError,
   FilesystemJournalGapError,
   JsonLineDecodeError,
   JsonLineParseError,
@@ -357,14 +358,24 @@ test('real Unix chunk reads pin a prior file identity across fragmented frames',
         { offset: 2, observed: 'source-v1' },
       ],
     );
-    await assert.rejects(async () => {
-      for await (const _range of files.readChunks('src/stale.ts', {
-        chunkBytes: 2,
-        observed: 'source-v1',
-      })) {
-        // The mismatched first range must never be delivered.
-      }
-    }, /inconsistent filesystem file range/);
+    await assert.rejects(
+      async () => {
+        for await (const _range of files.readChunks('src/stale.ts', {
+          chunkBytes: 2,
+          observed: 'source-v1',
+        })) {
+          // The mismatched first range must never be delivered.
+        }
+      },
+      (error) => {
+        assert(error instanceof FileIdentityChangedError);
+        assert.equal(error.path, 'src/stale.ts');
+        assert.equal(error.expected, 'source-v1');
+        assert.equal(error.actual, 'changed-v2');
+        assert.equal(error.offset, 0);
+        return true;
+      },
+    );
     assert.equal(requests.at(-1).observed, 'source-v1');
     await session.close();
   } finally {
