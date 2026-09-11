@@ -885,6 +885,36 @@ mod unix {
                 .map(|label| label.text().to_string())
                 .collect::<Vec<_>>();
             assert_eq!(captions, ["Open terminal", "Create workspace"]);
+            let terminal_icon = descendants::<gtk::Image>(&menu_items[0].clone().upcast())
+                .into_iter()
+                .next()
+                .expect("terminal menu action retains its icon slot");
+            let icon_theme = gtk::IconTheme::for_display(&terminal_icon.display());
+            if icon_theme.has_icon("utilities-terminal-symbolic") {
+                assert_eq!(
+                    terminal_icon.icon_name().as_deref(),
+                    Some("utilities-terminal-symbolic")
+                );
+            } else if icon_theme.has_icon("system-run-symbolic") {
+                assert_eq!(
+                    terminal_icon.icon_name().as_deref(),
+                    Some("system-run-symbolic")
+                );
+            } else {
+                let terminal_names = terminal_icon
+                    .gicon()
+                    .and_then(|icon| icon.downcast::<gtk::gio::ThemedIcon>().ok())
+                    .expect("extension icons resolve through a themed fallback chain")
+                    .names();
+                assert_eq!(
+                    terminal_names.first().map(|name| name.as_str()),
+                    Some("utilities-terminal-symbolic")
+                );
+                assert!(
+                    terminal_names.iter().any(|name| name == "view-more-symbolic"),
+                    "a host missing the preferred terminal icon must render a portable fallback: {terminal_names:?}"
+                );
+            }
             let wide_metrics = menu_items
                 .iter()
                 .map(|button| (button.accessible_role(), button.width(), button.height()))

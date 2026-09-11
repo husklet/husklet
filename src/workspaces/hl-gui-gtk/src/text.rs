@@ -283,11 +283,11 @@ pub(crate) fn placeholder(widget: &gtk::Widget, value: &PropValue) {
 pub(crate) fn icon(widget: &gtk::Widget, value: &PropValue) {
     let name = value.as_text();
     if let Some(image) = widget.downcast_ref::<gtk::Image>() {
-        image.set_icon_name(name);
+        themed_icon(image, name);
         return;
     }
     if let Some(emblem) = slot::emblem(widget) {
-        emblem.set_icon_name(name);
+        themed_icon(&emblem, name);
         emblem.set_visible(name.is_some());
         return;
     }
@@ -296,6 +296,34 @@ pub(crate) fn icon(widget: &gtk::Widget, value: &PropValue) {
         return;
     }
     lettered(widget, name);
+}
+
+/// Resolves producer-provided names through the host theme without painting
+/// GTK's broken-image glyph when that theme lacks one. Extensions are portable
+/// across Linux and macOS themes, so a named icon is a preference rather than
+/// proof that the current host ships the corresponding asset.
+fn themed_icon(image: &gtk::Image, name: Option<&str>) {
+    let Some(name) = name else {
+        image.clear();
+        return;
+    };
+    let alias = match name {
+        "info" => "dialog-information-symbolic",
+        "document-open" => "document-open-symbolic",
+        "utilities-terminal-symbolic" => "system-run-symbolic",
+        _ => name,
+    };
+    let theme = gtk::IconTheme::for_display(&image.display());
+    if let Some(available) = [name, alias].into_iter().find(|candidate| theme.has_icon(candidate)) {
+        image.set_icon_name(Some(available));
+        return;
+    }
+    let names = if alias == name {
+        vec![name, "view-more-symbolic"]
+    } else {
+        vec![name, alias, "view-more-symbolic"]
+    };
+    image.set_from_gicon(&gtk::gio::ThemedIcon::from_names(&names));
 }
 
 fn lettered(widget: &gtk::Widget, name: Option<&str>) {
