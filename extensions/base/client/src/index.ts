@@ -273,6 +273,23 @@ export class PaneChangedError extends Error {
   }
 }
 
+/** A requested pane is absent or cannot be resolved from a bounded inventory. */
+export class PaneUnavailableError extends Error {
+  readonly slot;
+  readonly reason;
+
+  constructor(slot, reason) {
+    const detail =
+      reason === 'inventory-truncated'
+        ? 'pane cannot be resolved from a truncated inventory'
+        : 'pane does not exist';
+    super(`${detail}: ${slot}`);
+    this.name = 'PaneUnavailableError';
+    this.slot = slot;
+    this.reason = reason;
+  }
+}
+
 /** Reference-counted host subscriptions, keyed by session and snapshot topic. */
 const subscriptions = new WeakMap();
 const SNAPSHOT_TOPICS = Object.freeze([
@@ -2053,10 +2070,10 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
         const inventory = exactPaneInventory(expect(await session.call('pane_list'), 'panes'));
         const pane = inventory.panes.find((candidate) => candidate.slot === slot);
         if (!pane) {
-          const detail = inventory.truncated
-            ? 'pane cannot be resolved from a truncated inventory'
-            : 'pane does not exist';
-          throw new Error(`${detail}: ${slot}`);
+          throw new PaneUnavailableError(
+            slot,
+            inventory.truncated ? 'inventory-truncated' : 'absent',
+          );
         }
         if (pane.kind === 'terminal') {
           const snapshot = exactPane(

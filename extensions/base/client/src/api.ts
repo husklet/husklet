@@ -724,6 +724,12 @@ export declare class PaneChangedError extends Error {
   readonly observed: Readonly<{ generation: number; revision: number }>;
 }
 
+/** A requested pane is absent or cannot be resolved from a bounded inventory. */
+export declare class PaneUnavailableError extends Error {
+  readonly slot: string;
+  readonly reason: 'absent' | 'inventory-truncated';
+}
+
 export interface ConnectOptions {
   path?: string;
   /** Bounds pending calls, heartbeats, and queued event callback deliveries. */

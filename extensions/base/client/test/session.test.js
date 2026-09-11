@@ -12,6 +12,7 @@ import {
   ExecutionOutputGapError,
   ExecutionOutputProtocolError,
   JsonLineParseError,
+  PaneUnavailableError,
   Session,
   TerminalOperationError,
   workspace,
@@ -2280,6 +2281,104 @@ test('real Unix text wait aborts promptly, releases its subscription, and leaves
       'event_unsubscribe',
     ]);
     assert.equal((await workspace(session).terminal.panes()).panes[0].slot, 'shell');
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('real Unix text wait reports pane removal distinctly and can observe its restored generation', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-pane-restore-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const calls = [];
+  const connections = new Set();
+  let absent = true;
+  const restored = {
+    slot: 'agent',
+    generation: 9,
+    revision: 1,
+    kind: 'terminal',
+    provider: null,
+    tab: 'tab-1',
+    title: 'Restored shell',
+    focused: true,
+  };
+  const server = net.createServer((socket) => {
+    connections.add(socket);
+    socket.on('close', () => connections.delete(socket));
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.kind !== KIND.request) continue;
+        calls.push(frame.payload.call);
+        const payload =
+          frame.payload.call === 'pane_list'
+            ? { reply: 'panes', with: { panes: absent ? [] : [restored], truncated: false } }
+            : frame.payload.call === 'terminal_read_pane'
+              ? {
+                  reply: 'text',
+                  with: {
+                    slot: 'agent',
+                    generation: 9,
+                    revision: 1,
+                    columns: 80,
+                    rows: 24,
+                    lines: ['$ restored'],
+                    cursor_column: 10,
+                    cursor_row: 0,
+                    truncated: false,
+                  },
+                }
+              : { reply: 'done' };
+        socket.write(encode({ channel: frame.channel, kind: KIND.response, payload }));
+        if (frame.payload.call === 'event_unsubscribe') absent = false;
+      }
+    });
+    socket.write(
+      encode({
+        channel: CONTROL,
+        kind: KIND.open,
+        payload: {
+          protocol: 1,
+          peer: 'pane-restore-agent',
+          granted: ['panes:observe', 'terminals:output'],
+        },
+      }),
+    );
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    const terminal = workspace(session).terminal;
+    await assert.rejects(
+      terminal.waitForText('agent', { generation: 8, revision: 12 }, { timeoutMs: 1_000 }),
+      (error) =>
+        error instanceof PaneUnavailableError &&
+        error.slot === 'agent' &&
+        error.reason === 'absent',
+    );
+    assert.deepEqual(calls, ['event_subscribe', 'pane_list', 'event_unsubscribe']);
+    assert.deepEqual((await terminal.panes()).panes, [restored]);
+
+    const controller = new AbortController();
+    const waiting = terminal.waitForText(
+      'agent',
+      { generation: 9, revision: 1 },
+      { timeoutMs: 30_000, signal: controller.signal },
+    );
+    setTimeout(() => controller.abort('agent stopped'), 5);
+    await assert.rejects(waiting, (error) => error?.name === 'AbortError');
+    assert.equal((await terminal.panes()).panes[0].generation, 9);
+    assert.deepEqual(calls.slice(-6), [
+      'pane_list',
+      'event_subscribe',
+      'pane_list',
+      'terminal_read_pane',
+      'event_unsubscribe',
+      'pane_list',
+    ]);
     await session.close();
   } finally {
     for (const connection of connections) connection.destroy();

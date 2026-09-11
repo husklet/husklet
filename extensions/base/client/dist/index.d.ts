@@ -47,6 +47,12 @@ export declare class PaneChangedError extends Error {
     readonly observed: any;
     constructor(slot: any, expected: any, observed: any);
 }
+/** A requested pane is absent or cannot be resolved from a bounded inventory. */
+export declare class PaneUnavailableError extends Error {
+    readonly slot: any;
+    readonly reason: any;
+    constructor(slot: any, reason: any);
+}
 export declare function connect(options?: ConnectOptions): Promise<ClientSession>;
 /**
  * Opens a surface and paints a dependency-free first frame.
