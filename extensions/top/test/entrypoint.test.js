@@ -545,7 +545,7 @@ test(
             (request) =>
               request.call === 'interface_render_at' &&
               request.with.frame.patches.some(
-                (patch) => patch.SetProp?.value?.Text === 'Image details',
+                (patch) => patch.SetProp?.value?.Text === 'Image summary',
               ),
           ),
         );

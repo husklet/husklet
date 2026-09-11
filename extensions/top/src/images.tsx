@@ -432,25 +432,31 @@ function PullStatus({
 function StructuredDetail({ value }: { value: ImageDetails | null }) {
   if (!value) return null;
   return (
-    <Column gap={1}>
-      <Heading label="Image details" scale="caption" />
-      <Row gap={1} wrap>
+    <Column gap={2} width="fill">
+      <Column gap={1} width="fill">
+        <Heading label="Image summary" scale="caption" />
         <Text label={`Platform · ${value.os}/${value.architecture}`} />
-        <Text label={`Size · ${bytes(value.size)}`} />
-      </Row>
-      <Text label={`Created · ${value.created}`} color="text-dim" />
-      <Text label={`Immutable image ID · ${value.id}`} color="text-dim" wrap />
-      <Text
-        label={`References · ${value.references.length ? value.references.join(', ') : 'None'}`}
-        wrap
-      />
-      <Text
-        label={`Entrypoint · ${value.entrypoint.length ? value.entrypoint.join(' ') : 'Default'}`}
-        wrap
-      />
-      <Text label={`Command · ${value.command.length ? value.command.join(' ') : 'None'}`} wrap />
-      <Text label={`Working directory · ${value.working_directory || 'Default'}`} wrap />
-      <Text label={`User · ${value.user || 'Default'}`} wrap />
+        <Text label={`Created · ${value.created}`} color="text-dim" />
+      </Column>
+      <Expander label="Technical details" width="fill" align="start">
+        <Column gap={1} width="fill">
+          <Text label={`Immutable image ID · ${value.id}`} color="text-dim" wrap />
+          <Text
+            label={`References · ${value.references.length ? value.references.join(', ') : 'None'}`}
+            wrap
+          />
+          <Text
+            label={`Entrypoint · ${value.entrypoint.length ? value.entrypoint.join(' ') : 'Default'}`}
+            wrap
+          />
+          <Text
+            label={`Command · ${value.command.length ? value.command.join(' ') : 'None'}`}
+            wrap
+          />
+          <Text label={`Working directory · ${value.working_directory || 'Default'}`} wrap />
+          <Text label={`User · ${value.user || 'Default'}`} wrap />
+        </Column>
+      </Expander>
     </Column>
   );
 }

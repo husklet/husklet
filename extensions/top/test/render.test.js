@@ -4773,8 +4773,11 @@ test('image inspect renders real typed details through a bounded source and retr
   await settled();
   await settled();
   assert.equal(attempts, 2);
-  assert.ok(labelled(stage, 'Image details'));
+  assert.ok(labelled(stage, 'Image summary'));
   assert.ok(labelled(stage, 'Platform · linux/amd64'));
+  assert.ok(labelled(stage, 'Created · now'));
+  assert.ok(labelled(stage, 'Technical details'));
+  assert.ok(labelled(stage, 'Immutable image ID · sha256:one'));
   assert.ok(labelled(stage, 'References · alpine:3.20'));
   assert.equal(labelled(stage, '$.id'), undefined);
   assert.deepEqual(mutations, [{ Length: { source: 201, version: 1, rows: 9 } }]);
@@ -4843,7 +4846,7 @@ test('typed image inspection never exposes unknown host object fields', async ()
   invoke(stage, 'Inspect');
   await settled();
   await settled();
-  assert.ok(labelled(stage, 'Image details'));
+  assert.ok(labelled(stage, 'Image summary'));
   assert.equal(labelled(stage, '$.field_199'), undefined);
   assert.equal(labelled(stage, 'value-199'), undefined);
 });

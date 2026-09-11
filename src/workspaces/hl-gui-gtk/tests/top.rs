@@ -11,9 +11,9 @@ mod unix {
 
     use gtk::prelude::*;
     use hl_extension::port::{
-        ExecutionSummary, ExtensionAcquisitionJob, ExtensionAcquisitionProgress, ExtensionAcquisitionStatus,
-        ExtensionCandidate, ExtensionCatalogue, ExtensionCatalogueEntry, NetworkEndpointInventory, NetworkInventory,
-        NetworkKind, NetworkSummary,
+        ExtensionAcquisitionJob, ExtensionAcquisitionProgress, ExtensionAcquisitionStatus, ExtensionCandidate,
+        ExecutionSummary, ExtensionCatalogue, ExtensionCatalogueEntry, ImageDetails, NetworkEndpointInventory,
+        NetworkInventory, NetworkKind, NetworkSummary,
     };
     use hl_extension::{
         Capability, ChannelId, ExtensionName, ExtensionPreferences, ExtensionSummary, FilesystemGrant,
@@ -30,6 +30,7 @@ mod unix {
         ("extensions", "extensions"),
         ("processes", "processes"),
         ("executions", "executions"),
+        ("images", "images"),
         ("volumes", "volumes"),
         ("networks", "networks"),
     ];
@@ -228,6 +229,7 @@ mod unix {
             "extensions" => "Extensions",
             "processes" => "Processes",
             "executions" => "Executions",
+            "images" => "Images",
             "volumes" => "Volumes",
             "networks" => "Networks",
             _ => unreachable!(),
@@ -1224,6 +1226,84 @@ mod unix {
                 );
                 capture(&window, &format!("execution-detail-{width_name}"), width, 800);
             }
+        }
+        if fixture == "populated" && name == "images" {
+            let _ = surface.reports().drain();
+            find_button(&root, "Inspect").emit_clicked();
+            settle_toolkit();
+            let interaction = surface
+                .reports()
+                .drain()
+                .into_iter()
+                .find(|event| matches!(event, hl_gui::Event::Invoke { .. }))
+                .expect("image Inspect emits an invocation");
+            wire.send(&Frame::new(
+                ChannelId::new(107),
+                hl_extension::Kind::Event,
+                codec::interaction(&interaction, Some("")).expect("image Inspect invocation encodes"),
+            ))
+            .expect("image Inspect invocation reaches Top");
+            let deadline = Instant::now() + DEADLINE;
+            while Instant::now() < deadline
+                && !has_label(surface.widget().upcast_ref::<gtk::Widget>(), "Image summary")
+            {
+                match receive_until(&mut wire, (Instant::now() + Duration::from_millis(80)).min(deadline)) {
+                    Ok(frame) if frame.kind == hl_extension::Kind::Credit => {}
+                    Ok(frame) => {
+                        let reply = match codec::read_request(&frame).expect("image detail request decodes") {
+                            Request::ImageInspect { reference } => Reply::ImageDetails(ImageDetails {
+                                id: format!("sha256:{}", "b".repeat(64)),
+                                references: vec![reference],
+                                created: "2026-09-11T12:00:00Z".into(),
+                                size: 8_192_000,
+                                os: "linux".into(),
+                                architecture: "amd64".into(),
+                                entrypoint: vec!["/bin/sh".into(), "-lc".into()],
+                                command: vec!["npm test".into()],
+                                working_directory: "/workspace".into(),
+                                user: "developer".into(),
+                            }),
+                            Request::InterfaceRender { frame } | Request::InterfaceRenderAt { frame, .. } => {
+                                tree.apply(&frame, &mut surface).expect("image detail frame applies");
+                                Reply::Done
+                            }
+                            Request::SourceResize { mutation } | Request::SourceResizeAt { mutation, .. } => {
+                                if let SourceMutation::Length { source, version, rows } = mutation {
+                                    let _ = surface.resize(source, version, rows);
+                                }
+                                Reply::Done
+                            }
+                            other => panic!("unexpected image detail request: {other:?}"),
+                        };
+                        wire.send(&codec::reply(&reply).expect("image detail reply encodes"))
+                            .expect("image detail reply sends");
+                        settle_toolkit();
+                    }
+                    Err(hl_extension::Transit::Pending) => {}
+                    Err(error) => panic!("image detail failed: {error:?}"),
+                }
+            }
+            let image_root = surface.widget().clone().upcast::<gtk::Widget>();
+            window.set_child(Some(&image_root));
+            assert!(has_label(&image_root, "Platform · linux/amd64"));
+            assert!(has_label(&image_root, "7.8 MiB"));
+            let technical = find_expander(&image_root, "Technical details");
+            assert!(!technical.is_expanded());
+            assert!(technical.grab_focus(), "image technical details are keyboard reachable");
+            for (width_name, width) in [("wide", 1_200), ("narrow", 600)] {
+                window.set_default_size(width, 800);
+                window.set_size_request(width, 800);
+                window.present();
+                settle_toolkit();
+                assert_contained(&image_root, &format!("image-detail/{width_name}"));
+                capture(&window, &format!("image-detail-{width_name}"), width, 800);
+            }
+            technical.set_expanded(true);
+            settle_toolkit();
+            assert!(has_label(
+                &image_root,
+                &format!("Immutable image ID · sha256:{}", "b".repeat(64))
+            ));
         }
         if fixture == "populated" && name == "volumes" {
             let _ = surface.reports().drain();
