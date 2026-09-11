@@ -5864,6 +5864,7 @@ test('real Unix install wait inspects revision, arms inventory, then commits exa
     version: '1',
     image_digest: digest,
     requested: ['extensions:read'],
+    required: [],
     installed_image_digest: null,
   };
   const summary = {
@@ -5984,6 +5985,7 @@ test('real Unix install wait rejects broader published authority and preserves t
     version: '2',
     image_digest: digest,
     requested: ['extensions:read'],
+    required: [],
     installed_image_digest: null,
   };
   const committed = {

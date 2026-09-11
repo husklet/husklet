@@ -1,9 +1,5 @@
 // Generated from Rust hl-extension protocol/v1.json. Do not edit.
-<<<<<<< HEAD
-// Protocol artifact fnv1a64:c6f5cbf712173d02
-=======
-// Protocol artifact fnv1a64:9daff6c398d5f032
->>>>>>> c6cba0308 (Expose mandatory extension update consent)
+// Protocol artifact fnv1a64:ab37b5f8d63ab58b
 export const PROTOCOL_SPECIFICATION_VERSION: 1;
 export const PROTOCOL_VERSION: 1;
 export const PROTOCOL_BOUNDS: Readonly<{ "extension_job_bytes": number; "extension_reference_bytes": number; "pane_input_bytes": number; "pane_inventory_items": number; "pane_text_bytes": number; "resource_inventory_items": number; "semantic_action_value_bytes": number; "semantic_depth": number; "semantic_nodes": number; "semantic_text_bytes": number; "terminal_command_argument_bytes": number; "terminal_command_bytes": number }>;
