@@ -12,8 +12,8 @@ mod unix {
     use gtk::prelude::*;
     use hl_extension::port::{
         ExtensionAcquisitionJob, ExtensionAcquisitionProgress, ExtensionAcquisitionStatus, ExtensionCandidate,
-        ExtensionCatalogue, ExtensionCatalogueEntry, NetworkEndpointInventory, NetworkInventory, NetworkKind,
-        NetworkSummary,
+        ExecutionSummary, ExtensionCatalogue, ExtensionCatalogueEntry, NetworkEndpointInventory, NetworkInventory,
+        NetworkKind, NetworkSummary,
     };
     use hl_extension::{
         Capability, ChannelId, ExtensionName, ExtensionPreferences, ExtensionSummary, FilesystemGrant,
@@ -29,6 +29,7 @@ mod unix {
         ("settings", "settings"),
         ("extensions", "extensions"),
         ("processes", "processes"),
+        ("executions", "executions"),
         ("networks", "networks"),
     ];
     const DEADLINE: Duration = Duration::from_secs(5);
@@ -221,6 +222,7 @@ mod unix {
             "settings" => "Workspace settings",
             "extensions" => "Extensions",
             "processes" => "Processes",
+            "executions" => "Executions",
             "networks" => "Networks",
             _ => unreachable!(),
         };
@@ -1130,6 +1132,91 @@ mod unix {
             assert!(has_label(&success_root, &format!("Container ID · {container_id}")));
             assert!(has_label(&success_root, &format!("Network ID · {network_id}")));
             assert!(!has_placeholder(&success_root, "Aliases, comma-separated (optional)"));
+        }
+        if fixture == "populated" && name == "executions" {
+            let _ = surface.reports().drain();
+            find_button(&root, "Details").emit_clicked();
+            settle_toolkit();
+            let interaction = surface
+                .reports()
+                .drain()
+                .into_iter()
+                .find(|event| matches!(event, hl_gui::Event::Invoke { .. }))
+                .expect("execution Details emits an invocation");
+            wire.send(&Frame::new(
+                ChannelId::new(104),
+                hl_extension::Kind::Event,
+                codec::interaction(&interaction, Some("")).expect("Details invocation encodes"),
+            ))
+            .expect("Details invocation reaches Top");
+            let deadline = Instant::now() + DEADLINE;
+            while Instant::now() < deadline
+                && !has_label(
+                    surface.widget().upcast_ref::<gtk::Widget>(),
+                    "Command · /bin/sh -lc npm test",
+                )
+            {
+                let frame = match receive_until(
+                    &mut wire,
+                    (Instant::now() + Duration::from_millis(80)).min(deadline),
+                ) {
+                    Ok(frame) => frame,
+                    Err(hl_extension::Transit::Pending) => continue,
+                    Err(error) => panic!("execution detail request failed: {error:?}"),
+                };
+                if frame.kind == hl_extension::Kind::Credit {
+                    continue;
+                }
+                let reply = match codec::read_request(&frame).expect("execution detail request decodes") {
+                    Request::ExecutionInspect { id } => Reply::Execution(ExecutionSummary {
+                        id,
+                        container_id: "a".repeat(64),
+                        running: false,
+                        exit_code: 0,
+                        pid: 412,
+                        command: vec!["/bin/sh".into(), "-lc".into(), "npm test".into()],
+                        user: "developer".into(),
+                    }),
+                    Request::InterfaceRender { frame } | Request::InterfaceRenderAt { frame, .. } => {
+                        tree.apply(&frame, &mut surface).expect("execution detail frame applies");
+                        Reply::Done
+                    }
+                    Request::SourceResize { mutation } | Request::SourceResizeAt { mutation, .. } => {
+                        if let SourceMutation::Length { source, version, rows } = mutation {
+                            let _ = surface.resize(source, version, rows);
+                        }
+                        Reply::Done
+                    }
+                    other => panic!("unexpected execution detail request: {other:?}"),
+                };
+                wire.send(&codec::reply(&reply).expect("execution detail reply encodes"))
+                    .expect("execution detail reply sends");
+                settle_toolkit();
+            }
+            let detail_root = surface.widget().clone().upcast::<gtk::Widget>();
+            window.set_child(Some(&detail_root));
+            assert!(has_label(&detail_root, "Execution summary"));
+            assert!(has_label(&detail_root, "Command · /bin/sh -lc npm test"));
+            assert!(has_label(&detail_root, "User · developer"));
+            let technical = find_expander(&detail_root, "Technical details");
+            assert!(!technical.is_expanded(), "raw property table starts disclosed");
+            assert!(technical.grab_focus(), "technical disclosure is keyboard reachable");
+            for (width_name, width) in [("narrow", 600), ("wide", 1_200)] {
+                window.set_default_size(width, 800);
+                window.set_size_request(width, 800);
+                window.present();
+                settle_toolkit();
+                detail_root.measure(gtk::Orientation::Horizontal, -1);
+                detail_root.measure(gtk::Orientation::Vertical, width);
+                detail_root.allocate(width, 1_600, -1, None);
+                window.queue_draw();
+                settle_toolkit();
+                assert!(
+                    technical.allocation().width() <= detail_root.allocation().width(),
+                    "technical disclosure stays within the {width_name} detail surface"
+                );
+                capture(&window, &format!("execution-detail-{width_name}"), width, 800);
+            }
         }
         let stderr = child.stop();
         assert!(stderr.is_empty(), "{fixture}/{name} wrote to stderr: {stderr}");

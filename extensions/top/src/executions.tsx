@@ -40,6 +40,7 @@ const DETAIL_SCHEMA = [
 type Inspection = {
   state: 'idle' | 'loading' | 'ready' | 'error';
   count: number;
+  detail: ExecutionSummary | null;
   error: unknown;
 };
 type Output = {
@@ -75,6 +76,7 @@ export function Executions({
   const [inspection, setInspection] = React.useState<Inspection>({
     state: 'idle',
     count: 0,
+    detail: null,
     error: null,
   });
   const [output, setOutput] = React.useState<Output | null>(null);
@@ -91,17 +93,17 @@ export function Executions({
     async (id: string) => {
       const revision = ++lifecycleRevision.current;
       setSelected(id);
-      setInspection({ state: 'loading', count: 0, error: null });
+      setInspection({ state: 'loading', count: 0, detail: null, error: null });
       setOutput(null);
       try {
         const detail = await api.containers.execution(id);
         if (revision !== lifecycleRevision.current) return;
         const count = await detailsSource.replace(detail);
         if (revision !== lifecycleRevision.current) return;
-        setInspection({ state: 'ready', count, error: null });
+        setInspection({ state: 'ready', count, detail, error: null });
       } catch (error) {
         if (revision === lifecycleRevision.current)
-          setInspection({ state: 'error', count: 0, error });
+          setInspection({ state: 'error', count: 0, detail: null, error });
       }
     },
     [api, detailsSource],
@@ -114,7 +116,7 @@ export function Executions({
   const logs = async (id: string) => {
     const revision = ++lifecycleRevision.current;
     setSelected(id);
-    setInspection({ state: 'loading', count: 0, error: null });
+    setInspection({ state: 'loading', count: 0, detail: null, error: null });
     setOutput(null);
     setBusy(`logs:${id}`);
     try {
@@ -125,10 +127,10 @@ export function Executions({
         if (revision !== lifecycleRevision.current) return;
         const count = await detailsSource.replace(detail);
         if (revision !== lifecycleRevision.current) return;
-        setInspection({ state: 'ready', count, error: null });
+        setInspection({ state: 'ready', count, detail, error: null });
       } catch (cause) {
         if (revision !== lifecycleRevision.current) return;
-        setInspection({ state: 'error', count: 0, error: cause });
+        setInspection({ state: 'error', count: 0, detail: null, error: cause });
       }
       const value = await outputRequest;
       if (revision !== lifecycleRevision.current) return;
@@ -225,7 +227,7 @@ export function Executions({
     inventoryRevision.current = resource.data;
     lifecycleRevision.current += 1;
     setSelected('');
-    setInspection({ state: 'idle', count: 0, error: null });
+    setInspection({ state: 'idle', count: 0, detail: null, error: null });
     setOutput(null);
     setBusy('');
     setInventoryVersion((version) => version + 1);
@@ -394,11 +396,12 @@ function ExecutionDetail({
         retryLabel="Retry details"
         onRetry={onRetry}
       >
-        <KeyValueTable
-          source={EXECUTION_DETAIL_SOURCE}
-          schema={DETAIL_SCHEMA}
-          height={{ minimum: { step: 10 }, maximum: { step: 28 } }}
-        />
+        <Column gap={2} width="fill">
+          <ExecutionSummaryDetail value={inspection.detail} />
+          <Expander label="Technical details" width="fill" align="start">
+            <KeyValueTable source={EXECUTION_DETAIL_SOURCE} schema={DETAIL_SCHEMA} />
+          </Expander>
+        </Column>
       </ResourceState>
       {outputLoading ? (
         <Row gap={1} align="center">
@@ -450,6 +453,19 @@ function ExecutionDetail({
         </Column>
       ) : null}
     </>
+  );
+}
+
+function ExecutionSummaryDetail({ value }: { value: ExecutionSummary | null }) {
+  if (!value) return null;
+  return (
+    <Column gap={1} width="fill">
+      <Heading label="Execution summary" scale="caption" />
+      {value.pid > 0 ? <Text label={`Process · ${value.pid}`} color="text-dim" /> : null}
+      <Text label={`Command · ${value.command?.join(' ') || 'Unavailable'}`} wrap />
+      <Text label={`User · ${value.user || 'Default user'}`} color="text-dim" wrap />
+      <Text label={`Container · ${shortId(value.container_id)}`} color="text-dim" />
+    </Column>
   );
 }
 

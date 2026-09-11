@@ -24,7 +24,7 @@ export const populatedFixture = {
   ],
   executions: [
     {
-      id: 'e'.repeat(64),
+      id: 'e'.repeat(32),
       container_id: containerId,
       running: false,
       exit_code: 0,

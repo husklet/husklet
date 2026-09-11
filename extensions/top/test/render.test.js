@@ -6707,6 +6707,12 @@ test('execution details, separate bounded streams, wait and retry are operationa
   invoke(stage, 'Retry details');
   await settled();
   await settled();
+  assert.ok(labelled(stage, 'Execution summary'));
+  assert.ok(labelled(stage, 'Process · 77'));
+  assert.ok(labelled(stage, 'Command · sleep 5'));
+  assert.ok(labelled(stage, 'User · root'));
+  assert.ok(labelled(stage, 'Container · c1'));
+  assert.ok(labelled(stage, 'Technical details'));
   assert.ok(
     stage.frames
       .flatMap((frame) => frame.patches)
