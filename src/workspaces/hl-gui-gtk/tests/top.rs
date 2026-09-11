@@ -306,6 +306,21 @@ mod unix {
             settle_frame();
             assert_eq!(root.width(), width, "{fixture}/{name} rejected {width}px");
             assert_contained(&root, &format!("{fixture}/{name}/{width_name}"));
+            if fixture == "populated" && name == "processes" && width == 1_200 {
+                let refresh = find_tooltip_button(&root, "Refresh processes");
+                assert_eq!(
+                    (refresh.width(), refresh.height()),
+                    (28, 28),
+                    "process refresh must remain a compact toolbar icon action"
+                );
+                assert!(refresh.has_css_class("hl-iconbutton"));
+                assert!(refresh.has_css_class("size-small"));
+                let icon = refresh
+                    .child()
+                    .and_then(|child| child.downcast::<gtk::Image>().ok())
+                    .expect("process refresh renders its native icon");
+                assert_eq!(icon.icon_name().as_deref(), Some("view-refresh-symbolic"));
+            }
             if fixture == "populated" && name == "settings" {
                 let label = find_label(&root, "Execution lifetime");
                 let select = label

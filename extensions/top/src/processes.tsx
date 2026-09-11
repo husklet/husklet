@@ -4,6 +4,7 @@ import {
   Column,
   DataTable,
   Entry,
+  IconButton,
   RecoveryState,
   Heading,
   ResourceState,
@@ -244,7 +245,15 @@ function Toolbar({
   return (
     <Row gap={1} align="center">
       {loading ? <Spinner /> : null}
-      <Button label="Refresh" enabled={!loading} onInvoke={onRefresh} />
+      <IconButton
+        label="Refresh"
+        tooltip="Refresh processes"
+        icon="view-refresh-symbolic"
+        size="small"
+        variant="ghost"
+        enabled={!loading}
+        onInvoke={onRefresh}
+      />
     </Row>
   );
 }

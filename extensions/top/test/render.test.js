@@ -3105,6 +3105,19 @@ test('every empty operational page explains what is absent and how to proceed', 
       { Length: { Step: 4 } },
       `${section} uses the same 16px page inset as the manager surfaces`,
     );
+    if (['Processes', 'Executions', 'Terminals'].includes(section)) {
+      assert.deepEqual(taggedProperty(stage, 'Refresh', 'IconButton', 'Icon'), {
+        Text: 'view-refresh-symbolic',
+      });
+      assert.deepEqual(taggedProperty(stage, 'Refresh', 'IconButton', 'Size'), {
+        ControlSize: 'Small',
+      });
+      assert.deepEqual(
+        taggedProperty(stage, 'Refresh', 'IconButton', 'Tooltip'),
+        { Text: `Refresh ${section.toLowerCase()}` },
+        `${section} refresh is a compact, contextual toolbar action`,
+      );
+    }
     if (section === 'Images') {
       assert.equal(ancestorTags(stage, 'Pull')[0], 'Row');
       assert.deepEqual(
