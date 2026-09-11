@@ -1637,6 +1637,130 @@ test('real Unix filesystem watcher publishes filtered cursor-only progress for r
   }
 });
 
+test('real Unix latest-change watcher supersedes long test work without blocking its next cursor', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-latest-change-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const calls = [];
+  const connections = new Set();
+  const server = net.createServer((socket) => {
+    connections.add(socket);
+    socket.on('close', () => connections.delete(socket));
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.kind !== KIND.request) continue;
+        calls.push(frame.payload);
+        if (frame.payload.call === 'filesystem_changes') {
+          const revision = frame.payload.with.after + 1;
+          socket.write(
+            encode({
+              channel: frame.channel,
+              kind: KIND.response,
+              payload: {
+                reply: 'file_changes',
+                with: {
+                  journal: FILE_JOURNAL,
+                  changes: [
+                    {
+                      revision,
+                      kind: 'modify',
+                      path: `src/revision-${revision}.ts`,
+                      entry: null,
+                    },
+                  ],
+                  next: revision,
+                  current: revision,
+                  more: false,
+                  truncated: false,
+                },
+              },
+            }),
+          );
+        } else if (frame.payload.call === 'workspace_info') {
+          socket.write(
+            encode({
+              channel: frame.channel,
+              kind: KIND.response,
+              payload: {
+                reply: 'workspace',
+                with: { name: 'tests', image: 'toolbox', architecture: 'amd64' },
+              },
+            }),
+          );
+        }
+      }
+    });
+    socket.write(
+      encode({
+        channel: CONTROL,
+        kind: KIND.open,
+        payload: {
+          protocol: 1,
+          peer: 'latest-test-runner',
+          granted: ['filesystem:read', 'workspaces:read'],
+        },
+      }),
+    );
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  const controller = new AbortController();
+  const started = [];
+  const superseded = [];
+  let stop;
+  try {
+    const session = await connect({ path: socketPath, timeout: 1_000 });
+    stop = await workspace(session).files.watchLatestChanges(
+      async (page, signal) => {
+        const revision = page.changes[0].revision;
+        started.push(revision);
+        if (revision === 2) {
+          controller.abort('latest revision observed');
+          return;
+        }
+        await new Promise((_, reject) => {
+          signal.addEventListener(
+            'abort',
+            () => {
+              superseded.push(revision);
+              const error = new Error('test execution superseded');
+              error.name = 'AbortError';
+              reject(error);
+            },
+            { once: true },
+          );
+        });
+      },
+      {
+        cursor: { journal: FILE_JOURNAL, revision: 0 },
+        pollMs: 1,
+        signal: controller.signal,
+      },
+    );
+    await Promise.race([
+      stop.done,
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('latest watcher blocked behind stale test work')), 200),
+      ),
+    ]);
+    assert.deepEqual(started, [1, 2]);
+    assert.deepEqual(superseded, [1]);
+    assert.deepEqual(
+      calls
+        .filter(({ call }) => call === 'filesystem_changes')
+        .map(({ with: cursor }) => cursor.after),
+      [0, 1],
+      'revision 2 is requested while revision 1 work is still pending',
+    );
+    assert.equal((await workspace(session).info()).name, 'tests');
+    await session.close();
+  } finally {
+    await stop?.().catch(() => {});
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('real Unix filesystem watcher exposes listener failure without poisoning the session', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-watch-supervision-'));
   const socketPath = path.join(directory, 'host.sock');

@@ -1784,6 +1784,68 @@ export function workspace(session, { signal } = {}) {
                 Object.defineProperty(stop, 'done', { value: running, enumerable: true });
                 return stop;
             },
+            watchLatestChanges: async (listener, { cursor, pageSize = 256, pollMs = 250, signal, }) => {
+                if (typeof listener !== 'function')
+                    throw new TypeError('filesystem latest-change listener must be a function');
+                const stopped = new AbortController();
+                const abort = () => stopped.abort(signal?.reason);
+                if (signal?.aborted)
+                    abort();
+                else
+                    signal?.addEventListener('abort', abort, { once: true });
+                const pending = new Map();
+                let current;
+                let failure;
+                const running = (async () => {
+                    try {
+                        for await (const page of api.files.changePages({
+                            cursor,
+                            pageSize,
+                            pollMs,
+                            signal: stopped.signal,
+                        })) {
+                            current?.abort('superseded by a newer filesystem revision');
+                            if (pending.size >= 2) {
+                                throw new Error('filesystem latest-change listener retained two superseded generations');
+                            }
+                            const generation = new AbortController();
+                            current = generation;
+                            const task = Promise.resolve()
+                                .then(() => listener(page, generation.signal))
+                                .catch((error) => {
+                                if (generation.signal.aborted)
+                                    return;
+                                failure = error;
+                                stopped.abort(error);
+                            })
+                                .finally(() => pending.delete(task));
+                            pending.set(task, generation);
+                        }
+                    }
+                    catch (error) {
+                        if (!(stopped.signal.aborted &&
+                            error instanceof Error &&
+                            error.name === 'AbortError')) {
+                            failure ??= error;
+                        }
+                    }
+                    finally {
+                        for (const generation of pending.values())
+                            generation.abort(stopped.signal.reason);
+                        await Promise.allSettled(pending.keys());
+                        signal?.removeEventListener('abort', abort);
+                    }
+                    if (failure !== undefined)
+                        throw failure;
+                })();
+                void running.catch(() => { });
+                const stop = async () => {
+                    stopped.abort();
+                    await running;
+                };
+                Object.defineProperty(stop, 'done', { value: running, enumerable: true });
+                return stop;
+            },
             list: async (path) => expect(await session.call('filesystem_list', { path }), 'entries'),
             listPage: async (path, { after = null, observed = null, limit = 256 } = {}) => {
                 if ((after === null) !== (observed === null)) {
@@ -3919,6 +3981,7 @@ export const protocolCoverage = Object.freeze({
             'changes',
             'changePages',
             'watchChanges',
+            'watchLatestChanges',
             'list',
             'listPage',
             'walk',

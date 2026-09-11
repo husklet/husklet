@@ -1536,6 +1536,16 @@ export interface WorkspaceApi {
             pollMs?: number;
             signal?: AbortSignal;
         }): Promise<WatchHandle>;
+        /**
+         * Cursor-safe latest-work watcher. A newer page aborts the prior listener generation without
+         * waiting for it, so long-running rebuilds cannot prevent discovery of the change replacing them.
+         */
+        watchLatestChanges(listener: (page: FileChangePage, signal: AbortSignal) => void | Promise<void>, options: {
+            cursor: FileCursor;
+            pageSize?: number;
+            pollMs?: number;
+            signal?: AbortSignal;
+        }): Promise<WatchHandle>;
         list(path: string): Promise<FileEntry[]>;
         /** Reads one bounded ordered directory window; pass `next` as the following `after`. */
         listPage(path: string, options?: {
