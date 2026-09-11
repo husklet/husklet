@@ -1180,6 +1180,7 @@ mod unix {
             .mnemonic_widget()
             .and_then(|widget| widget.downcast::<gtk::Switch>().ok())
             .expect("required capability label names its native switch");
+        surface.reports().drain();
         interface.set_active(true);
         settle_toolkit();
         send_report(surface, wire, 102, |event| {
