@@ -348,6 +348,27 @@ mod unix {
                     (0..=8).contains(&gap),
                     "{width_name} settings label gap was {gap}px instead of at most 8px"
                 );
+                let image = find_entry_placeholder(&root, "registry/image:tag");
+                let shell = find_entry_placeholder(&root, "Automatic when empty");
+                let controls = [
+                    image.clone().upcast::<gtk::Widget>(),
+                    shell.clone().upcast(),
+                    select.clone(),
+                ];
+                let widths = controls.iter().map(gtk::Widget::width).collect::<Vec<_>>();
+                assert!(
+                    widths.iter().all(|control_width| (440..=500).contains(control_width)),
+                    "{width_name} settings controls escaped the compact readable measure: {widths:?}"
+                );
+                assert_eq!(image.accessible_role(), gtk::AccessibleRole::TextBox);
+                assert_eq!(shell.accessible_role(), gtk::AccessibleRole::TextBox);
+                assert_eq!(select.accessible_role(), gtk::AccessibleRole::ComboBox);
+                if width == 1_200 {
+                    assert!(
+                        widths.iter().all(|control_width| *control_width < width / 2),
+                        "desktop settings controls must not stretch across the entire page: {widths:?}"
+                    );
+                }
             }
             if fixture == "populated" && name == "extensions" {
                 let cards = widgets_with_class(&root, "hl-card");

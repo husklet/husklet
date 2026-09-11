@@ -33,7 +33,7 @@ import {
 
 type Change = { value?: unknown; expanded?: boolean };
 type Numbers = { cpus: string; memory: string; scrollback: string; fontSize: string };
-const CONTROL_WIDTH = 'fill' as const;
+const CONTROL_WIDTH = { chars: 56 } as const;
 const PAGE_WIDTH = { maximum: { chars: 110 } } as const;
 
 export function Workspace({ api }: { api: WorkspaceApi }) {
@@ -277,6 +277,7 @@ export function Workspace({ api }: { api: WorkspaceApi }) {
                   <FormLabel label="Execution lifetime" />
                   <Select
                     width={CONTROL_WIDTH}
+                    align="start"
                     value={configuration.execution_lifetime}
                     choices={[
                       { value: 'persisted', label: 'Persisted across restarts' },
@@ -394,6 +395,8 @@ export function Workspace({ api }: { api: WorkspaceApi }) {
                 <FormControl gap={1}>
                   <FormLabel label="Cursor shape" />
                   <Select
+                    width={CONTROL_WIDTH}
+                    align="start"
                     value={configuration.terminal.cursor_shape ?? ''}
                     choices={[
                       { value: '', label: 'Host default' },
@@ -630,6 +633,7 @@ function field(
         placeholder={placeholder}
         grow={false}
         width={CONTROL_WIDTH}
+        align="start"
         onChange={onChange}
       />
     </Column>
