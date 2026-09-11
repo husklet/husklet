@@ -1688,7 +1688,7 @@ mod unix {
         ));
         assert!(has_label(
             &review_root,
-            "This catalogue publisher is not verified. Confirm the source and reviewed image digest before granting access."
+            "Publisher is not verified; confirm the catalogue source and reviewed digest. Image changes from sha256:444444444444…44444444; access has been reset."
         ));
         assert!(!has_label(
             &review_root,
@@ -1697,7 +1697,7 @@ mod unix {
         assert!(has_label(&review_root, "Create, start, stop, and delete workspaces"));
         assert!(has_label(
             &review_root,
-            "Workspace lifecycle access requested. This extension could create or delete workspaces and start or stop their workloads."
+            "Image removal can delete named images or every unused workspace image. Workspace lifecycle access can create or delete workspaces and start or stop workloads."
         ));
         assert!(has_label(
             &review_root,
@@ -2181,9 +2181,28 @@ mod unix {
             settle_toolkit();
             assert_contained(root, &format!("extensions/{state}/{width_name}"));
             if state == "update-review" {
+                let update = find_button(root, "Update with selected access");
                 assert!(
-                    vertical_end(root, &find_labelled(root, "Update with selected access")) <= 800,
+                    vertical_end(root, update.upcast_ref()) <= 800,
                     "{width_name} update confirmation fell below the first viewport"
+                );
+                let warnings = widgets_with_class(root, "hl-inlinemessage")
+                    .into_iter()
+                    .filter(|message| message.has_css_class("tone-warning"))
+                    .count();
+                assert_eq!(warnings, 3, "{width_name} review repeats risk chrome");
+                let environment = find_label(root, "Read selected workspace environment values")
+                    .mnemonic_widget()
+                    .and_then(|widget| widget.downcast::<gtk::Switch>().ok())
+                    .expect("reviewed environment permission names its switch");
+                let footer_top = vertical_end(root, update.upcast_ref()) - update.height();
+                assert!(
+                    vertical_end(root, environment.upcast_ref()) + 8 <= footer_top,
+                    "{width_name} second permission choice is obscured by the decision footer"
+                );
+                assert!(
+                    environment.grab_focus(),
+                    "{width_name} visible permission accepts focus"
                 );
             }
             capture(&capture_window, &format!("extensions-{state}-{width_name}"), width, 800);

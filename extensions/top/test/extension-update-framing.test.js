@@ -123,7 +123,7 @@ test('installed catalogue extension starts an update review over real Unix frami
     assert.ok(
       labelled(
         stage,
-        `Replaces installed image sha256:${'a'.repeat(12)}…${'a'.repeat(8)}. Access below was reset and must be approved again.`,
+        `Image changes from sha256:${'a'.repeat(12)}…${'a'.repeat(8)}; access has been reset.`,
       ),
     );
     assert.ok(labelled(stage, 'Verified publisher · Husklet'));

@@ -1034,6 +1034,30 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
         },
       ]
     : [];
+  const identityReviewWarning = acquisition?.candidate
+    ? [
+        catalogueExpectation
+          ? !catalogueExpectation.publisher_verified
+            ? 'Publisher is not verified; confirm the catalogue source and reviewed digest.'
+            : null
+          : 'Direct OCI image has no catalogue publisher verification; confirm its source and digest.',
+        acquisition.candidate.installed_image_digest
+          ? `Image changes from ${compactDigest(acquisition.candidate.installed_image_digest)}; access has been reset.`
+          : null,
+      ]
+        .filter(Boolean)
+        .join(' ')
+    : '';
+  const privilegedAccessWarning = [
+    requestedImages.remove.length > 0 || requestedImages.prune_all_unused
+      ? 'Image removal can delete named images or every unused workspace image.'
+      : null,
+    acquisition?.candidate?.requested.includes('workspaces:control')
+      ? 'Workspace lifecycle access can create or delete workspaces and start or stop workloads.'
+      : null,
+  ]
+    .filter(Boolean)
+    .join(' ');
 
   const content = (
     <Scroll grow width="fill" height="fill">
@@ -1406,24 +1430,10 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                             color="text-dim"
                             wrap
                           />
-                          {!catalogueExpectation.publisher_verified ? (
-                            <InlineMessage
-                              label="This catalogue publisher is not verified. Confirm the source and reviewed image digest before granting access."
-                              tone="warning"
-                            />
-                          ) : null}
                         </Column>
-                      ) : (
-                        <InlineMessage
-                          label="Direct OCI image · no catalogue publisher verification. Confirm the source and reviewed image digest before granting access."
-                          tone="warning"
-                        />
-                      )}
-                      {acquisition.candidate.installed_image_digest ? (
-                        <InlineMessage
-                          label={`Replaces installed image ${compactDigest(acquisition.candidate.installed_image_digest)}. Access below was reset and must be approved again.`}
-                          tone="warning"
-                        />
+                      ) : null}
+                      {identityReviewWarning ? (
+                        <InlineMessage label={identityReviewWarning} tone="warning" />
                       ) : null}
                       {catalogueMismatch ? (
                         <RecoveryState
@@ -1445,18 +1455,9 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                           tone="warning"
                         />
                       ) : null}
-                      {(requestedImages.remove.length > 0 || requestedImages.prune_all_unused) && (
-                        <InlineMessage
-                          label="Destructive access requested. Image removal deletes named images; prune deletes every unused image in this workspace."
-                          tone="warning"
-                        />
-                      )}
-                      {acquisition.candidate.requested.includes('workspaces:control') && (
-                        <InlineMessage
-                          label="Workspace lifecycle access requested. This extension could create or delete workspaces and start or stop their workloads."
-                          tone="warning"
-                        />
-                      )}
+                      {privilegedAccessWarning ? (
+                        <InlineMessage label={privilegedAccessWarning} tone="warning" />
+                      ) : null}
                       <Expander
                         label={`Exact grants · ${grantedPermissionCount}/${requestedPermissionCount} selected`}
                         expanded={permissionDetailsExpanded}

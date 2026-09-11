@@ -1525,12 +1525,7 @@ test('an installed catalogue extension exposes its update review without retypin
   await settled();
   await settled();
   assert.deepEqual(references, ['ghcr.io/husklet/husklet/extension-storybook:latest']);
-  assert.ok(
-    labelled(
-      stage,
-      `Replaces installed image ${compactDigest(digest)}. Access below was reset and must be approved again.`,
-    ),
-  );
+  assert.ok(labelled(stage, `Image changes from ${compactDigest(digest)}; access has been reset.`));
   assert.ok(labelled(stage, 'Update with selected access'));
 });
 
@@ -1903,15 +1898,12 @@ test('extension review calls out destructive image authority before consent', as
   await settled();
   await settled();
   assert.ok(
-    labelled(
-      stage,
-      'Destructive access requested. Image removal deletes named images; prune deletes every unused image in this workspace.',
-    ),
+    labelled(stage, 'Image removal can delete named images or every unused workspace image.'),
   );
   assert.equal(
     ancestorTags(
       stage,
-      'Destructive access requested. Image removal deletes named images; prune deletes every unused image in this workspace.',
+      'Image removal can delete named images or every unused workspace image.',
     ).includes('Expander'),
     false,
     'destructive authority is announced while exact grants remain collapsed',
@@ -2502,15 +2494,16 @@ for (const updating of [false, true]) {
     assert.ok(
       labelled(
         stage,
-        'Direct OCI image · no catalogue publisher verification. Confirm the source and reviewed image digest before granting access.',
+        `${'Direct OCI image has no catalogue publisher verification; confirm its source and digest.'}${updating ? ` Image changes from ${compactDigest(candidate.installed_image_digest)}; access has been reset.` : ''}`,
       ),
     );
     if (updating) {
-      assert.ok(
+      assert.equal(
         labelled(
           stage,
-          `Replaces installed image ${compactDigest(candidate.installed_image_digest)}. Access below was reset and must be approved again.`,
+          `Image changes from ${compactDigest(candidate.installed_image_digest)}; access has been reset.`,
         ),
+        undefined,
       );
     }
     assert.ok(
