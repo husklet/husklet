@@ -347,7 +347,7 @@ mod tests {
         }
         assert_eq!(flow.imp().lines(container.upcast_ref(), 600).len(), 3);
         assert_eq!(flow.imp().lines(container.upcast_ref(), 1_200).len(), 1);
-        container.allocate(600, 140, -1, None);
+        measured_allocate(container.upcast_ref(), 600, 140);
         let widths = children(container.upcast_ref())
             .into_iter()
             .map(|child| child.width())
@@ -393,7 +393,7 @@ mod tests {
             "fixture needs intrinsic width above its authored floor"
         );
         assert_eq!(flow.imp().lines(container.upcast_ref(), 884).len(), 1);
-        container.allocate(884, 40, -1, None);
+        measured_allocate(container.upcast_ref(), 884, 40);
         let cards = children(container.upcast_ref());
         assert!(cards
             .windows(2)
@@ -443,7 +443,7 @@ mod tests {
             );
             assert_eq!(lines[0].children[1].1, natural.min(room));
 
-            container.allocate(room, 56, -1, None);
+            measured_allocate(container.upcast_ref(), room, 56);
             assert!(
                 caption.width() >= 90,
                 "{room}px collapsed the receipt to {}px",
@@ -455,5 +455,13 @@ mod tests {
                 status.height()
             );
         }
+    }
+
+    fn measured_allocate(widget: &gtk::Widget, width: i32, height: i32) {
+        let (minimum_width, _, _, _) = widget.measure(gtk::Orientation::Horizontal, -1);
+        assert!(width >= minimum_width, "fixture width {width}px is below its {minimum_width}px minimum");
+        let (minimum_height, _, _, _) = widget.measure(gtk::Orientation::Vertical, width);
+        assert!(height >= minimum_height, "fixture height {height}px is below its {minimum_height}px minimum");
+        widget.allocate(width, height, -1, None);
     }
 }

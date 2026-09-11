@@ -88,10 +88,12 @@ mod tests {
 
     #[test]
     fn empty_state_text_wraps_in_narrow_pages() {
-        if gtk::init().is_err() || gtk::gdk::Display::default().is_none() {
+        if !crate::test_support::on_the_toolkit_thread(empty_state_text_scenario) {
             eprintln!("skipped: no display connection");
-            return;
         }
+    }
+
+    fn empty_state_text_scenario() {
         let state = vacancy();
         let labels: Vec<gtk::Label> = [
             state.first_child().and_then(|widget| widget.next_sibling()),
