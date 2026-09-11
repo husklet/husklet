@@ -30,6 +30,7 @@ mod unix {
         ("extensions", "extensions"),
         ("processes", "processes"),
         ("executions", "executions"),
+        ("volumes", "volumes"),
         ("networks", "networks"),
     ];
     const DEADLINE: Duration = Duration::from_secs(5);
@@ -130,7 +131,7 @@ mod unix {
                     Capability::ExtensionInstall,
                     Capability::ContainerRead,
                     Capability::ImageRead,
-                    Capability::VolumeRead,
+                    if name == "volumes" { Capability::Interface } else { Capability::VolumeRead },
                     Capability::NetworkRead,
                     Capability::NetworkWrite,
                     Capability::TerminalRead,
@@ -223,6 +224,7 @@ mod unix {
             "extensions" => "Extensions",
             "processes" => "Processes",
             "executions" => "Executions",
+            "volumes" => "Volumes",
             "networks" => "Networks",
             _ => unreachable!(),
         };
@@ -298,6 +300,9 @@ mod unix {
         // each subsequent state wide-first so GTK never treats a prior 1200px
         // allocation as the minimum for an attempted narrow allocation.
         for (width_name, width) in [("wide", 1_200), ("narrow", 600)] {
+            if name == "volumes" {
+                continue;
+            }
             window.set_default_size(width, 800);
             window.set_size_request(width, 800);
             window.present();
@@ -1217,6 +1222,101 @@ mod unix {
                 );
                 capture(&window, &format!("execution-detail-{width_name}"), width, 800);
             }
+        }
+        if fixture == "populated" && name == "volumes" {
+            let _ = surface.reports().drain();
+            find_button(&root, "Inspect").emit_clicked();
+            settle_toolkit();
+            let interaction = surface
+                .reports()
+                .drain()
+                .into_iter()
+                .find(|event| matches!(event, hl_gui::Event::Invoke { .. }))
+                .expect("volume Inspect emits an invocation");
+            gtk::prelude::GtkWindowExt::set_focus(&window, None::<&gtk::Widget>);
+            window.set_child(None::<&gtk::Widget>);
+            wire.send(&Frame::new(
+                ChannelId::new(105),
+                hl_extension::Kind::Event,
+                codec::interaction(&interaction, Some("")).expect("Inspect invocation encodes"),
+            ))
+            .expect("Inspect invocation reaches Top");
+            let deadline = Instant::now() + DEADLINE;
+            while Instant::now() < deadline
+                && !has_label(surface.widget().upcast_ref::<gtk::Widget>(), "Open Extensions")
+            {
+                match receive_until(&mut wire, (Instant::now() + Duration::from_millis(80)).min(deadline)) {
+                    Ok(frame) if frame.kind == hl_extension::Kind::Credit => {}
+                    Ok(frame) => {
+                        let reply = match codec::read_request(&frame).expect("volume recovery request decodes") {
+                            Request::InterfaceRender { frame } | Request::InterfaceRenderAt { frame, .. } => {
+                                tree.apply(&frame, &mut surface).expect("volume recovery frame applies");
+                                Reply::Done
+                            }
+                            other => panic!("unexpected volume recovery request: {other:?}"),
+                        };
+                        wire.send(&codec::reply(&reply).expect("volume recovery reply encodes"))
+                            .expect("volume recovery reply sends");
+                        settle_toolkit();
+                    }
+                    Err(hl_extension::Transit::Pending) => {}
+                    Err(error) => panic!("volume recovery failed: {error:?}"),
+                }
+            }
+            let recovery_root = surface.widget().clone().upcast::<gtk::Widget>();
+            let recovery_window = gtk::Window::new();
+            recovery_window.set_child(Some(&recovery_root));
+            let open = find_button(&recovery_root, "Open Extensions");
+            for (width_name, width) in [("narrow", 600), ("wide", 1_200)] {
+                recovery_window.set_default_size(width, 820);
+                recovery_window.set_size_request(width, 820);
+                recovery_window.present();
+                settle_toolkit();
+                assert_contained(&recovery_root, &format!("volume-recovery/{width_name}"));
+                capture(&recovery_window, &format!("volume-recovery-{width_name}"), width, 820);
+            }
+            assert!(open.grab_focus(), "volume recovery action is keyboard reachable");
+            let _ = surface.reports().drain();
+            open.emit_clicked();
+            settle_toolkit();
+            let interaction = surface
+                .reports()
+                .drain()
+                .into_iter()
+                .find(|event| matches!(event, hl_gui::Event::Invoke { .. }))
+                .expect("Open Extensions emits an invocation");
+            wire.send(&Frame::new(
+                ChannelId::new(106),
+                hl_extension::Kind::Event,
+                codec::interaction(&interaction, Some("")).expect("Open Extensions invocation encodes"),
+            ))
+            .expect("Open Extensions invocation reaches Top");
+            let deadline = Instant::now() + DEADLINE;
+            while Instant::now() < deadline
+                && !has_label(surface.widget().upcast_ref::<gtk::Widget>(), "Installed extensions")
+            {
+                match receive_until(&mut wire, (Instant::now() + Duration::from_millis(80)).min(deadline)) {
+                    Ok(frame) if frame.kind == hl_extension::Kind::Credit => {}
+                    Ok(frame) => {
+                        let reply = match codec::read_request(&frame).expect("Extensions route request decodes") {
+                            Request::InterfaceRender { frame } | Request::InterfaceRenderAt { frame, .. } => {
+                                tree.apply(&frame, &mut surface).expect("Extensions route frame applies");
+                                Reply::Done
+                            }
+                            other => panic!("unexpected Extensions route request: {other:?}"),
+                        };
+                        wire.send(&codec::reply(&reply).expect("Extensions route reply encodes"))
+                            .expect("Extensions route reply sends");
+                        settle_toolkit();
+                    }
+                    Err(hl_extension::Transit::Pending) => {}
+                    Err(error) => panic!("Extensions route failed: {error:?}"),
+                }
+            }
+            assert!(has_label(
+                surface.widget().upcast_ref::<gtk::Widget>(),
+                "Installed extensions"
+            ));
         }
         let stderr = child.stop();
         assert!(stderr.is_empty(), "{fixture}/{name} wrote to stderr: {stderr}");

@@ -39,6 +39,7 @@ test('volume authority refusal gives one recovery path and withholds removal', a
     kind: 'denied',
   });
   const stage = host();
+  let openedExtensions = 0;
   stage.render(
     h(Volumes, {
       api: {
@@ -49,20 +50,22 @@ test('volume authority refusal gives one recovery path and withholds removal', a
         },
       },
       resource: resource([{ name: 'private-data', driver: 'local', generation: '7' }]),
+      onOpenExtensions: () => {
+        openedExtensions += 1;
+      },
     }),
   );
 
   assert.ok(labelled(stage, 'Volume name'));
   invoke(stage, 'Inspect');
   await settled();
-  assert.ok(labelled(stage, 'Access required'));
   assert.ok(
-    labelled(
-      stage,
-      'This extension was not granted access to inspect this volume. Change its exact volume access from Extensions, then inspect again.',
-    ),
+    labelled(stage, 'Volume access is denied. Review access in Extensions, then inspect again.'),
   );
+  assert.equal(labelled(stage, 'Access required'), undefined);
   assert.equal(currentLabels(stage).includes('Remove'), false);
+  invoke(stage, 'Open Extensions');
+  assert.equal(openedExtensions, 1);
 });
 
 test('container authority refusal explains recovery and withholds detail operations', async () => {

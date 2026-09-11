@@ -1,20 +1,21 @@
 import React from 'react';
-import { Button, Column, InlineMessage } from '@husklet/react';
+import { Button, InlineMessage } from '@husklet/react';
 
 export function AuthorityRecovery({
   resource,
   onOpenExtensions,
 }: {
-  resource: 'container' | 'network';
+  resource: 'container' | 'network' | 'volume';
   onOpenExtensions: () => void;
 }) {
+  const label =
+    resource === 'volume'
+      ? 'Volume access is denied. Review access in Extensions, then inspect again.'
+      : `Top does not have permission to inspect this ${resource}. Review its exact ${resource} access in Extensions, then inspect again.`;
   return (
-    <Column gap={1} align="start" width="fill">
-      <InlineMessage
-        label={`Top does not have permission to inspect this ${resource}. Review its exact ${resource} access in Extensions, then inspect again.`}
-        tone="warning"
-      />
+    <>
+      <InlineMessage label={label} tone="warning" />
       <Button label="Open Extensions" variant="filled" tone="accent" onInvoke={onOpenExtensions} />
-    </Column>
+    </>
   );
 }

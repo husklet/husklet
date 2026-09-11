@@ -282,7 +282,12 @@ export function Top({
     ) : section === 'images' ? (
       <Images api={api} resource={images} imageDetails={imageDetails} />
     ) : section === 'volumes' ? (
-      <Volumes api={api} resource={volumes} volumeDetails={volumeDetails} />
+      <Volumes
+        api={api}
+        resource={volumes}
+        volumeDetails={volumeDetails}
+        onOpenExtensions={() => setSection('extensions')}
+      />
     ) : section === 'networks' ? (
       <Networks
         api={api}

@@ -13,7 +13,6 @@ import {
   FormLabel,
   Heading,
   IconButton,
-  InlineMessage,
   ResourceState,
   RecoveryState,
   Row,
@@ -25,6 +24,7 @@ import {
 } from '@husklet/react';
 import { VolumeDetailsSource, bounded, boundedMessage } from './model.js';
 import type { Resource } from './overview.js';
+import { AuthorityRecovery } from './authority-recovery.js';
 
 type Inspection = {
   name: string;
@@ -50,10 +50,12 @@ export function Volumes({
   api,
   resource,
   volumeDetails,
+  onOpenExtensions,
 }: {
   api: WorkspaceApi;
   resource: Resource<VolumeSummary>;
   volumeDetails?: VolumeDetailsSource;
+  onOpenExtensions: () => void;
 }) {
   const localDetails = React.useMemo(() => new VolumeDetailsSource(), []);
   const detailsSource = volumeDetails ?? localDetails;
@@ -201,24 +203,26 @@ export function Volumes({
             <Card
               key={`${volume.name}:${volume.generation}`}
               variant={inspection.name === volume.name ? 'filled' : 'outline'}
+              width="fill"
             >
               <CardHeader label={volume.name} detail={volume.driver} align="start" width="fill" />
               <CardContent>
-                <Row>
-                  <Button
-                    label={
-                      inspectionNeedsAccess
-                        ? 'Access required'
-                        : inspection.name === volume.name && inspection.state === 'error'
+                {inspectionNeedsAccess ? (
+                  <AuthorityRecovery resource="volume" onOpenExtensions={onOpenExtensions} />
+                ) : (
+                  <Row>
+                    <Button
+                      label={
+                        inspection.name === volume.name && inspection.state === 'error'
                           ? 'Retry inspect'
                           : 'Inspect'
-                    }
-                    variant="filled"
-                    tone="accent"
-                    enabled={!inspectionNeedsAccess}
-                    onInvoke={() => inspect(volume)}
-                  />
-                </Row>
+                      }
+                      variant="filled"
+                      tone="accent"
+                      onInvoke={() => inspect(volume)}
+                    />
+                  </Row>
+                )}
               </CardContent>
               {!inspectionNeedsAccess ? (
                 <CardContent>
@@ -243,7 +247,9 @@ export function Volumes({
                   </Expander>
                 </CardContent>
               ) : null}
-              {inspection.name === volume.name ? <VolumeDetail inspection={inspection} /> : null}
+              {inspection.name === volume.name && !inspectionNeedsAccess ? (
+                <VolumeDetail inspection={inspection} />
+              ) : null}
             </Card>
           );
         })}
@@ -262,14 +268,7 @@ function VolumeDetail({ inspection }: { inspection: Inspection }) {
           <Text label="Reading volume details…" />
         </Row>
       ) : inspection.state === 'error' ? (
-        isAuthorityDenial(inspection.error) ? (
-          <InlineMessage
-            label="This extension was not granted access to inspect this volume. Change its exact volume access from Extensions, then inspect again."
-            tone="warning"
-          />
-        ) : (
-          <Text label={boundedMessage(inspection.error)} color="danger" wrap />
-        )
+        <Text label={boundedMessage(inspection.error)} color="danger" wrap />
       ) : inspection.count === 0 ? (
         <EmptyState label="No volume details" detail="The host returned no inspectable fields." />
       ) : (
