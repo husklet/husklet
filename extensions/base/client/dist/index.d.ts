@@ -35,6 +35,13 @@ export declare class TerminalOperationError extends Error {
     readonly result: any;
     constructor(operation: any, result: any, cause: any);
 }
+/** A pane advanced or was replaced between discovery and its bounded text projection. */
+export declare class PaneChangedError extends Error {
+    readonly slot: any;
+    readonly expected: any;
+    readonly observed: any;
+    constructor(slot: any, expected: any, observed: any);
+}
 export declare function connect(options?: ConnectOptions): Promise<ClientSession>;
 /**
  * Opens a surface and paints a dependency-free first frame.

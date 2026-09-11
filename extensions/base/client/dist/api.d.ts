@@ -715,6 +715,18 @@ export declare class TerminalOperationError extends Error {
     }>;
     readonly cause: unknown;
 }
+/** A pane advanced or was replaced between discovery and its bounded text projection. */
+export declare class PaneChangedError extends Error {
+    readonly slot: string;
+    readonly expected: Readonly<{
+        generation: number;
+        revision: number;
+    }>;
+    readonly observed: Readonly<{
+        generation: number;
+        revision: number;
+    }>;
+}
 export interface ConnectOptions {
     path?: string;
     /** Bounds pending calls, heartbeats, and queued event callback deliveries. */

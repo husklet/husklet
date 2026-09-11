@@ -143,6 +143,25 @@ export class TerminalOperationError extends Error {
         this.cause = cause;
     }
 }
+/** A pane advanced or was replaced between discovery and its bounded text projection. */
+export class PaneChangedError extends Error {
+    slot;
+    expected;
+    observed;
+    constructor(slot, expected, observed) {
+        super(`pane ${slot} changed during bounded text conversion`);
+        this.name = 'PaneChangedError';
+        this.slot = slot;
+        this.expected = Object.freeze({
+            generation: expected.generation,
+            revision: expected.revision,
+        });
+        this.observed = Object.freeze({
+            generation: observed.generation,
+            revision: observed.revision,
+        });
+    }
+}
 /** Reference-counted host subscriptions, keyed by session and snapshot topic. */
 const subscriptions = new WeakMap();
 const SNAPSHOT_TOPICS = Object.freeze([
@@ -1541,13 +1560,13 @@ export function workspace(session, { signal } = {}) {
                 if (pane.kind === 'terminal') {
                     const snapshot = exactPane(expect(await session.call('terminal_read_pane', { slot, lines }), 'text'), slot, 'terminal text');
                     if (snapshot.generation !== pane.generation || snapshot.revision !== pane.revision) {
-                        throw new Error(`pane ${slot} changed during bounded text conversion`);
+                        throw new PaneChangedError(slot, pane, snapshot);
                     }
                     return { kind: 'terminal', text: snapshot.lines.join('\n'), snapshot };
                 }
                 const snapshot = exactPane(expect(await session.call('pane_semantic_read', { slot }), 'semantics'), slot, 'pane semantics');
                 if (snapshot.generation !== pane.generation || snapshot.revision !== pane.revision) {
-                    throw new Error(`pane ${slot} changed during bounded text conversion`);
+                    throw new PaneChangedError(slot, pane, snapshot);
                 }
                 return { kind: 'ui', text: semanticXml(snapshot), snapshot };
             },
@@ -2602,10 +2621,17 @@ export function workspace(session, { signal } = {}) {
                         }
                     }
                     catch (error) {
-                        finish(undefined, error);
+                        if (error instanceof PaneChangedError && error.slot === slot && !settled) {
+                            pending = true;
+                        }
+                        else {
+                            finish(undefined, error);
+                        }
                     }
                     finally {
                         reading = false;
+                        if (pending && !settled)
+                            reconcile();
                     }
                 })();
             };

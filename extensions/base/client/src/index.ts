@@ -233,6 +233,27 @@ export class TerminalOperationError extends Error {
   }
 }
 
+/** A pane advanced or was replaced between discovery and its bounded text projection. */
+export class PaneChangedError extends Error {
+  readonly slot;
+  readonly expected;
+  readonly observed;
+
+  constructor(slot, expected, observed) {
+    super(`pane ${slot} changed during bounded text conversion`);
+    this.name = 'PaneChangedError';
+    this.slot = slot;
+    this.expected = Object.freeze({
+      generation: expected.generation,
+      revision: expected.revision,
+    });
+    this.observed = Object.freeze({
+      generation: observed.generation,
+      revision: observed.revision,
+    });
+  }
+}
+
 /** Reference-counted host subscriptions, keyed by session and snapshot topic. */
 const subscriptions = new WeakMap();
 const SNAPSHOT_TOPICS = Object.freeze([
@@ -2015,7 +2036,7 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
             'terminal text',
           );
           if (snapshot.generation !== pane.generation || snapshot.revision !== pane.revision) {
-            throw new Error(`pane ${slot} changed during bounded text conversion`);
+            throw new PaneChangedError(slot, pane, snapshot);
           }
           return { kind: 'terminal', text: snapshot.lines.join('\n'), snapshot };
         }
@@ -2025,7 +2046,7 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
           'pane semantics',
         );
         if (snapshot.generation !== pane.generation || snapshot.revision !== pane.revision) {
-          throw new Error(`pane ${slot} changed during bounded text conversion`);
+          throw new PaneChangedError(slot, pane, snapshot);
         }
         return { kind: 'ui', text: semanticXml(snapshot), snapshot };
       },
@@ -3287,9 +3308,14 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
               finish({ changed: true, readable });
             }
           } catch (error) {
-            finish(undefined, error);
+            if (error instanceof PaneChangedError && error.slot === slot && !settled) {
+              pending = true;
+            } else {
+              finish(undefined, error);
+            }
           } finally {
             reading = false;
+            if (pending && !settled) reconcile();
           }
         })();
       };

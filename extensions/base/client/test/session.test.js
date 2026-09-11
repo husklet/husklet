@@ -2101,6 +2101,96 @@ test('real Unix text wait reconciles an unread revision without requiring a late
   }
 });
 
+test('real Unix text wait retries a racing full-screen projection until it is coherent', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-text-race-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const calls = [];
+  const connections = new Set();
+  let inventories = 0;
+  const pane = (revision) => ({
+    slot: 'tui',
+    generation: 7,
+    revision,
+    kind: 'terminal',
+    provider: null,
+    tab: 'tab-1',
+    title: 'Editor',
+    focused: true,
+  });
+  const screen = (revision) => ({
+    slot: 'tui',
+    generation: 7,
+    revision,
+    columns: 120,
+    rows: 40,
+    lines: ['NORMAL  document.md', 'ready'],
+    cursor_column: 0,
+    cursor_row: 1,
+    truncated: false,
+  });
+  const server = net.createServer((socket) => {
+    connections.add(socket);
+    socket.on('close', () => connections.delete(socket));
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.kind !== KIND.request) continue;
+        calls.push(frame.payload.call);
+        let payload;
+        if (frame.payload.call === 'pane_list') {
+          inventories += 1;
+          payload = {
+            reply: 'panes',
+            with: { panes: [pane(inventories === 1 ? 9 : 11)], truncated: false },
+          };
+        } else if (frame.payload.call === 'terminal_read_pane') {
+          payload = { reply: 'text', with: screen(inventories === 1 ? 10 : 11) };
+        } else {
+          payload = { reply: 'done' };
+        }
+        socket.write(encode({ channel: frame.channel, kind: KIND.response, payload }));
+      }
+    });
+    socket.write(
+      encode({
+        channel: CONTROL,
+        kind: KIND.open,
+        payload: {
+          protocol: 1,
+          peer: 'full-screen-agent',
+          granted: ['panes:observe', 'terminals:output'],
+        },
+      }),
+    );
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    const result = await workspace(session).terminal.waitForText(
+      'tui',
+      { generation: 7, revision: 8 },
+      { lines: 40, timeoutMs: 1_000 },
+    );
+    assert.deepEqual(result, {
+      changed: true,
+      readable: { kind: 'terminal', text: 'NORMAL  document.md\nready', snapshot: screen(11) },
+    });
+    assert.deepEqual(calls, [
+      'event_subscribe',
+      'pane_list',
+      'terminal_read_pane',
+      'pane_list',
+      'terminal_read_pane',
+      'event_unsubscribe',
+    ]);
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('real Unix text wait aborts promptly, releases its subscription, and leaves reconnect usable', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-text-abort-'));
   const socketPath = path.join(directory, 'host.sock');
