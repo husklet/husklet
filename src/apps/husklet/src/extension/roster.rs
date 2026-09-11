@@ -13,6 +13,14 @@ use hl_ws::storage::{Directory, Storage};
 use super::state::{Fault, Records};
 use crate::config::WorkspaceConfig;
 
+fn registration_lock() -> std::sync::MutexGuard<'static, ()> {
+    static REGISTRATIONS: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+    REGISTRATIONS
+        .get_or_init(|| std::sync::Mutex::new(()))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 /// Why an action on the roster was refused.
 #[derive(Debug)]
 pub enum Refusal {
@@ -117,6 +125,17 @@ impl Roster<Directory> {
 }
 
 impl<S: Storage> Roster<S> {
+    fn reload(&mut self) -> Result<(), Refusal> {
+        let mut installation = Installation::new();
+        for record in self.records.all()? {
+            enrol(&mut installation, &record)?;
+            if let Some(restarts) = self.records.fault(&record.name)? {
+                installation.fault(&record.name, restarts)?;
+            }
+        }
+        self.installation = installation;
+        Ok(())
+    }
     #[cfg(test)]
     pub(crate) fn enabled_record(&self, name: &ExtensionName) -> Result<Option<Record>, Refusal> {
         Ok(self
@@ -246,6 +265,8 @@ impl<S: Storage> Roster<S> {
         workspace_environment: &hl_extension::WorkspaceEnvironmentGrant,
         at: i64,
     ) -> Result<(), Refusal> {
+        let _registration = registration_lock();
+        self.reload()?;
         let previous = self.installation.clone();
         let record = self
             .installation
@@ -958,6 +979,29 @@ mod tests {
 
         assert!(matches!(refused, Refusal::Policy(_)));
         assert_eq!(roster.entries()[0].image_digest, "sha256:aaaa");
+    }
+
+    #[test]
+    fn stale_rosters_cannot_both_install_one_extension_name() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let first_manifest = manifest("sample", &[Capability::Interface]);
+        let second_manifest = manifest("sample", &[Capability::ContainerRead]);
+        let mut first = opened(temporary.path());
+        let mut second = opened(temporary.path());
+
+        first
+            .register(&first_manifest, "sha256:first", &first_manifest.capabilities, 7)
+            .expect("winning registration");
+        assert!(matches!(
+            second.register(&second_manifest, "sha256:second", &second_manifest.capabilities, 8),
+            Err(Refusal::Policy(_))
+        ));
+
+        let persisted = opened(temporary.path()).entries();
+        assert_eq!(persisted.len(), 1);
+        assert_eq!(persisted[0].image_digest, "sha256:first");
+        assert!(persisted[0].granted.holds(Capability::Interface));
+        assert!(!persisted[0].granted.holds(Capability::ContainerRead));
     }
 
     #[test]
