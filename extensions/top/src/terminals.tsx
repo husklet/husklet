@@ -319,7 +319,7 @@ export function Terminals({
           `Interface pane ${slot} did not change after the semantic action; refresh before retrying.`,
         );
       if (requested !== paneRevision.current) return;
-      setReadable({ kind: 'ui', text: result.after.text, snapshot: result.after.snapshot });
+      setReadable({ kind: 'ui', ...result.after });
     } catch (cause) {
       if (requested === paneRevision.current) setError(cause);
     } finally {
@@ -534,6 +534,17 @@ export function Terminals({
                   label={readable.kind === 'terminal' ? 'Live terminal' : 'Interface controls'}
                   scale="caption"
                 />
+                {readable.kind === 'ui' && !readable.complete ? (
+                  <Text
+                    label={
+                      readable.sourceTruncated
+                        ? 'This interface snapshot is partial because the host reached its node limit.'
+                        : 'This interface snapshot is partial because its text projection reached the client limit.'
+                    }
+                    color="warning"
+                    wrap
+                  />
+                ) : null}
                 {readable.kind === 'terminal' ? (
                   <LogView
                     grow={false}

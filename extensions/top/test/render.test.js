@@ -3661,6 +3661,9 @@ test('terminal management reads every pane as text and writes against the inspec
         return {
           kind: 'ui',
           text: '<pane><button label="Deploy"/></pane>',
+          complete: true,
+          sourceTruncated: false,
+          projectionTruncated: false,
           snapshot: { slot, generation: 3, revision: 4 },
         };
       return {
@@ -4096,6 +4099,9 @@ test('terminal management switches an inspected pane to an enabled exact provide
     toText: async () => ({
       kind: 'ui',
       text: '<pane/>',
+      complete: true,
+      sourceTruncated: false,
+      projectionTruncated: false,
       snapshot: { slot: 'pane-ui', generation: 3, revision: 4, root: { id: 1 }, truncated: false },
     }),
     switchOccupantAndWait: async (...args) => {
@@ -4182,14 +4188,29 @@ test('terminal management re-inspects semantic authority and confirms destructiv
     toText: async () => ({
       kind: 'ui',
       text: '<button id="42" destructive="true"/>',
+      complete: true,
+      sourceTruncated: false,
+      projectionTruncated: false,
       snapshot: tree(4, null),
     }),
     inspectAndAct: async (...args) => {
       calls.push(args);
       return {
         changed: true,
-        before: { snapshot: tree(4, null), text: '<button/>' },
-        after: { snapshot: tree(5, 'done'), text: '<button value="done"/>' },
+        before: {
+          snapshot: tree(4, null),
+          text: '<button/>',
+          complete: true,
+          sourceTruncated: false,
+          projectionTruncated: false,
+        },
+        after: {
+          snapshot: tree(5, 'done'),
+          text: '<button value="done"/>',
+          complete: false,
+          sourceTruncated: false,
+          projectionTruncated: true,
+        },
       };
     },
     pinTab: async () => {},
@@ -4228,6 +4249,12 @@ test('terminal management re-inspects semantic authority and confirms destructiv
   await settled();
   assert.deepEqual(calls, [['pane-ui', { node: 42, action: 'invoke', value: null }]]);
   assert.equal(latestPropertyForTag(stage, 'LogView', 'Value')?.Text, '<button value="done"/>');
+  assert.ok(
+    labelled(
+      stage,
+      'This interface snapshot is partial because its text projection reached the client limit.',
+    ),
+  );
 });
 
 test('process snapshots disclose initial-only reusable PID scope and host truncation', async () => {
