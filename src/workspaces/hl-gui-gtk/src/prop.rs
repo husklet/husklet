@@ -246,6 +246,10 @@ fn grow(widget: &gtk::Widget, value: &PropValue) {
     let expand = value.as_number().unwrap_or_default() > 0.0;
     widget.set_hexpand(expand);
     widget.set_vexpand(expand);
+    if expand {
+        widget.set_halign(gtk::Align::Fill);
+        widget.set_valign(gtk::Align::Fill);
+    }
 }
 
 fn width(widget: &gtk::Widget, value: &PropValue) {
@@ -524,6 +528,24 @@ mod tests {
 
             grow(&control, &PropValue::Number(1.0));
             assert!(control.hexpands(), "Grow must retain explicit fill authority");
+        });
+    }
+
+    #[test]
+    fn authored_card_width_does_not_gain_implicit_fill_authority() {
+        let _ = crate::test_support::on_the_toolkit_thread(|| {
+            let card: gtk::Widget = crate::component::card::widget(hl_gui::Tag::Card);
+            assert!(
+                !card.hexpands(),
+                "cards are compact until their author opts into growth"
+            );
+            assert_eq!(card.halign(), gtk::Align::Start);
+            width(&card, &PropValue::Length(Length::Chars(38)));
+            assert!(!card.hexpands(), "authored card width governs the outer native frame");
+            assert!(card.width_request() > 0);
+            grow(&card, &PropValue::Number(1.0));
+            assert!(card.hexpands(), "explicit grow grants fill authority");
+            assert_eq!(card.halign(), gtk::Align::Fill);
         });
     }
 

@@ -1450,7 +1450,7 @@ mod unix {
                 .into_iter()
                 .filter(|frame| frame.has_css_class("hl-card"))
                 .collect::<Vec<_>>();
-            assert_eq!(cards.len(), 4, "Card workbench must render four bounded live specimens");
+            assert_eq!(cards.len(), 5, "Card workbench must render five bounded live specimens");
             assert!(cards
                 .iter()
                 .all(|card| card.accessible_role() != gtk::AccessibleRole::Generic));
@@ -1494,12 +1494,29 @@ mod unix {
                     .text()
                     .starts_with("Long identifiers and operational explanations")
             });
+            let compact = cards
+                .iter()
+                .find(|card| {
+                    descendants::<gtk::Label>(card.upcast_ref())
+                        .iter()
+                        .any(|label| label.text() == "Compact card")
+                })
+                .expect("Card sizing specimen crossed the real extension socket");
+            assert!(!compact.hexpands(), "32ch Card must not inherit native fill authority");
+            assert!(
+                compact.width() < cards[0].width(),
+                "32ch Card outer frame did not remain narrower than a fill Card"
+            );
             assert!(long.wraps(), "long Card copy does not wrap");
             assert_contained(&root, "Card wide");
             realized_window.set_size_request(600, 800);
             realized_window.set_default_size(600, 800);
             settle_window_width(&realized_window, 600);
             assert_contained(&root, "Card narrow");
+            assert!(
+                !compact.hexpands(),
+                "32ch Card gained fill authority after a narrow resize"
+            );
             assert!(long.width() <= 552, "long Card copy escaped 16px narrow insets");
             capture_story(&realized_window, "Card narrow");
             let (status, stderr) = child.stop();

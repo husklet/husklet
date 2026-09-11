@@ -68,6 +68,23 @@ export function CardWorkbench() {
         </SpecimenGrid>
       </DocumentationSection>
 
+      <DocumentationSection title="Sizing">
+        <Text
+          label="Use an authored character width for compact peer cards. The outer surface keeps that width instead of inheriting the page's fill policy."
+          color="text-dim"
+          wrap
+        />
+        <Card variant="outline" width={{ chars: 32 }}>
+          <CardHeader label="Compact card" detail="32ch" />
+          <CardContent>
+            <Text label="A bounded surface for short catalogue content." wrap />
+          </CardContent>
+          <CardActions>
+            <Button label="Open" size="small" />
+          </CardActions>
+        </Card>
+      </DocumentationSection>
+
       <DocumentationSection title="Wrapping">
         <Card variant="outline" width="fill">
           <CardHeader

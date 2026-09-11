@@ -27,19 +27,23 @@ test('Card owns a dedicated single-component document with canonical anatomy', (
     'Overview',
     'Anatomy',
     'Variants',
+    'Sizing',
     'Wrapping',
-    'Accessibility',
   ]);
   assert(headings.includes('API'));
 
   const cards = creations(frame, 'Card');
-  assert.equal(cards.length, 4);
+  assert.equal(cards.length, 5);
   const variants = cards.map((id) => props(frame, id).Variant?.Variant);
   assert(variants.includes('Outline'));
   assert(variants.includes('Filled'));
   assert.equal(creations(frame, 'CardHeader').length, cards.length);
   assert.equal(creations(frame, 'CardContent').length, cards.length);
   assert.equal(creations(frame, 'CardActions').length, cards.length);
+  assert(
+    cards.some((id) => props(frame, id).Width?.Length?.Chars === 32),
+    'Card documents a bounded native outer width',
+  );
 });
 
 test('Card examples keep compact explicit actions and long copy inside the component', () => {

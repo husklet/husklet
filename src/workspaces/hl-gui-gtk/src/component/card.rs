@@ -100,7 +100,8 @@ pub(crate) fn widget(tag: Tag) -> gtk::Widget {
 /// order they were described rather than replacing one another.
 fn frame() -> gtk::Frame {
     let widget = gtk::Frame::new(None);
-    widget.set_hexpand(true);
+    widget.set_hexpand(false);
+    widget.set_halign(gtk::Align::Start);
     // Card content may expand inside a row whose peers establish a taller line,
     // but that internal policy must not make a standalone card consume all
     // vertical space offered by a page.
