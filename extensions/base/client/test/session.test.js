@@ -10309,6 +10309,79 @@ test('real Unix final JSON record remains cancellable after execution EOF', asyn
   }
 });
 
+test('real Unix text EOF decoding preserves completed execution identity and session reuse', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-text-eof-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const containerId = 'c'.repeat(64);
+  const executionId = 'e'.repeat(32);
+  const calls = [];
+  const connections = new Set();
+  const execution = {
+    id: executionId, container_id: containerId, running: false, exit_code: 0,
+    pid: 42, command: ['psql'], user: 'postgres',
+  };
+  const fragmented = (socket, payload) => {
+    const frame = encode({ channel: 2, kind: KIND.response, payload });
+    socket.write(frame.subarray(0, 5));
+    setImmediate(() => socket.write(frame.subarray(5)));
+  };
+  const server = net.createServer((socket) => {
+    connections.add(socket);
+    socket.on('close', () => connections.delete(socket));
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.kind !== KIND.request) continue;
+        calls.push(frame.payload.call);
+        const payload = frame.payload.call === 'container_exec'
+          ? { reply: 'identity', with: executionId }
+          : frame.payload.call === 'execution_output'
+            ? { reply: 'execution_output', with: {
+                entries: [{ sequence: 1, timestamp_ms: 1, stream: 'stdout', bytes: [0xc3] }],
+                next: 1, more: false, eof: true, gap: false,
+              } }
+            : frame.payload.call === 'execution_inspect'
+              ? { reply: 'execution', with: execution }
+              : { reply: 'workspace', with: {
+                  name: 'database', image: 'postgres:17', architecture: 'amd64',
+                } };
+        fragmented(socket, payload);
+      }
+    });
+    const greeting = encode({ channel: CONTROL, kind: KIND.open, payload: {
+      protocol: 1, peer: 'text-eof-recovery',
+      granted: ['containers:read', 'containers:execute', 'workspaces:read'],
+    } });
+    socket.write(greeting.subarray(0, 3));
+    setImmediate(() => socket.write(greeting.subarray(3)));
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    await assert.rejects(
+      workspace(session).containers.execText(containerId, 3, {
+        command: ['psql'], maxBytes: 4096,
+      }),
+      (error) => {
+        assert(error instanceof ExecutionOperationError);
+        assert.equal(error.executionId, executionId);
+        assert.equal(error.phase, 'output');
+        assert.deepEqual(error.execution, execution);
+        assert(error.cause instanceof TypeError);
+        return true;
+      },
+    );
+    assert.deepEqual(calls, ['container_exec', 'execution_output', 'execution_inspect']);
+    assert.equal((await workspace(session).info()).name, 'database');
+    assert.equal(calls.at(-1), 'workspace_info', 'the ordered session remains reusable');
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('real Unix execAndWait preserves the completed execution when bounded log retrieval fails', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-exec-log-failure-'));
   const socketPath = path.join(directory, 'host.sock');

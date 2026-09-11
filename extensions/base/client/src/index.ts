@@ -1921,8 +1921,12 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
             else stderr += text;
           }
         });
-        stdout += stdoutDecoder.decode();
-        stderr += stderrDecoder.decode();
+        try {
+          stdout += stdoutDecoder.decode();
+          stderr += stderrDecoder.decode();
+        } catch (cause) {
+          throw new ExecutionOperationError(result.executionId, 'output', cause, result.execution);
+        }
         return { ...result, stdout, stderr };
       },
       execLines: async (id, generation, configuration, onLine) => {
