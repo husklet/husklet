@@ -696,6 +696,8 @@ export declare class ExecutionOperationError extends Error {
   readonly cause: unknown;
   /** The authoritative completed summary when waiting succeeded and output retrieval failed. */
   readonly execution?: ExecutionSummary;
+  /** Last output sequence fully acknowledged by a resumed stream consumer. */
+  readonly after?: number;
 }
 
 /** The host retained output, but not the complete sequence after the requested cursor. */
@@ -956,7 +958,7 @@ export interface WorkspaceApi {
     waitForProviderMount(
       extension: string,
       provider: string,
-      options?: {
+      options: {
         state?: 'mounted' | 'unmounted';
         after?: Pick<InspectablePane, 'slot' | 'generation' | 'revision'> | null;
         timeoutMs?: number;
@@ -1007,6 +1009,20 @@ export interface WorkspaceApi {
         signal?: AbortSignal;
       },
     ): AsyncGenerator<ExecutionOutputPage, void, void>;
+    /**
+     * Resume a persisted execution from an acknowledged output cursor. The cursor advances only
+     * after callback completion. This observer never signals or removes the existing execution.
+     */
+    resumeExecutionStreaming(
+      id: string,
+      options: {
+        after?: number;
+        pageLimit?: number;
+        pollIntervalMs?: number;
+        signal?: AbortSignal;
+      },
+      onPage: (page: ExecutionOutputPage) => void | Promise<void>,
+    ): Promise<{ executionId: string; execution: ExecutionSummary; next: number }>;
     waitExecution(id: string, options?: { timeoutMs?: number }): Promise<ExecutionSummary>;
     /** Execute, wait for completion, then fetch bounded output without auto-removing the execution record. */
     execAndWait(

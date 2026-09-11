@@ -9,13 +9,15 @@ export class ExecutionOperationError extends Error {
     executionId;
     phase;
     execution;
-    constructor(executionId, phase, cause, execution = undefined) {
+    after;
+    constructor(executionId, phase, cause, execution = undefined, after = undefined) {
         super(`execution ${executionId} ${phase} failed: ${cause instanceof Error ? cause.message : String(cause)}`);
         this.name = 'ExecutionOperationError';
         this.executionId = executionId;
         this.phase = phase;
         this.cause = cause;
         this.execution = execution;
+        this.after = after;
     }
 }
 /** Output retention advanced past the cursor, so a transcript/result would be incomplete. */
@@ -1095,6 +1097,36 @@ export function workspace(session, { signal } = {}) {
                         return;
                     if (!more)
                         await outputPoll(pollIntervalMs, signal);
+                }
+            },
+            resumeExecutionStreaming: async (id, { after = 0, pageLimit = 16, pollIntervalMs = 25, signal, } = {}, onPage) => {
+                if (typeof onPage !== 'function')
+                    throw new TypeError('resumed streaming execution requires an output callback');
+                if (!Number.isSafeInteger(after) || after < 0)
+                    throw new RangeError('execution output cursor must be a nonnegative safe integer');
+                exactExecutionPageLimit(pageLimit);
+                exactExecutionPollInterval(pollIntervalMs);
+                requireOutputActive(signal);
+                const executionId = immutableIdentity(id, [32], 'execution');
+                let cursor = after;
+                let phase = 'output';
+                try {
+                    for await (const page of api.containers.executionOutputPages(executionId, {
+                        after: cursor,
+                        limit: pageLimit,
+                        pollIntervalMs,
+                        signal,
+                    })) {
+                        await outputStep(() => onPage(page), signal);
+                        cursor = page.next;
+                    }
+                    phase = 'inspect';
+                    requireOutputActive(signal);
+                    const execution = await api.containers.execution(executionId);
+                    return { executionId, execution, next: cursor };
+                }
+                catch (cause) {
+                    throw new ExecutionOperationError(executionId, phase, cause, undefined, cursor);
                 }
             },
             waitExecution: async (id, { timeoutMs = 30_000 } = {}) => {
@@ -4119,6 +4151,7 @@ export const protocolCoverage = Object.freeze({
             'executionLogs',
             'executionOutput',
             'executionOutputPages',
+            'resumeExecutionStreaming',
             'waitExecution',
             'signalExecution',
             'cancelExecution',

@@ -8,7 +8,8 @@ export declare class ExecutionOperationError extends Error {
     readonly executionId: any;
     readonly phase: any;
     readonly execution: any;
-    constructor(executionId: any, phase: any, cause: any, execution?: any);
+    readonly after: any;
+    constructor(executionId: any, phase: any, cause: any, execution?: any, after?: any);
 }
 /** Output retention advanced past the cursor, so a transcript/result would be incomplete. */
 export declare class ExecutionOutputGapError extends Error {

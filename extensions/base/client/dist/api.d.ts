@@ -699,6 +699,8 @@ export declare class ExecutionOperationError extends Error {
     readonly cause: unknown;
     /** The authoritative completed summary when waiting succeeded and output retrieval failed. */
     readonly execution?: ExecutionSummary;
+    /** Last output sequence fully acknowledged by a resumed stream consumer. */
+    readonly after?: number;
 }
 /** The host retained output, but not the complete sequence after the requested cursor. */
 export declare class ExecutionOutputGapError extends Error {
@@ -940,7 +942,7 @@ export interface WorkspaceApi {
             after?: Pick<ExtensionSummary, 'name' | 'image_digest' | 'status'>;
         }>;
         /** Wait for an actually mounted provider occupant, or its removal, using an exact prior pane cursor. */
-        waitForProviderMount(extension: string, provider: string, options?: {
+        waitForProviderMount(extension: string, provider: string, options: {
             state?: 'mounted' | 'unmounted';
             after?: Pick<InspectablePane, 'slot' | 'generation' | 'revision'> | null;
             timeoutMs?: number;
@@ -991,6 +993,20 @@ export interface WorkspaceApi {
             pollIntervalMs?: number;
             signal?: AbortSignal;
         }): AsyncGenerator<ExecutionOutputPage, void, void>;
+        /**
+         * Resume a persisted execution from an acknowledged output cursor. The cursor advances only
+         * after callback completion. This observer never signals or removes the existing execution.
+         */
+        resumeExecutionStreaming(id: string, options: {
+            after?: number;
+            pageLimit?: number;
+            pollIntervalMs?: number;
+            signal?: AbortSignal;
+        }, onPage: (page: ExecutionOutputPage) => void | Promise<void>): Promise<{
+            executionId: string;
+            execution: ExecutionSummary;
+            next: number;
+        }>;
         waitExecution(id: string, options?: {
             timeoutMs?: number;
         }): Promise<ExecutionSummary>;

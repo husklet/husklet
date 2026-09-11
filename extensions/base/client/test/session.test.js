@@ -4251,6 +4251,150 @@ test('real Unix empty credential bindings retain least-privilege execution and s
   }
 });
 
+test('real Unix resumed execution commits output cursor only after consumer acknowledgement', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-execution-resume-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const executionId = 'e'.repeat(32);
+  const containerId = 'c'.repeat(64);
+  const requests = [];
+  const connections = new Set();
+  const execution = {
+    id: executionId,
+    container_id: containerId,
+    running: false,
+    exit_code: 7,
+    pid: 42,
+    command: ['test', '--reporter=jsonl'],
+    user: 'runner',
+  };
+  const server = net.createServer((socket) => {
+    connections.add(socket);
+    socket.on('close', () => connections.delete(socket));
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.kind !== KIND.request) continue;
+        requests.push(frame.payload);
+        const after = frame.payload.with?.after;
+        const payload =
+          frame.payload.call === 'execution_output'
+            ? {
+                reply: 'execution_output',
+                with:
+                  after === 0
+                    ? {
+                        entries: [
+                          {
+                            sequence: 1,
+                            timestamp_ms: 1,
+                            stream: 'stdout',
+                            bytes: [...Buffer.from('{"case":"first"}\n')],
+                          },
+                        ],
+                        next: 1,
+                        more: true,
+                        eof: false,
+                        gap: false,
+                      }
+                    : {
+                        entries: [
+                          {
+                            sequence: 2,
+                            timestamp_ms: 2,
+                            stream: 'stdout',
+                            bytes: [...Buffer.from('{"case":"second"}\n')],
+                          },
+                        ],
+                        next: 2,
+                        more: false,
+                        eof: true,
+                        gap: false,
+                      },
+              }
+            : frame.payload.call === 'execution_inspect'
+              ? { reply: 'execution', with: execution }
+              : {
+                  reply: 'workspace',
+                  with: { name: 'tests', image: 'toolbox', architecture: 'amd64' },
+                };
+        const response = encode({ channel: frame.channel, kind: KIND.response, payload });
+        socket.write(response.subarray(0, 5));
+        socket.write(response.subarray(5));
+      }
+    });
+    const greeting = encode({
+      channel: CONTROL,
+      kind: KIND.open,
+      payload: {
+        protocol: 1,
+        peer: 'test-runner-resume',
+        granted: ['containers:read', 'workspaces:read'],
+      },
+    });
+    socket.write(greeting.subarray(0, 3));
+    socket.write(greeting.subarray(3));
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    const containers = workspace(session).containers;
+    await assert.rejects(
+      containers.resumeExecutionStreaming(executionId, { after: -1 }, () => {}),
+      /nonnegative safe integer/,
+    );
+    assert.deepEqual(requests, [], 'invalid resume cursors must not emit a request frame');
+
+    const firstAttempt = [];
+    let resumeAfter;
+    await assert.rejects(
+      containers.resumeExecutionStreaming(
+        executionId,
+        { after: 0, pageLimit: 1, pollIntervalMs: 10 },
+        async (page) => {
+          firstAttempt.push(page.next);
+          await Promise.resolve();
+          if (page.next === 2) throw new Error('result store unavailable');
+        },
+      ),
+      (error) => {
+        assert(error instanceof ExecutionOperationError);
+        assert.equal(error.executionId, executionId);
+        assert.equal(error.phase, 'output');
+        assert.equal(error.after, 1);
+        resumeAfter = error.after;
+        return true;
+      },
+    );
+    assert.deepEqual(firstAttempt, [1, 2]);
+    assert.equal(
+      requests.some(({ call }) => call === 'execution_cancel'),
+      false,
+      'a resumed observer must not cancel an execution it did not create',
+    );
+
+    const retried = [];
+    const result = await containers.resumeExecutionStreaming(
+      executionId,
+      { after: resumeAfter, pageLimit: 1, pollIntervalMs: 10 },
+      (page) => retried.push(page.next),
+    );
+    assert.deepEqual(retried, [2]);
+    assert.deepEqual(result, { executionId, execution, next: 2 });
+    assert.deepEqual(
+      requests
+        .filter(({ call }) => call === 'execution_output')
+        .map(({ with: parameters }) => parameters.after),
+      [0, 1, 1],
+    );
+    assert.equal((await workspace(session).info()).name, 'tests');
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('real Unix output iteration rejects a stalled continuation without looping or poisoning the session', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-output-stall-'));
   const socketPath = path.join(directory, 'host.sock');
