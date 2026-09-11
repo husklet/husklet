@@ -729,6 +729,12 @@ impl Store {
         crate::paths::hl_root().join("workspaces.conf")
     }
 
+    fn create_at(path: PathBuf, workspace: WorkspaceConfig) -> Result<WorkspaceConfiguration, HostError> {
+        let mut store = crate::config::WorkspaceStore::load(path).map_err(workspace_io_error)?;
+        store.insert(workspace.clone()).map_err(workspace_io_error)?;
+        Ok(Self::configuration(&workspace))
+    }
+
     fn configuration(workspace: &WorkspaceConfig) -> WorkspaceConfiguration {
         WorkspaceConfiguration {
             generation: workspace.generation.clone(),
@@ -846,18 +852,7 @@ impl WorkspaceControl for Store {
 
     fn create(&self, configuration: &WorkspaceConfiguration) -> Result<WorkspaceConfiguration, HostError> {
         let workspace = Self::configured(configuration)?;
-        let mut store =
-            crate::config::WorkspaceStore::load(Self::path()).map_err(|error| HostError::Failed(error.to_string()))?;
-        if store.get(&workspace.name).is_some() {
-            return Err(HostError::Conflict(format!(
-                "workspace {} already exists",
-                workspace.name
-            )));
-        }
-        store
-            .upsert(workspace.clone())
-            .map_err(|error| HostError::Failed(error.to_string()))?;
-        Ok(Self::configuration(&workspace))
+        Self::create_at(Self::path(), workspace)
     }
 
     fn update(
@@ -964,10 +959,26 @@ fn workspace_io_error(error: std::io::Error) -> HostError {
 
 #[cfg(test)]
 mod workspace_control_tests {
-    use hl_extension::port::WorkspaceControl as _;
+    use hl_extension::port::{HostError, WorkspaceControl as _};
     use hl_extension::ExtensionName;
 
     use super::{Store, Workspace};
+
+    #[test]
+    fn concurrent_workspace_creation_never_replaces_the_winning_identity() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let path = temporary.path().join("workspaces.conf");
+        let first = crate::config::WorkspaceConfig::new("database", "postgres:17", hl_ws::Arch::Amd64);
+        let first_generation = first.generation.clone();
+        Store::create_at(path.clone(), first).expect("first creation");
+
+        let second = crate::config::WorkspaceConfig::new("database", "malicious:latest", hl_ws::Arch::Amd64);
+        assert!(matches!(Store::create_at(path.clone(), second), Err(HostError::Conflict(_))));
+        let persisted = crate::config::WorkspaceStore::load(path).expect("persisted workspace");
+        let database = persisted.get("database").expect("winning workspace");
+        assert_eq!(database.image, "postgres:17");
+        assert_eq!(database.generation, first_generation);
+    }
 
     #[test]
     fn each_extension_gets_one_private_socket_directory() {
