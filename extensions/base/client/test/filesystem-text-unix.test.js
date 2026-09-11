@@ -7,6 +7,7 @@ import test from 'node:test';
 
 import {
   connect,
+  FileExtentChangedError,
   FileIdentityChangedError,
   FileTextDecodeError,
   FileTextLimitError,
@@ -24,6 +25,7 @@ test('readText decodes split UTF-8 over fragmented real Unix frames and enforces
     ['docs/large.txt', { identity: 'large-v1', bytes: [0x61, 0x62, 0x63] }],
     ['docs/bad.txt', { identity: 'bad-v1', bytes: [0x61, 0xc3, 0x28] }],
     ['docs/churn.txt', { identity: 'churn-v1', bytes: [0x61, 0x62] }],
+    ['docs/extent.txt', { identity: 'extent-v1', bytes: [0x61, 0x62] }],
   ]);
   const server = net.createServer((socket) => {
     connections.add(socket);
@@ -38,7 +40,9 @@ test('readText decodes split UTF-8 over fragmented real Unix frames and enforces
         const contents = document.bytes.slice(input.offset, input.offset + input.limit);
         const identity =
           input.path === 'docs/churn.txt' && input.offset > 0 ? 'churn-v2' : document.identity;
-        const eof = input.offset + contents.length >= document.bytes.length;
+        const total =
+          input.path === 'docs/extent.txt' && input.offset === 0 ? 3 : document.bytes.length;
+        const eof = input.offset + contents.length >= total;
         const reply = encode({
           channel: frame.channel,
           kind: KIND.response,
@@ -48,7 +52,7 @@ test('readText decodes split UTF-8 over fragmented real Unix frames and enforces
               path: input.path,
               identity,
               offset: input.offset,
-              total: document.bytes.length,
+              total,
               contents,
               eof,
               truncated: !eof,
@@ -110,6 +114,19 @@ test('readText decodes split UTF-8 over fragmented real Unix frames and enforces
         assert.equal(error.path, 'docs/churn.txt');
         assert.equal(error.expected, 'churn-v1');
         assert.equal(error.actual, 'churn-v2');
+        assert.equal(error.offset, 1);
+        return true;
+      },
+    );
+
+    await assert.rejects(
+      files.readText('docs/extent.txt', { maxBytes: 3, chunkBytes: 1 }),
+      (error) => {
+        assert(error instanceof FileExtentChangedError);
+        assert.equal(error.path, 'docs/extent.txt');
+        assert.equal(error.identity, 'extent-v1');
+        assert.equal(error.expectedTotal, 3);
+        assert.equal(error.actualTotal, 2);
         assert.equal(error.offset, 1);
         return true;
       },

@@ -483,6 +483,27 @@ export class FileIdentityChangedError extends Error {
   }
 }
 
+/** One identity reported contradictory file extents across ranged reads. */
+export class FileExtentChangedError extends Error {
+  readonly path;
+  readonly identity;
+  readonly expectedTotal;
+  readonly actualTotal;
+  readonly offset;
+
+  constructor(path, identity, expectedTotal, actualTotal, offset) {
+    super(
+      `filesystem file ${path} at identity ${identity} changed total from ${expectedTotal} to ${actualTotal} bytes at offset ${offset}`,
+    );
+    this.name = 'FileExtentChangedError';
+    this.path = path;
+    this.identity = identity;
+    this.expectedTotal = expectedTotal;
+    this.actualTotal = actualTotal;
+    this.offset = offset;
+  }
+}
+
 /** Reference-counted host subscriptions, keyed by session and snapshot topic. */
 const subscriptions = new WeakMap();
 const SNAPSHOT_TOPICS = Object.freeze([
@@ -3068,6 +3089,7 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
         const [start, limit] = exactFileRange(offset, chunkBytes);
         let cursor = start;
         let identity = observed;
+        let total;
         for (;;) {
           requireFilesystemActive(signal);
           const range = await api.files.readRange(path, cursor, limit, identity);
@@ -3075,6 +3097,10 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
           identity ??= range.identity;
           if (range.identity !== identity) {
             throw new FileIdentityChangedError(path, identity, range.identity, cursor);
+          }
+          total ??= range.total;
+          if (range.total !== total) {
+            throw new FileExtentChangedError(path, identity, total, range.total, cursor);
           }
           const eof = range.eof;
           const next = cursor + range.contents.length;

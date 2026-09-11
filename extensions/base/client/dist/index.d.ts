@@ -120,6 +120,15 @@ export declare class FileIdentityChangedError extends Error {
     readonly offset: any;
     constructor(path: any, expected: any, actual: any, offset: any);
 }
+/** One identity reported contradictory file extents across ranged reads. */
+export declare class FileExtentChangedError extends Error {
+    readonly path: any;
+    readonly identity: any;
+    readonly expectedTotal: any;
+    readonly actualTotal: any;
+    readonly offset: any;
+    constructor(path: any, identity: any, expectedTotal: any, actualTotal: any, offset: any);
+}
 export declare function connect(options?: ConnectOptions): Promise<ClientSession>;
 /**
  * Opens a surface and paints a dependency-free first frame.

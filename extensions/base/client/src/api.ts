@@ -779,6 +779,14 @@ export declare class FileIdentityChangedError extends Error {
   readonly actual: string;
   readonly offset: number;
 }
+/** One identity reported contradictory file extents across ranged reads. */
+export declare class FileExtentChangedError extends Error {
+  readonly path: string;
+  readonly identity: string;
+  readonly expectedTotal: number;
+  readonly actualTotal: number;
+  readonly offset: number;
+}
 
 export interface ConnectOptions {
   path?: string;
