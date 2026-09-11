@@ -594,9 +594,6 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
       const started = await api.extensions.startAcquisition(wanted);
       cancelledJob.current = '';
       let status = await api.extensions.acquisition(started.job);
-      // Acquisition polling is event-handler work, not render-time computation.
-      // eslint-disable-next-line react-hooks/purity
-      const deadline = Date.now() + 30_000;
       while (true) {
         if (!isInstalledCandidateUnchanged(status.candidate)) setAcquisition(status);
         if (status.candidate && !isInstalledCandidateUnchanged(status.candidate)) {
@@ -622,11 +619,10 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
           cancelledJob.current === started.job
         )
           break;
-        // eslint-disable-next-line react-hooks/purity
-        const remaining = deadline - Date.now();
-        if (remaining <= 0) break;
         const changed = await api.extensions.waitForAcquisition(started.job, status.revision, {
-          timeoutMs: Math.min(1_000, remaining),
+          // Each socket wait stays bounded, while the review remains attached
+          // to the host-owned job for however long the registry operation needs.
+          timeoutMs: 1_000,
         });
         if (changed.changed) status = changed.status;
       }
@@ -637,13 +633,6 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
           uncertain: false,
         });
       }
-      if (
-        !['ready', 'failed', 'cancelled'].includes(status.state) &&
-        cancelledJob.current !== started.job
-      )
-        setError(
-          'Acquisition is still running. You can cancel it or inspect the reference again later.',
-        );
     } catch (cause) {
       setError(message(cause));
     } finally {

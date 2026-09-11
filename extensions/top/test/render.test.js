@@ -2210,6 +2210,83 @@ test('a stale cancellation refreshes the authoritative phase and remains cancell
   assert.ok(labelled(stage, 'Cancel inspection'));
 });
 
+test('a long extension acquisition stays attached to its host job until review is ready', async () => {
+  const originalNow = Date.now;
+  let clock = 0;
+  let waits = 0;
+  const digest = `sha256:${'d'.repeat(64)}`;
+  Date.now = () => {
+    clock += 31_000;
+    return clock;
+  };
+  try {
+    const stage = host();
+    stage.render(
+      h(Extensions, {
+        api: {
+          extensions: {
+            list: async () => [],
+            startAcquisition: async () => ({ job: 'slow-job' }),
+            acquisition: async () => ({
+              job: 'slow-job',
+              reference: 'registry.example/slow:1',
+              revision: 1,
+              state: 'pulling',
+              progress: {
+                status: 'Downloading image',
+                id: 'layer',
+                current: 1,
+                total: 10,
+              },
+              candidate: null,
+              error: null,
+            }),
+            waitForAcquisition: async (job, revision) => {
+              waits += 1;
+              assert.equal(job, 'slow-job');
+              assert.equal(revision, 1);
+              return {
+                changed: true,
+                status: {
+                  job,
+                  reference: 'registry.example/slow:1',
+                  revision: 2,
+                  state: 'ready',
+                  progress: null,
+                  candidate: {
+                    name: 'slow',
+                    version: '1.0.0',
+                    image_digest: digest,
+                    installed_image_digest: null,
+                    requested: [],
+                  },
+                  error: null,
+                },
+              };
+            },
+            cancelAcquisition: async () => {},
+          },
+          watchExtensions: async () => () => {},
+        },
+      }),
+    );
+    await settled();
+    selectExtensionMode(stage, 'Discover');
+    await settled();
+    change(stage, 'registry.example/extension:version', 'registry.example/slow:1');
+    invoke(stage, 'Inspect');
+    await settled();
+    await settled();
+
+    assert.equal(waits, 1, 'the existing host job remains authoritative after thirty seconds');
+    assert.ok(labelled(stage, 'Review slow'));
+    assert.ok(labelled(stage, `Reviewed image sha256:${'d'.repeat(12)}…${'d'.repeat(8)}`));
+    assert.equal(labelled(stage, 'Acquisition is still running.'), undefined);
+  } finally {
+    Date.now = originalNow;
+  }
+});
+
 for (const updating of [false, true]) {
   test(`extension ${updating ? 'update' : 'install'} independently narrows container and filesystem authority`, async () => {
     const calls = [];
