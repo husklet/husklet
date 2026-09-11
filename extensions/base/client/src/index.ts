@@ -1975,9 +1975,11 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
           }
         });
         try {
-          if (pending.length > 0) await deliver();
+          if (pending.length > 0) await outputStep(deliver, options.signal);
           const stderrTail = stderrDecoder.decode();
-          if (stderrTail && onStderr) await onStderr(stderrTail);
+          if (stderrTail && onStderr) {
+            await outputStep(() => onStderr(stderrTail), options.signal);
+          }
         } catch (cause) {
           throw new ExecutionOperationError(result.executionId, 'output', cause, result.execution);
         }

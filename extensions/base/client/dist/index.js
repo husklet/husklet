@@ -1514,10 +1514,11 @@ export function workspace(session, { signal } = {}) {
                 });
                 try {
                     if (pending.length > 0)
-                        await deliver();
+                        await outputStep(deliver, options.signal);
                     const stderrTail = stderrDecoder.decode();
-                    if (stderrTail && onStderr)
-                        await onStderr(stderrTail);
+                    if (stderrTail && onStderr) {
+                        await outputStep(() => onStderr(stderrTail), options.signal);
+                    }
                 }
                 catch (cause) {
                     throw new ExecutionOperationError(result.executionId, 'output', cause, result.execution);
