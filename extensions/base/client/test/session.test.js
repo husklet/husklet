@@ -4612,14 +4612,47 @@ test('real Unix resumed execution commits output cursor only after consumer ackn
       containers.resumeExecutionStreaming(executionId, { after: -1 }, () => {}),
       /nonnegative safe integer/,
     );
+    await assert.rejects(
+      containers.resumeExecutionStreaming(executionId, { maxPages: 0 }, () => {}),
+      /maxPages.*1.*1000000/,
+    );
+    const stopped = new AbortController();
+    stopped.abort('query view closed');
+    await assert.rejects(
+      containers.resumeExecutionStreaming(
+        executionId,
+        { maxPages: 1, signal: stopped.signal },
+        () => {},
+      ),
+      (error) => error.name === 'AbortError' && error.cause === stopped.signal.reason,
+    );
     assert.deepEqual(requests, [], 'invalid resume cursors must not emit a request frame');
+
+    const windowPages = [];
+    const window = await containers.resumeExecutionStreaming(
+      executionId,
+      { after: 0, pageLimit: 1, maxPages: 1, pollIntervalMs: 10 },
+      (page) => windowPages.push(page.next),
+    );
+    assert.deepEqual(windowPages, [1]);
+    assert.deepEqual(window, {
+      executionId,
+      next: 1,
+      pages: 1,
+      complete: false,
+    });
+    assert.equal(
+      requests.some(({ call }) => call === 'execution_inspect'),
+      false,
+      'a bounded output window must not claim a still-running execution is complete',
+    );
 
     const firstAttempt = [];
     let resumeAfter;
     await assert.rejects(
       containers.resumeExecutionStreaming(
         executionId,
-        { after: 0, pageLimit: 1, pollIntervalMs: 10 },
+        { after: window.next, pageLimit: 1, pollIntervalMs: 10 },
         async (page) => {
           firstAttempt.push(page.next);
           await Promise.resolve();
@@ -4635,7 +4668,7 @@ test('real Unix resumed execution commits output cursor only after consumer ackn
         return true;
       },
     );
-    assert.deepEqual(firstAttempt, [1, 2]);
+    assert.deepEqual(firstAttempt, [2]);
     assert.equal(
       requests.some(({ call }) => call === 'execution_cancel'),
       false,
@@ -4649,7 +4682,7 @@ test('real Unix resumed execution commits output cursor only after consumer ackn
       (page) => retried.push(page.next),
     );
     assert.deepEqual(retried, [2]);
-    assert.deepEqual(result, { executionId, execution, next: 2 });
+    assert.deepEqual(result, { executionId, execution, next: 2, pages: 1, complete: true });
     assert.deepEqual(
       requests
         .filter(({ call }) => call === 'execution_output')

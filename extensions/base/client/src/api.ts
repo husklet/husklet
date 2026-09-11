@@ -1033,11 +1033,22 @@ export interface WorkspaceApi {
       options: {
         after?: number;
         pageLimit?: number;
+        /** Stop after this many acknowledged pages and return a continuation cursor. */
+        maxPages?: number;
         pollIntervalMs?: number;
         signal?: AbortSignal;
       },
       onPage: (page: ExecutionOutputPage) => void | Promise<void>,
-    ): Promise<{ executionId: string; execution: ExecutionSummary; next: number }>;
+    ): Promise<
+      | { executionId: string; next: number; pages: number; complete: false }
+      | {
+          executionId: string;
+          execution: ExecutionSummary;
+          next: number;
+          pages: number;
+          complete: true;
+        }
+    >;
     waitExecution(id: string, options?: { timeoutMs?: number }): Promise<ExecutionSummary>;
     /** Execute, wait for completion, then fetch bounded output without auto-removing the execution record. */
     execAndWait(

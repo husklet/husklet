@@ -1014,12 +1014,21 @@ export interface WorkspaceApi {
         resumeExecutionStreaming(id: string, options: {
             after?: number;
             pageLimit?: number;
+            /** Stop after this many acknowledged pages and return a continuation cursor. */
+            maxPages?: number;
             pollIntervalMs?: number;
             signal?: AbortSignal;
         }, onPage: (page: ExecutionOutputPage) => void | Promise<void>): Promise<{
             executionId: string;
+            next: number;
+            pages: number;
+            complete: false;
+        } | {
+            executionId: string;
             execution: ExecutionSummary;
             next: number;
+            pages: number;
+            complete: true;
         }>;
         waitExecution(id: string, options?: {
             timeoutMs?: number;

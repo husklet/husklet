@@ -1117,16 +1117,19 @@ export function workspace(session, { signal } = {}) {
                         await outputPoll(pollIntervalMs, signal);
                 }
             },
-            resumeExecutionStreaming: async (id, { after = 0, pageLimit = 16, pollIntervalMs = 25, signal, } = {}, onPage) => {
+            resumeExecutionStreaming: async (id, { after = 0, pageLimit = 16, maxPages = 4_096, pollIntervalMs = 25, signal, } = {}, onPage) => {
                 if (typeof onPage !== 'function')
                     throw new TypeError('resumed streaming execution requires an output callback');
                 if (!Number.isSafeInteger(after) || after < 0)
                     throw new RangeError('execution output cursor must be a nonnegative safe integer');
                 exactExecutionPageLimit(pageLimit);
+                if (!Number.isSafeInteger(maxPages) || maxPages < 1 || maxPages > 1_000_000)
+                    throw new RangeError('resumed execution maxPages must be an integer between 1 and 1000000');
                 exactExecutionPollInterval(pollIntervalMs);
                 requireOutputActive(signal);
                 const executionId = immutableIdentity(id, [32], 'execution');
                 let cursor = after;
+                let pages = 0;
                 let phase = 'output';
                 try {
                     for await (const page of api.containers.executionOutputPages(executionId, {
@@ -1137,11 +1140,15 @@ export function workspace(session, { signal } = {}) {
                     })) {
                         await outputStep(() => onPage(page), signal);
                         cursor = page.next;
+                        pages += 1;
+                        if (!page.eof && pages === maxPages) {
+                            return { executionId, next: cursor, pages, complete: false };
+                        }
                     }
                     phase = 'inspect';
                     requireOutputActive(signal);
                     const execution = await api.containers.execution(executionId);
-                    return { executionId, execution, next: cursor };
+                    return { executionId, execution, next: cursor, pages, complete: true };
                 }
                 catch (cause) {
                     throw new ExecutionOperationError(executionId, phase, cause, undefined, cursor);
