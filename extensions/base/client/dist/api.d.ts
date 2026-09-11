@@ -789,6 +789,13 @@ export declare class FilesystemJournalGapError extends Error {
     readonly requested: Readonly<FileCursor>;
     readonly replacement: Readonly<FileCursor>;
 }
+/** A directory page crossed generations and enumeration must restart from its root. */
+export declare class DirectoryIdentityChangedError extends Error {
+    readonly path: string;
+    readonly expected: string;
+    readonly actual: string;
+    readonly after: string | null;
+}
 /** One exact file generation could not be decoded as UTF-8. */
 export declare class FileTextDecodeError extends TypeError {
     readonly path: string;

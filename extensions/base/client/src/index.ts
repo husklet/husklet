@@ -413,6 +413,23 @@ export class FilesystemJournalGapError extends Error {
   }
 }
 
+/** A directory page crossed generations and enumeration must restart from its root. */
+export class DirectoryIdentityChangedError extends Error {
+  readonly path;
+  readonly expected;
+  readonly actual;
+  readonly after;
+
+  constructor(path, expected, actual, after) {
+    super(`filesystem directory ${path} changed identity from ${expected} to ${actual}`);
+    this.name = 'DirectoryIdentityChangedError';
+    this.path = path;
+    this.expected = expected;
+    this.actual = actual;
+    this.after = after;
+  }
+}
+
 /** One exact file generation could not be decoded as UTF-8. */
 export class FileTextDecodeError extends TypeError {
   readonly path;
@@ -2859,20 +2876,26 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
           await session.call('filesystem_list_page', { path, after, observed, limit }),
           'directory_page',
         );
-        if (
-          !page.identity ||
-          new TextEncoder().encode(page.identity).byteLength > 256 ||
-          (observed !== null && page.identity !== observed) ||
-          page.entries.length > limit ||
-          (page.more && !page.next) ||
-          (page.more && page.entries.length === 0) ||
-          (after !== null && page.next === after) ||
-          page.entries.some((entry) => !isDirectFilesystemChild(path, entry.path)) ||
-          page.entries.some((entry, index) => {
+        const identityValid =
+          Boolean(page.identity) && new TextEncoder().encode(page.identity).byteLength <= 256;
+        const structureValid =
+          page.entries.length <= limit &&
+          !(page.more && !page.next) &&
+          !(page.more && page.entries.length === 0) &&
+          !(after !== null && page.next === after) &&
+          !page.entries.some((entry) => !isDirectFilesystemChild(path, entry.path)) &&
+          !page.entries.some((entry, index) => {
             const previous = index === 0 ? after : page.entries[index - 1].path;
             return previous !== null && compareUtf8(entry.path, previous) <= 0;
-          }) ||
-          (page.entries.length > 0 && page.next !== page.entries.at(-1).path)
+          }) &&
+          !(page.entries.length > 0 && page.next !== page.entries.at(-1).path);
+        if (observed !== null && identityValid && structureValid && page.identity !== observed) {
+          throw new DirectoryIdentityChangedError(path, observed, page.identity, after);
+        }
+        if (
+          !identityValid ||
+          (observed !== null && page.identity !== observed) ||
+          !structureValid
         ) {
           throw new TypeError('host returned an inconsistent filesystem directory page');
         }
