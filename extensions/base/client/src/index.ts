@@ -3668,18 +3668,20 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
       await stop();
     }
   };
-  api.terminal.actAndWait = async (slot, action, { lines, timeoutMs = 30_000 } = {}) => {
+  api.terminal.actAndWait = async (slot, action, { lines, timeoutMs = 30_000, signal } = {}) => {
     if (typeof slot !== 'string' || slot.length === 0)
       throw new TypeError('pane semantic action requires a nonempty slot');
     exactSemanticAction(action);
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
       throw new RangeError('pane semantic action wait timeout must be between 1 and 30000ms');
     }
+    if (signal?.aborted) throw outputAbort(signal);
+    const scoped = signal ? api.withSignal(signal) : api;
     let changed;
     const observed = new Promise((resolve) => {
       changed = resolve;
     });
-    const stop = await api.watchPaneChanges((change) => {
+    const stop = await scoped.watchPaneChanges((change) => {
       if (
         change.slot === slot &&
         (change.generation !== action.generation || change.revision !== action.revision)
@@ -3687,12 +3689,17 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
         changed(change);
     });
     let timer;
+    let abort;
     try {
-      await api.terminal.act(slot, action);
+      await scoped.terminal.act(slot, action);
       const change = await Promise.race([
         observed,
         new Promise((resolve) => {
           timer = setTimeout(() => resolve(null), timeoutMs);
+        }),
+        new Promise((_, reject) => {
+          abort = () => reject(outputAbort(signal));
+          signal?.addEventListener('abort', abort, { once: true });
         }),
       ]);
       if (change === null)
@@ -3700,7 +3707,7 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
           changed: false,
           after: { generation: action.generation, revision: action.revision },
         };
-      const readable = await api.terminal.toText(slot, { lines });
+      const readable = await scoped.terminal.toText(slot, { lines });
       if (readable.snapshot.generation !== action.generation) {
         throw new Error('semantic action pane was replaced before its result could be verified');
       }
@@ -3713,10 +3720,11 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
       return { changed: true, readable };
     } finally {
       clearTimeout(timer);
+      if (abort) signal?.removeEventListener('abort', abort);
       await stop();
     }
   };
-  api.terminal.inspectAndAct = async (slot, proposal, { timeoutMs = 30_000 } = {}) => {
+  api.terminal.inspectAndAct = async (slot, proposal, { timeoutMs = 30_000, signal } = {}) => {
     if (typeof slot !== 'string' || slot.length === 0)
       throw new TypeError('inspected semantic action requires a nonempty slot');
     const actions = ['invoke', 'change', 'submit', 'toggle', 'expand', 'focus'];
@@ -3737,12 +3745,14 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
       throw new RangeError('inspected semantic action timeout must be between 1 and 30000ms');
     }
+    if (signal?.aborted) throw outputAbort(signal);
+    const scoped = signal ? api.withSignal(signal) : api;
     let changed;
     let cursor;
     const observed = new Promise((resolve) => {
       changed = resolve;
     });
-    const stop = await api.watchPaneChanges((change) => {
+    const stop = await scoped.watchPaneChanges((change) => {
       if (
         cursor &&
         change.slot === slot &&
@@ -3751,8 +3761,9 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
         changed(change);
     });
     let timer;
+    let abort;
     try {
-      const snapshot = await api.terminal.semantics(slot);
+      const snapshot = await scoped.terminal.semantics(slot);
       cursor = { generation: snapshot.generation, revision: snapshot.revision };
       const pending = [snapshot.root];
       let node;
@@ -3774,7 +3785,7 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
       if (!node.actions.includes(proposal.action))
         throw new Error('semantic node does not advertise the requested action');
       const before = { snapshot, text: semanticXml(snapshot) };
-      await api.terminal.act(slot, {
+      await scoped.terminal.act(slot, {
         ...cursor,
         node: proposal.node,
         action: proposal.action,
@@ -3785,9 +3796,13 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
         new Promise((resolve) => {
           timer = setTimeout(() => resolve(null), timeoutMs);
         }),
+        new Promise((_, reject) => {
+          abort = () => reject(outputAbort(signal));
+          signal?.addEventListener('abort', abort, { once: true });
+        }),
       ]);
       if (change === null) return { changed: false, before };
-      const afterSnapshot = await api.terminal.semantics(slot);
+      const afterSnapshot = await scoped.terminal.semantics(slot);
       if (afterSnapshot.generation !== cursor.generation) {
         throw new Error('inspected semantic pane was replaced before action verification');
       }
@@ -3804,6 +3819,7 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
       };
     } finally {
       clearTimeout(timer);
+      if (abort) signal?.removeEventListener('abort', abort);
       await stop();
     }
   };

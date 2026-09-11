@@ -1324,7 +1324,7 @@ export interface WorkspaceApi {
     actAndWait(
       slot: string,
       action: PaneSemanticAction,
-      options?: { lines?: number; timeoutMs?: number },
+      options?: { lines?: number; timeoutMs?: number; signal?: AbortSignal },
     ): Promise<
       | { changed: true; readable: ReadablePane }
       | { changed: false; after: { generation: number; revision: number } }
@@ -1333,7 +1333,7 @@ export interface WorkspaceApi {
     inspectAndAct(
       slot: string,
       proposal: { node: number; action: SemanticActionKind; value?: string | null },
-      options?: { timeoutMs?: number },
+      options?: { timeoutMs?: number; signal?: AbortSignal },
     ): Promise<
       | {
           changed: true;

@@ -8219,6 +8219,87 @@ test('real Unix inspectAndAct rejects a replacement generation after mutation', 
   );
 });
 
+test('real Unix semantic action waits cancel, release observation, and preserve the session', async () => {
+  let cancel;
+  await withPaneIdentityHost(
+    ['panes:observe', 'panes:semantic-read', 'panes:semantic-control'],
+    (request, socket) => {
+      const payload =
+        request.call === 'pane_semantic_read'
+          ? { reply: 'semantics', with: semanticTree('pane-a') }
+          : { reply: 'done' };
+      socket.write(encode({ channel: 2, kind: KIND.response, payload }));
+      if (request.call === 'pane_semantic_action') {
+        setTimeout(() => cancel.abort('agent request superseded'), 10);
+      }
+    },
+    async (session, calls) => {
+      const terminal = workspace(session).terminal;
+      const alreadyCancelled = new AbortController();
+      alreadyCancelled.abort('agent stopped');
+      await assert.rejects(
+        terminal.inspectAndAct(
+          'pane-a',
+          { node: 7, action: 'invoke' },
+          { signal: alreadyCancelled.signal },
+        ),
+        (error) => error.name === 'AbortError' && error.cause === 'agent stopped',
+      );
+      assert.deepEqual(calls, [], 'pre-cancelled semantic work must not subscribe or mutate');
+
+      cancel = new AbortController();
+      await assert.rejects(
+        terminal.actAndWait(
+          'pane-a',
+          { generation: 2, revision: 4, node: 7, action: 'invoke' },
+          { timeoutMs: 1_000, signal: cancel.signal },
+        ),
+        (error) => error.name === 'AbortError' && error.cause === 'agent request superseded',
+      );
+      assert.deepEqual(calls, [
+        { call: 'event_subscribe', with: { topic: 'pane-changes' } },
+        {
+          call: 'pane_semantic_action',
+          with: {
+            slot: 'pane-a',
+            action: {
+              generation: 2,
+              revision: 4,
+              node: 7,
+              action: 'invoke',
+            },
+          },
+        },
+        { call: 'event_unsubscribe', with: { topic: 'pane-changes' } },
+      ]);
+
+      calls.length = 0;
+      cancel = new AbortController();
+      await assert.rejects(
+        terminal.inspectAndAct(
+          'pane-a',
+          { node: 7, action: 'invoke' },
+          { timeoutMs: 1_000, signal: cancel.signal },
+        ),
+        (error) => error.name === 'AbortError' && error.cause === 'agent request superseded',
+      );
+      assert.deepEqual(
+        calls.map(({ call }) => call),
+        [
+          'event_subscribe',
+          'pane_semantic_read',
+          'pane_semantic_action',
+          'event_unsubscribe',
+        ],
+      );
+
+      calls.length = 0;
+      assert.equal((await terminal.semantics('pane-a')).revision, 4);
+      assert.deepEqual(calls.map(({ call }) => call), ['pane_semantic_read']);
+    },
+  );
+});
+
 test('real Unix terminal-to-text rejects text carrying another pane identity', async () => {
   await withPaneIdentityHost(
     ['panes:observe', 'terminals:output'],
