@@ -154,18 +154,6 @@ impl Weave {
             && !children.is_empty()
             && children.iter().all(|child| child.has_css_class("hl-card"));
         let packs_cards = !vertical && children.iter().any(|child| child.has_css_class("hl-card"));
-        let common_card_floor = (!vertical
-            && !children.is_empty()
-            && children
-                .iter()
-                .all(|child| child.has_css_class("hl-card") && child.hexpands()))
-        .then(|| {
-            children
-                .iter()
-                .map(|child| size(child, vertical, room, packs_cards).0)
-                .max()
-                .unwrap_or(0)
-        });
         let mut lines = vec![Line::default()];
         for child in children {
             let (mut main, mut cross) = size(&child, vertical, room, packs_cards);
@@ -175,9 +163,6 @@ impl Weave {
                 // height-for-width result from its authored packing floor.
                 main = room;
                 cross = child.measure(gtk::Orientation::Vertical, room).1;
-            } else if let Some(floor) = common_card_floor {
-                main = floor;
-                cross = child.measure(gtk::Orientation::Vertical, floor).1;
             }
             let line = lines.last_mut().expect("a line is always open");
             let advance = if line.children.is_empty() { main } else { main + spacing };

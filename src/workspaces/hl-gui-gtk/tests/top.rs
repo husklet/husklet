@@ -2039,7 +2039,11 @@ mod unix {
             .collect::<Vec<_>>();
         assert_eq!(visible.len(), expected_visible, "{case} omitted first-row cards");
         if width > 600 {
-            let widths = visible.iter().map(|card| card.width()).collect::<Vec<_>>();
+            let widths = cards
+                .iter()
+                .filter(|card| card.is_mapped())
+                .map(gtk::Widget::width)
+                .collect::<Vec<_>>();
             let narrowest = widths.iter().min().copied().unwrap_or_default();
             let widest = widths.iter().max().copied().unwrap_or_default();
             assert!(
