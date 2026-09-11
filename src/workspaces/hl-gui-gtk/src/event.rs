@@ -378,7 +378,15 @@ fn splitter(widget: &gtk::Widget, node: NodeId, slot: &Slot, reports: &Reports) 
     };
     let reports = reports.clone();
     let slot = slot.clone();
+    let responsive_widget = responsive.as_ref().map(|_| widget.downgrade());
     paned.connect_position_notify(move |paned| {
+        if responsive_widget
+            .as_ref()
+            .and_then(gtk::glib::WeakRef::upgrade)
+            .is_some_and(|widget| !crate::build::responsive::reports_position_change(&widget))
+        {
+            return;
+        }
         let Some(id) = slot.id() else { return };
         reports.push(Event::Change {
             node,

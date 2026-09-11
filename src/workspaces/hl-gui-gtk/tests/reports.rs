@@ -147,7 +147,49 @@ fn every_declared_trigger_and_sortable_header_report_on_one_toolkit_thread() {
         return;
     }
     every_declared_trigger_reports_when_the_component_is_worked();
+    responsive_reports_gestures_but_not_its_controlled_position();
     sortable_header_reports_current_source_version_without_reordering_rows();
+}
+
+fn responsive_reports_gestures_but_not_its_controlled_position() {
+    let mut session = Session::new();
+    let responsive = session.producer.create(Tag::Responsive);
+    session.producer.append(NodeId::ROOT, responsive);
+    session
+        .producer
+        .on(responsive, Trigger::Change, EventId::new("reported"));
+    for _ in 0..3 {
+        let child = session.producer.create(Tag::Column);
+        session.producer.append(responsive, child);
+    }
+    session
+        .tree
+        .apply(&session.producer.frame(), &mut session.canvas)
+        .expect("a responsive pane renders");
+    let _ = session.canvas.reports().drain();
+
+    session
+        .producer
+        .set(responsive, Prop::Position, PropValue::Number(208.0));
+    session
+        .tree
+        .apply(&session.producer.frame(), &mut session.canvas)
+        .expect("the controlled divider position applies");
+    assert!(
+        session.canvas.reports().drain().is_empty(),
+        "applying a controlled position must not masquerade as a person's drag"
+    );
+
+    let paned = session
+        .widgets()
+        .into_iter()
+        .find_map(|widget| widget.downcast::<gtk::Paned>().ok())
+        .expect("Responsive owns a native divider");
+    paned.set_position(216);
+    assert!(
+        session.reported(),
+        "moving the native divider still reports the gesture"
+    );
 }
 
 fn every_declared_trigger_reports_when_the_component_is_worked() {

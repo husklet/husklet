@@ -12,6 +12,7 @@ pub(super) struct Pane {
     breakpoint: Cell<i32>,
     wide_position: Cell<i32>,
     allocating: Cell<bool>,
+    setting_position: Cell<bool>,
     expanded: Cell<Option<bool>>,
     layout: OnceCell<gtk::Box>,
     paned: OnceCell<gtk::Paned>,
@@ -23,6 +24,7 @@ impl Default for Pane {
             breakpoint: Cell::new(640),
             wide_position: Cell::new(160),
             allocating: Cell::new(false),
+            setting_position: Cell::new(false),
             expanded: Cell::new(None),
             layout: OnceCell::new(),
             paned: OnceCell::new(),
@@ -220,9 +222,25 @@ pub(crate) fn set_position(widget: &gtk::Widget, position: i32) -> bool {
     let Some(pane) = widget.downcast_ref::<ResponsivePane>() else {
         return false;
     };
-    pane.imp().wide_position.set(position);
-    pane.imp().paned().set_position(position);
+    let imp = pane.imp();
+    imp.wide_position.set(position);
+    imp.setting_position.set(true);
+    imp.paned().set_position(position);
+    imp.setting_position.set(false);
     true
+}
+
+/// Whether a native position notification represents a person's divider gesture.
+///
+/// Applying the producer's controlled `position` prop and restoring it during an
+/// allocation both notify GTK. Reporting either one back as input makes an
+/// initial render indistinguishable from a drag and can overwrite a stored pane
+/// width before it has loaded.
+pub(crate) fn reports_position_change(widget: &gtk::Widget) -> bool {
+    widget.downcast_ref::<ResponsivePane>().is_some_and(|pane| {
+        let imp = pane.imp();
+        !imp.allocating.get() && !imp.setting_position.get()
+    })
 }
 
 pub(crate) fn remember_position(widget: &gtk::Widget, position: i32) {
