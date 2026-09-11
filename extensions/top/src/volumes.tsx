@@ -133,9 +133,9 @@ export function Volumes({
         : 'ready';
   return (
     <Page title="Volumes" subtitle="Bounded local volume inventory and safe, non-force lifecycle.">
-      <Column gap={1} align="start">
-        <FormControl gap={1}>
-          <FormLabel label="Volume name" />
+      <FormControl gap={1} align="start">
+        <FormLabel label="Volume name" />
+        <Row gap={1} align="start" justify="center" wrap>
           <Entry
             value={name}
             placeholder="Volume name"
@@ -146,8 +146,6 @@ export function Volumes({
               setCreation({ state: 'idle', name: '', error: null });
             }}
           />
-        </FormControl>
-        <Row gap={1} wrap>
           <Button
             variant="filled"
             tone="accent"
@@ -158,6 +156,7 @@ export function Volumes({
                   ? 'Retry create'
                   : 'Create'
             }
+            size="small"
             enabled={creation.state !== 'loading' && name.trim().length > 0}
             onInvoke={() => void create()}
           />
@@ -165,13 +164,13 @@ export function Volumes({
             label="Refresh"
             tooltip="Refresh volumes"
             icon="view-refresh-symbolic"
-            size="large"
+            size="medium"
             variant="ghost"
             enabled={creation.state !== 'loading'}
             onInvoke={resource.reload}
           />
         </Row>
-      </Column>
+      </FormControl>
       {creation.state === 'loading' ? (
         <Row gap={1} align="center">
           <Spinner />

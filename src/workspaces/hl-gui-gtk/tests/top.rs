@@ -1447,6 +1447,37 @@ mod unix {
                 recovery_window.present();
                 settle_toolkit();
                 assert_contained(&recovery_root, &format!("volume-recovery/{width_name}"));
+                let entry = find_entry_placeholder(&recovery_root, "Volume name");
+                let create = find_button(&recovery_root, "Create");
+                let refresh = find_tooltip_button(&recovery_root, "Refresh volumes");
+                let controls = [
+                    entry.clone().upcast::<gtk::Widget>(),
+                    create.clone().upcast(),
+                    refresh.clone().upcast(),
+                ];
+                let tops = controls
+                    .iter()
+                    .map(|control| control.allocation().y())
+                    .collect::<Vec<_>>();
+                assert!(
+                    tops.iter().max().unwrap() - tops.iter().min().unwrap() <= 4,
+                    "{width_name} volume creation controls split across rows: {tops:?}"
+                );
+                assert!(create.has_css_class("size-small"));
+                assert!(create.height() <= 32);
+                let entry_bounds = entry
+                    .compute_bounds(&recovery_root)
+                    .expect("volume name entry belongs to the Top root");
+                let maximum_start = if width == 1_200 { 220.0 } else { 32.0 };
+                assert!(
+                    entry_bounds.x() <= maximum_start,
+                    "{width_name} volume creation row drifted away from the leading edge: {}px",
+                    entry_bounds.x()
+                );
+                assert!(entry.allocation().x() < create.allocation().x());
+                assert!(create.allocation().x() < refresh.allocation().x());
+                assert!(entry.grab_focus());
+                assert!(refresh.grab_focus());
                 assert!(open.has_css_class("size-small"));
                 assert!(
                     open.height() <= 32,

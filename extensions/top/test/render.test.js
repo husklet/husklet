@@ -3620,8 +3620,8 @@ test('every empty operational page explains what is absent and how to proceed', 
       assert.equal(ancestorTags(stage, 'Create')[0], 'Row');
       assert.deepEqual(
         ancestorTags(stage, 'Refresh').slice(0, 2),
-        ['Row', 'Column'],
-        'volume actions stay grouped when the entry forces a narrow-line break',
+        ['Row', 'FormControl'],
+        'volume field and actions share one labelled responsive row',
       );
       assert.equal(
         ancestorProperty(stage, 'Create', 'Row', 'Grow'),
@@ -7234,6 +7234,10 @@ test('volume creation exposes pending failure and retained retry before claiming
   };
   const stage = host();
   stage.render(h(Volumes, { api: controlled, resource }));
+  assert.deepEqual(ancestorTags(stage, 'Create').slice(0, 2), ['Row', 'FormControl']);
+  assert.deepEqual(taggedProperty(stage, 'Create', 'Button', 'Size'), {
+    ControlSize: 'Small',
+  });
   change(stage, 'Volume name', ' cache-data ');
   invoke(stage, 'Create');
   await settled();
