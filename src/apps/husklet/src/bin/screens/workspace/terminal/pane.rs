@@ -710,7 +710,7 @@ impl<'a> Tabs<'a> {
             .child(&dash)
             .build();
         viewport.set_propagate_natural_width(false);
-        self.add(&tw.ws.name, Some("◧"), &viewport, false);
+        self.add_with_persistence(&tw.ws.name, Some("◧"), &viewport, false, true, true);
     }
 
     /// Opens a shell tab and hands back its identity.
@@ -1184,6 +1184,25 @@ mod focus_ownership_tests {
             drop(entries);
             Page::new(&tw, &tab).close();
             assert!(tw.entries.borrow().iter().any(|entry| entry.name == tab));
+            tw.closing.set(true);
+        });
+        if !ran {
+            println!("skipped: no display connection");
+        }
+    }
+
+    #[test]
+    fn workspace_overview_is_reported_as_the_protected_pinned_tab() {
+        let ran = crate::test_support::on_the_toolkit_thread(|| {
+            let workspace = WorkspaceConfig::new("overview-pin-test", "alpine:3.20", hl_ws::Arch::Amd64);
+            let tw = Window::bench(&workspace);
+            Tabs::new(&tw).overview();
+            let tab = tw.entries.borrow().first().expect("overview tab").name.clone();
+            assert!(Window::tab_pinned(&tw, &tab));
+            assert!(matches!(
+                Tabs::new(&tw).pin(&tab, false),
+                Err(hl_extension::HostError::Conflict(_))
+            ));
             tw.closing.set(true);
         });
         if !ran {
