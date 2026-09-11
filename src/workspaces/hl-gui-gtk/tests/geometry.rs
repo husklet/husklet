@@ -210,7 +210,7 @@ fn a_page_container_shrinks_and_caps_its_content_width() {
     let widget = stage.tagged(Tag::Container);
     let (minimum, natural, _, _) = widget.measure(gtk::Orientation::Horizontal, -1);
     assert_eq!(minimum, 0, "a page body must be allowed to shrink with its pane");
-    assert_eq!(natural, 880, "the readable body width is a natural ceiling");
+    assert_eq!(natural, 984, "the readable body width is a natural ceiling");
 
     for width in [320, 520] {
         stage.allocate(width, 240);
@@ -223,10 +223,10 @@ fn a_page_container_shrinks_and_caps_its_content_width() {
     }
 
     stage.allocate(1280, 240);
-    assert_eq!(widget.width(), 880, "the body grew beyond its readable ceiling");
+    assert_eq!(widget.width(), 984, "the body grew beyond its readable ceiling");
     assert_eq!(
         widget.allocation().x(),
-        (1280 - 880) / 2,
+        (1280 - 984) / 2,
         "the capped body was not centred in the wide pane"
     );
     assert_eq!(
