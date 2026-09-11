@@ -489,6 +489,8 @@ impl<S: Storage> Roster<S> {
         name: &ExtensionName,
         image_digest: &str,
     ) -> Result<Record, Refusal> {
+        let _removal = registration_lock();
+        self.reload()?;
         let current = self.entries().into_iter().find(|entry| entry.name == *name);
         if current.as_ref().map(|entry| entry.image_digest.as_str()) != Some(image_digest) {
             return Err(Objection::Changed(name.clone()).into());
@@ -885,6 +887,27 @@ mod tests {
         assert!(roster.remove_if_digest(&asked.name, "sha256:old").is_err());
         assert_eq!(roster.entries()[0].image_digest, "sha256:new");
         assert_eq!(opened(temporary.path()).entries()[0].image_digest, "sha256:new");
+    }
+
+    #[test]
+    fn stale_roster_removal_cannot_delete_a_reinstalled_digest() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let asked = manifest("sample", &[Capability::Interface]);
+        let mut installer = opened(temporary.path());
+        installer
+            .register(&asked, "sha256:old", &asked.capabilities, 7)
+            .expect("old install");
+        let mut stale = opened(temporary.path());
+
+        installer.remove_if_digest(&asked.name, "sha256:old").expect("old removal");
+        installer
+            .register(&asked, "sha256:new", &asked.capabilities, 8)
+            .expect("replacement install");
+
+        assert!(stale.remove_if_digest(&asked.name, "sha256:old").is_err());
+        let persisted = opened(temporary.path()).entries();
+        assert_eq!(persisted.len(), 1);
+        assert_eq!(persisted[0].image_digest, "sha256:new");
     }
 
     #[test]
