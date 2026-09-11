@@ -139,6 +139,18 @@ export function catalogueTrust(entry: ExtensionCatalogueEntry) {
     : { label: `Publisher · ${entry.publisher}`, tone: 'neutral' as const };
 }
 
+export function catalogueCandidateMismatch(
+  entry: Pick<ExtensionCatalogueEntry, 'id' | 'version'> | null,
+  candidate: { name: string; version: string } | null | undefined,
+) {
+  if (!entry || !candidate) return '';
+  if (candidate.name !== entry.id)
+    return `Catalogue identity changed: expected ${entry.id}, but the inspected image declares ${candidate.name}.`;
+  if (candidate.version !== entry.version)
+    return `Catalogue version changed: expected ${entry.version}, but the inspected image declares ${candidate.version}.`;
+  return '';
+}
+
 function compareCatalogueEntries(left: ExtensionCatalogueEntry, right: ExtensionCatalogueEntry) {
   const leftKey = `${left.title.toLowerCase()}\0${left.id.toLowerCase()}`;
   const rightKey = `${right.title.toLowerCase()}\0${right.id.toLowerCase()}`;
@@ -434,6 +446,8 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
   const [watchError, setWatchError] = React.useState('');
   const [reference, setReference] = React.useState('');
   const [acquisition, setAcquisition] = React.useState<ExtensionAcquisitionStatus | null>(null);
+  const [catalogueExpectation, setCatalogueExpectation] =
+    React.useState<ExtensionCatalogueEntry | null>(null);
   const [granted, setGranted] = React.useState<ExtensionCapability[]>([]);
   const [grantedContainers, setGrantedContainers] = React.useState<ContainerGrant>({
     selectors: [],
@@ -564,11 +578,12 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
     };
   }, [api]);
 
-  const inspect = async (suggested?: string) => {
+  const inspect = async (suggested?: string, expected: ExtensionCatalogueEntry | null = null) => {
     const wanted = (suggested ?? reference).trim();
     if (!wanted || busy || acquisitionInFlight.current) return;
     acquisitionInFlight.current = true;
     setReference(wanted);
+    setCatalogueExpectation(expected);
     setBusy('inspect');
     setError('');
     setNotice(null);
@@ -641,6 +656,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
       !acquisition?.candidate ||
       acquisition.state !== 'ready' ||
       isInstalledCandidateUnchanged(acquisition.candidate) ||
+      catalogueCandidateMismatch(catalogueExpectation, acquisition.candidate) ||
       busy
     )
       return;
@@ -735,6 +751,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
   };
   const dismissReview = () => {
     setAcquisition(null);
+    setCatalogueExpectation(null);
     setGranted([]);
     setGrantedContainers({ selectors: [], create: false });
     setGrantedImages({ read: [], use: [], pull: [], remove: [], prune_all_unused: false });
@@ -942,6 +959,10 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
   const requiredCapabilities = acquisition?.candidate?.required ?? [];
   const missingRequiredCapabilities = requiredCapabilities.filter(
     (capability) => !granted.includes(capability),
+  );
+  const catalogueMismatch = catalogueCandidateMismatch(
+    catalogueExpectation,
+    acquisition?.candidate,
   );
   const requestedPermissionCount = acquisition?.candidate
     ? acquisition.candidate.requested.length +
@@ -1225,7 +1246,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                                   variant="filled"
                                   tone="accent"
                                   enabled={!busy && compatibility.compatible !== false}
-                                  onInvoke={() => inspect(entry.reference)}
+                                  onInvoke={() => inspect(entry.reference, entry)}
                                 />
                               </CardActions>
                             ) : !installedExtension ? (
@@ -1237,7 +1258,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                                   variant="filled"
                                   tone="accent"
                                   enabled={!busy && compatibility.compatible !== false}
-                                  onInvoke={() => inspect(entry.reference)}
+                                  onInvoke={() => inspect(entry.reference, entry)}
                                 />
                               </CardActions>
                             ) : installedExtension ? (
@@ -1249,7 +1270,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                                   size="small"
                                   variant="outline"
                                   enabled={!busy && compatibility.compatible !== false}
-                                  onInvoke={() => inspect(entry.reference)}
+                                  onInvoke={() => inspect(entry.reference, entry)}
                                 />
                               </CardActions>
                             ) : null}
@@ -1359,6 +1380,14 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                         <InlineMessage
                           label={`Replaces installed image ${compactDigest(acquisition.candidate.installed_image_digest)}. Access below was reset and must be approved again.`}
                           tone="warning"
+                        />
+                      ) : null}
+                      {catalogueMismatch ? (
+                        <RecoveryState
+                          operation="Catalogue verification"
+                          error={`${catalogueMismatch} Return to the catalogue and review its latest entry before installing.`}
+                          retryLabel="Back to catalogue"
+                          onRetry={dismissReview}
                         />
                       ) : null}
                       <Heading label="Review permissions" scale="caption" />
@@ -1728,7 +1757,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                               variant="filled"
                               tone="accent"
                               enabled={!busy}
-                              onInvoke={() => inspect()}
+                              onInvoke={() => inspect(reference, catalogueExpectation)}
                             />
                             <Button
                               label="Back to catalogue"
@@ -1913,7 +1942,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                                   variant="filled"
                                   tone="accent"
                                   enabled={!busy && updateCompatibility?.compatible !== false}
-                                  onInvoke={() => inspect(update.reference)}
+                                  onInvoke={() => inspect(update.reference, update)}
                                 />
                               )}
                               {!update &&
@@ -2043,7 +2072,10 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                       : 'Install with selected access'
               }
               enabled={
-                !busy && acquisition.state === 'ready' && missingRequiredCapabilities.length === 0
+                !busy &&
+                acquisition.state === 'ready' &&
+                missingRequiredCapabilities.length === 0 &&
+                !catalogueMismatch
               }
               variant="filled"
               tone="accent"

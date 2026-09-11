@@ -27,6 +27,7 @@ import {
   acquisitionTechnicalDetail,
   acquisitionLabel,
   catalogueTrust,
+  catalogueCandidateMismatch,
   filterCatalogueEntries,
   filterInstalledExtensions,
 } from '../dist/app.js';
@@ -45,6 +46,19 @@ test('catalogue display strings cannot forge verified publisher status', () => {
     label: 'Verified publisher · Husklet',
     tone: 'accent',
   });
+});
+
+test('an acquired image must retain the catalogue identity the developer selected', () => {
+  const selected = { id: 'database', version: '2.0.0' };
+  assert.equal(
+    catalogueCandidateMismatch(selected, { name: 'other-tool', version: '2.0.0' }),
+    'Catalogue identity changed: expected database, but the inspected image declares other-tool.',
+  );
+  assert.equal(
+    catalogueCandidateMismatch(selected, { name: 'database', version: '1.0.0' }),
+    'Catalogue version changed: expected 2.0.0, but the inspected image declares 1.0.0.',
+  );
+  assert.equal(catalogueCandidateMismatch(selected, { name: 'database', version: '2.0.0' }), '');
 });
 import {
   ContainerDetailsSource,
