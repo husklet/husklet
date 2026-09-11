@@ -826,12 +826,7 @@ test('Top owns workspace settings and extension management in the same tab', asy
   assert.ok(labelled(stage, 'Verified publisher · Husklet'));
   assert.ok(labelled(stage, 'Compatibility undeclared'));
   assert.equal(labelled(stage, 'Review requested access before anything is installed.'), undefined);
-  assert.deepEqual(ancestorTags(stage, 'Review access').slice(0, 4), [
-    'CardActions',
-    'Card',
-    'Row',
-    'Column',
-  ]);
+  assert.deepEqual(ancestorTags(stage, 'Review access').slice(0, 4), ['Row', 'Row', 'Card', 'Row']);
   assert.equal(
     ancestorProperty(stage, 'Component playground', 'Card', 'Justify'),
     undefined,

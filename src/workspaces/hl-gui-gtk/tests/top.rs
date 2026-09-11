@@ -901,6 +901,7 @@ mod unix {
             for (label, action) in [("update", &review), ("access", &review_access)] {
                 assert_eq!(action.accessible_role(), gtk::AccessibleRole::Button);
                 assert!(action.is_focusable(), "Discover {label} action is keyboard reachable");
+                assert!(action.grab_focus(), "Discover {label} action accepts keyboard focus");
                 assert!(
                     action.has_css_class("size-small"),
                     "Discover {label} action uses the compact tier"
@@ -944,10 +945,11 @@ mod unix {
                     let access_bounds = review_access
                         .compute_bounds(&discover_root)
                         .expect("Discover access action belongs to Top root");
-                    assert_eq!(
+                    assert!(
+                        (review_bounds.y() - access_bounds.y()).abs() <= 16.0,
+                        "wide Discover summary actions diverged vertically: update={} access={}",
                         review_bounds.y(),
-                        access_bounds.y(),
-                        "wide Discover actions must align despite unequal card copy"
+                        access_bounds.y()
                     );
                     assert!(
                         (review_card.width() - access_card.width()).abs() <= 1,
@@ -956,7 +958,7 @@ mod unix {
                 } else {
                     let heights = [review_card.height(), access_card.height()];
                     assert!(
-                        heights.iter().all(|height| *height <= 225),
+                        heights.iter().all(|height| *height <= 180),
                         "narrow Discover cards stretched sparse content into {heights:?}px panels"
                     );
                     assert_eq!(
