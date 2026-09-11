@@ -477,6 +477,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
   const cancelledJob = React.useRef('');
   const candidateKey = React.useRef('');
   const inventoryEpoch = React.useRef(0);
+  const catalogueEpoch = React.useRef(0);
   const lifecycleInFlight = React.useRef(false);
   const acquisitionInFlight = React.useRef(false);
   const openingInFlight = React.useRef('');
@@ -514,13 +515,16 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
   const loadCatalogue = React.useCallback(async () => {
     const readCatalogue = api.extensions.catalogue;
     if (!readCatalogue) return;
+    const epoch = ++catalogueEpoch.current;
     setCatalogueState('loading');
     setCatalogueError('');
     try {
       const value = await readCatalogue();
+      if (catalogueEpoch.current !== epoch) return;
       setCatalogue(value);
       setCatalogueState('ready');
     } catch (cause) {
+      if (catalogueEpoch.current !== epoch) return;
       setCatalogue(null);
       setCatalogueError(message(cause));
       setCatalogueState('error');

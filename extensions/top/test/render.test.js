@@ -1894,6 +1894,51 @@ test('extension discovery can retry a failed catalogue without leaving the page'
   assert.ok(labelled(stage, 'Review access'));
 });
 
+test('extension discovery keeps the newest result when catalogue retries finish out of order', async () => {
+  let attempts = 0;
+  let rejectSlowRetry;
+  const slowRetry = new Promise((_, reject) => {
+    rejectSlowRetry = reject;
+  });
+  const stage = host();
+  stage.render(
+    h(Extensions, {
+      api: {
+        extensions: {
+          list: async () => [],
+          catalogue: async () => {
+            attempts += 1;
+            if (attempts === 1) throw new Error('catalogue service is offline');
+            if (attempts === 2) return slowRetry;
+            return firstPartyCatalogue();
+          },
+        },
+        watchExtensions: async () => () => {},
+      },
+    }),
+  );
+  await settled();
+  selectExtensionMode(stage, 'Discover');
+  await settled();
+  assert.ok(labelled(stage, 'Retry catalogue'));
+
+  // A double activation can cross the render boundary, so both requests are
+  // valid host calls. Their completion order must not decide which catalogue
+  // the developer sees.
+  invoke(stage, 'Retry catalogue');
+  invoke(stage, 'Retry catalogue');
+  await settled();
+  assert.equal(attempts, 3);
+  assert.ok(labelled(stage, 'Review access'));
+
+  rejectSlowRetry(new Error('stale retry failed after the current catalogue loaded'));
+  await settled();
+  const visible = orderedLabels(stage);
+  assert.ok(visible.includes('Review access'));
+  assert.equal(visible.includes('Extension catalogue could not be completed.'), false);
+  assert.equal(visible.includes('stale retry failed after the current catalogue loaded'), false);
+});
+
 test('extension inspection keeps invalid and failed references recoverable with a direct retry', async () => {
   const references = [];
   let attempt = 0;
