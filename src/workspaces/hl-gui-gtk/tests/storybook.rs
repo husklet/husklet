@@ -904,6 +904,9 @@ mod unix {
             for expected in [true, false] {
                 controlled.emit_by_name::<()>("activate", &[]);
                 settle_toolkit();
+                allocate(&root, realized_window.width(), 1_600);
+                realized_window.queue_draw();
+                settle_toolkit();
                 let reports = surface.reports().drain();
                 assert_eq!(reports.len(), 1, "one keyboard activation reports exactly once");
                 let hl_gui::Event::Expand { value, .. } = &reports[0] else {
