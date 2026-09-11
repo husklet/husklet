@@ -727,6 +727,11 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
           setError(
             'The install is still being saved after its confirmation reply was lost. Wait for completion before acting again.',
           );
+        } else if (status.state === 'ready' && status.candidate) {
+          setAcquisition(status);
+          setError(
+            `The extension was not saved. Its reviewed image and selected access are retained for a safe retry. ${message(cause)}`,
+          );
         } else {
           setAcquisition(status);
           setError(message(cause));

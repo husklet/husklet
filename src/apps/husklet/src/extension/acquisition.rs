@@ -332,25 +332,26 @@ impl ExtensionAcquisitions {
         workspace_environment: &hl_extension::WorkspaceEnvironmentGrant,
     ) -> Result<(), HostError> {
         let _commit = self.commits.lock().unwrap_or_else(PoisonError::into_inner);
-        let (candidate, _) = self.take_ready(job, revision)?;
-        external_workspace_environment(&candidate.manifest)?;
-        let result = Roster::workspace(&self.workspace)
+        let (candidate, visible) = self.take_ready(job, revision)?;
+        let result = external_workspace_environment(&candidate.manifest)
+            .and_then(|()| Roster::workspace(&self.workspace).map_err(|error| HostError::Failed(error.to_string())))
             .and_then(|mut roster| {
-                roster.register_resource_scoped(
-                    &candidate.manifest,
-                    &candidate.digest,
-                    consented,
-                    containers,
-                    images,
-                    networks,
-                    volumes,
-                    filesystem,
-                    workspace_environment,
-                    moment(),
-                )
-            })
-            .map_err(|error| HostError::Failed(error.to_string()));
-        self.finish(job, result, AcquisitionState::Installed)
+                roster
+                    .register_resource_scoped(
+                        &candidate.manifest,
+                        &candidate.digest,
+                        consented,
+                        containers,
+                        images,
+                        networks,
+                        volumes,
+                        filesystem,
+                        workspace_environment,
+                        moment(),
+                    )
+                    .map_err(|error| HostError::Failed(error.to_string()))
+            });
+        self.finish(job, result, AcquisitionState::Installed, candidate, visible)
     }
 
     #[cfg(test)]
@@ -391,9 +392,10 @@ impl ExtensionAcquisitions {
         workspace_environment: &hl_extension::WorkspaceEnvironmentGrant,
     ) -> Result<(), HostError> {
         let _commit = self.commits.lock().unwrap_or_else(PoisonError::into_inner);
-        let (candidate, installed_digest) = self.take_ready(job, revision)?;
-        external_workspace_environment(&candidate.manifest)?;
+        let (candidate, visible) = self.take_ready(job, revision)?;
+        let installed_digest = visible.installed_digest.clone();
         let result = (|| {
+            external_workspace_environment(&candidate.manifest).map_err(|error| error.to_string())?;
             let installed_digest = installed_digest
                 .ok_or_else(|| "the extension was not installed when consent was requested".to_owned())?;
             let mut roster = Roster::workspace(&self.workspace).map_err(|error| error.to_string())?;
@@ -415,10 +417,10 @@ impl ExtensionAcquisitions {
                 .map_err(|error| error.to_string())
         })()
         .map_err(HostError::Failed);
-        self.finish(job, result, AcquisitionState::Updated)
+        self.finish(job, result, AcquisitionState::Updated, candidate, visible)
     }
 
-    fn take_ready(&self, job: AcquisitionJob, revision: u64) -> Result<(Candidate, Option<String>), HostError> {
+    fn take_ready(&self, job: AcquisitionJob, revision: u64) -> Result<(Candidate, AcquisitionCandidate), HostError> {
         let mut registry = self.lock();
         let current = registry
             .jobs
@@ -434,15 +436,15 @@ impl ExtensionAcquisitions {
             .candidate
             .take()
             .expect("ready snapshots retain their exact candidate");
-        let installed_digest = match &current.snapshot.state {
-            AcquisitionState::Ready(candidate) => candidate.installed_digest.clone(),
+        let visible = match &current.snapshot.state {
+            AcquisitionState::Ready(candidate) => candidate.clone(),
             _ => unreachable!("ready state checked above"),
         };
         current.snapshot.revision = current.snapshot.revision.saturating_add(1);
         current.snapshot.state = AcquisitionState::Committing;
         let snapshot = current.snapshot.clone();
         self.events.acquisition(job, snapshot);
-        Ok((candidate, installed_digest))
+        Ok((candidate, visible))
     }
 
     fn finish(
@@ -450,6 +452,8 @@ impl ExtensionAcquisitions {
         job: AcquisitionJob,
         result: Result<(), HostError>,
         success: AcquisitionState,
+        candidate: Candidate,
+        visible: AcquisitionCandidate,
     ) -> Result<(), HostError> {
         let mut registry = self.lock();
         let current = registry.jobs.get_mut(&job).expect("a committing job remains retained");
@@ -462,8 +466,9 @@ impl ExtensionAcquisitions {
                 Ok(())
             }
             Err(error) => {
+                current.candidate = Some(candidate);
                 current.snapshot.revision = current.snapshot.revision.saturating_add(1);
-                current.snapshot.state = AcquisitionState::Failed(error.to_string());
+                current.snapshot.state = AcquisitionState::Ready(visible);
                 let snapshot = current.snapshot.clone();
                 self.events.acquisition(job, snapshot);
                 Err(error)
@@ -590,6 +595,48 @@ mod tests {
 
         assert!(external_workspace_environment(&candidate).is_err(), "install boundary");
         assert!(external_workspace_environment(&candidate).is_err(), "update boundary");
+    }
+
+    #[test]
+    fn failed_commit_restores_the_exact_candidate_at_a_fresh_revision() {
+        let root = tempfile::tempdir().unwrap();
+        let mut rejected = manifest("1.0.0", &[Capability::WorkspaceEnvironmentRead]);
+        rejected.workspace_environment = hl_extension::WorkspaceEnvironmentGrant {
+            read: vec![hl_extension::WorkspaceEnvironmentSelector::All { all: true }],
+            write: Vec::new(),
+        };
+        let service =
+            ExtensionAcquisitions::with_acquirer(&workspace(root.path()), move |_, reference, progress, _| {
+                let _ = progress.send(Acquisition::Ready(Candidate {
+                    reference: reference.into(),
+                    digest: "sha256:reviewed".into(),
+                    manifest: rejected.clone(),
+                }));
+            });
+        let job = service.start("registry/sample:1").unwrap();
+        let reviewed = ready(&service, job);
+
+        let failure = service
+            .install(
+                job,
+                reviewed.revision,
+                &Grant::new([Capability::WorkspaceEnvironmentRead]),
+            )
+            .expect_err("external all-environment authority is refused");
+        assert!(failure.to_string().contains("cannot request all workspace environment"));
+
+        let restored = service.status(job).unwrap();
+        assert!(restored.revision > reviewed.revision);
+        assert_eq!(
+            restored.state, reviewed.state,
+            "the reviewed digest and request stay exact"
+        );
+        assert!(
+            service.install(job, reviewed.revision, &Grant::default()).is_err(),
+            "the failed commit cannot replay its stale consent revision"
+        );
+        service.cancel(job, restored.revision).unwrap();
+        assert_eq!(service.status(job).unwrap().state, AcquisitionState::Cancelled);
     }
 
     fn workspace(root: &std::path::Path) -> WorkspaceConfig {

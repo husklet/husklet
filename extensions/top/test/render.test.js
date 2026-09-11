@@ -2514,6 +2514,7 @@ test('extension image entry submits from the keyboard and consent explains reque
   const calls = [];
   let installs = 0;
   let acquisitionState = 'ready';
+  let acquisitionRevision = 7;
   let committed = false;
   const stage = host();
   stage.render(
@@ -2540,7 +2541,7 @@ test('extension image entry submits from the keyboard and consent explains reque
           acquisition: async () => ({
             job: 'candidate',
             reference: 'registry.example/assistant:1.2.0',
-            revision: 7,
+            revision: acquisitionRevision,
             state: acquisitionState,
             progress: null,
             candidate:
@@ -2559,7 +2560,7 @@ test('extension image entry submits from the keyboard and consent explains reque
             calls.push(['install', job, revision, granted]);
             installs += 1;
             if (installs === 1) {
-              acquisitionState = 'failed';
+              acquisitionRevision = 8;
               throw new Error('signature verification unavailable');
             }
             committed = true;
@@ -2630,21 +2631,21 @@ test('extension image entry submits from the keyboard and consent explains reque
   invoke(stage, 'Install with selected access');
   await settled();
   await settled();
-  assert.ok(labelled(stage, 'signature verification unavailable'));
   assert.ok(
-    labelled(stage, 'Retry inspection'),
-    'a consumed failed job asks for a fresh inspection rather than replaying stale consent',
+    labelled(
+      stage,
+      'The extension was not saved. Its reviewed image and selected access are retained for a safe retry. signature verification unavailable',
+    ),
   );
-  invoke(stage, 'Retry inspection');
-  await settled();
-  await settled();
-  assert.ok(labelled(stage, 'No access selected · 2 requested'));
-  toggleSwitch(stage, 2, true);
-  toggleSwitch(stage, 3, true);
+  assert.ok(
+    labelled(stage, 'Install with selected access'),
+    'a failed commit retains the exact reviewed candidate for a fresh revision retry',
+  );
   invoke(stage, 'Install with selected access');
   await settled();
   await settled();
-  assert.deepEqual(calls.at(-1).slice(0, 3), ['install', 'candidate', 7]);
+  assert.deepEqual(calls.filter(([operation]) => operation === 'inspect').length, 1);
+  assert.deepEqual(calls.at(-1).slice(0, 3), ['install', 'candidate', 8]);
   assert.deepEqual(calls.at(-1)[3].capabilities, ['containers:read', 'terminals:output']);
   assert.ok(
     labelled(
