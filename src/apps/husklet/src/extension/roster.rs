@@ -782,6 +782,36 @@ mod tests {
     }
 
     #[test]
+    fn failed_fault_clear_does_not_partially_uninstall_the_extension() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let refuse = Arc::new(AtomicBool::new(false));
+        let storage = Directory::open(temporary.path()).expect("storage");
+        let mut roster = Roster::open(RefuseFaultClear {
+            inner: storage,
+            refuse: Arc::clone(&refuse),
+        })
+        .expect("roster");
+        let asked = manifest("sample", &[Capability::Interface]);
+        roster
+            .register(&asked, "sha256:aaaa", &asked.capabilities, 7)
+            .expect("registered");
+        roster.enable(&asked.name).expect("enabled");
+        roster.fault(&asked.name, 6).expect("fault persisted");
+        refuse.store(true, Ordering::Release);
+
+        assert!(roster.remove(&asked.name).is_err());
+
+        assert_eq!(roster.stage(&asked.name), Stage::Fault { restarts: 6 });
+        let reopened = opened(temporary.path());
+        assert_eq!(
+            reopened.stage(&asked.name),
+            Stage::Fault { restarts: 6 },
+            "a refused removal retains the durable record and crash marker"
+        );
+        assert_eq!(reopened.entries()[0].image_digest, "sha256:aaaa");
+    }
+
+    #[test]
     fn a_removed_extension_leaves_no_grant_behind() {
         let temporary = tempfile::tempdir().expect("temporary directory");
         let asked = manifest("sample", &[Capability::Interface]);

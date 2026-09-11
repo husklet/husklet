@@ -116,8 +116,18 @@ impl<S: Storage> Records<S> {
     /// Returns `Fault::Storage` when the removal fails.
     pub fn forget(&self, name: &ExtensionName) -> Result<(), Fault> {
         let key = self.key(name)?;
-        self.storage.remove(&key).map_err(fault)?;
-        self.clear_fault(name)
+        let previous_fault = self.fault(name)?;
+        self.clear_fault(name)?;
+        if let Err(error) = self.storage.remove(&key).map_err(fault) {
+            // The consent record and its crash marker are one lifecycle state.
+            // If the record cannot be removed, put the marker back so reopening
+            // cannot turn a failed removal into an apparently healthy install.
+            if let Some(restarts) = previous_fault {
+                let _ = self.save_fault(name, restarts);
+            }
+            return Err(error);
+        }
+        Ok(())
     }
 
     /// The restart count of a fault the live host reported, if one was saved.
