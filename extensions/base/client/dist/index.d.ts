@@ -29,6 +29,11 @@ export declare class JsonLineParseError extends SyntaxError {
     readonly line: any;
     constructor(line: any, cause: any);
 }
+/** One syntactically valid JSON record did not satisfy the consumer's result schema. */
+export declare class JsonLineDecodeError extends TypeError {
+    readonly line: any;
+    constructor(line: any, cause: any);
+}
 /** Catalogue discovery was bounded before it became a complete searchable set. */
 export declare class IncompleteCatalogueError extends Error {
     readonly received: any;

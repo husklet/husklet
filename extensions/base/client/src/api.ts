@@ -711,6 +711,12 @@ export declare class JsonLineParseError extends SyntaxError {
   readonly cause: unknown;
 }
 
+/** One syntactically valid JSON record did not satisfy the consumer's result schema. */
+export declare class JsonLineDecodeError extends TypeError {
+  readonly line: number;
+  readonly cause: unknown;
+}
+
 export declare class TerminalOperationError extends Error {
   readonly operation: 'open-tab';
   readonly result: Readonly<{ tab: string; title: string }>;
@@ -1094,7 +1100,7 @@ export interface WorkspaceApi {
       onLine: (text: string, line: number) => void | Promise<void>,
     ): Promise<{ executionId: string; execution: ExecutionSummary; lines: number }>;
     /** Stream newline-delimited JSON from stdout with bounded record buffering and callback backpressure. */
-    execJsonLines(
+    execJsonLines<Value = unknown>(
       id: string,
       generation: number,
       options: {
@@ -1109,6 +1115,8 @@ export interface WorkspaceApi {
         maxLineBytes: number;
         /** Cancel before parsing or delivering a record beyond this aggregate result bound. */
         maxLines?: number;
+        /** Validate and map each parsed value before it reaches the result callback. */
+        decode?: (value: unknown, line: number) => Value;
         pageLimit?: number;
         pollIntervalMs?: number;
         signal?: AbortSignal;
@@ -1118,7 +1126,7 @@ export interface WorkspaceApi {
         onStarted?: (executionId: string) => void | Promise<void>;
         onStderr?: (text: string) => void | Promise<void>;
       },
-      onValue: (value: unknown, line: number) => void | Promise<void>,
+      onValue: (value: Value, line: number) => void | Promise<void>,
     ): Promise<{ executionId: string; execution: ExecutionSummary; lines: number }>;
     signalExecution(id: string, signal: string): Promise<void>;
     /** Atomically signal and await one execution without blocking cancellation behind a prior wait. */

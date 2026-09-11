@@ -54,6 +54,16 @@ export class JsonLineParseError extends SyntaxError {
         this.cause = cause;
     }
 }
+/** One syntactically valid JSON record did not satisfy the consumer's result schema. */
+export class JsonLineDecodeError extends TypeError {
+    line;
+    constructor(line, cause) {
+        super(`execution output line ${line} does not match the expected schema`);
+        this.name = 'JsonLineDecodeError';
+        this.line = line;
+        this.cause = cause;
+    }
+}
 /** Catalogue discovery was bounded before it became a complete searchable set. */
 export class IncompleteCatalogueError extends Error {
     received;
@@ -1420,7 +1430,10 @@ export function workspace(session, { signal } = {}) {
             execJsonLines: async (id, generation, configuration, onValue) => {
                 if (typeof onValue !== 'function')
                     throw new TypeError('JSON lines execution requires a value callback');
-                return api.containers.execLines(id, generation, configuration, async (text, line) => {
+                const { decode = (value) => value, ...options } = configuration;
+                if (typeof decode !== 'function')
+                    throw new TypeError('JSON lines execution decode must be a function');
+                return api.containers.execLines(id, generation, options, async (text, line) => {
                     let value;
                     try {
                         value = JSON.parse(text);
@@ -1428,7 +1441,14 @@ export function workspace(session, { signal } = {}) {
                     catch (cause) {
                         throw new JsonLineParseError(line, cause);
                     }
-                    await onValue(value, line);
+                    let decoded;
+                    try {
+                        decoded = decode(value, line);
+                    }
+                    catch (cause) {
+                        throw new JsonLineDecodeError(line, cause);
+                    }
+                    await onValue(decoded, line);
                 });
             },
             attachTerminal: (id, command) => session

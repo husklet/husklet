@@ -712,6 +712,11 @@ export declare class JsonLineParseError extends SyntaxError {
     readonly line: number;
     readonly cause: unknown;
 }
+/** One syntactically valid JSON record did not satisfy the consumer's result schema. */
+export declare class JsonLineDecodeError extends TypeError {
+    readonly line: number;
+    readonly cause: unknown;
+}
 export declare class TerminalOperationError extends Error {
     readonly operation: 'open-tab';
     readonly result: Readonly<{
@@ -1075,7 +1080,7 @@ export interface WorkspaceApi {
             lines: number;
         }>;
         /** Stream newline-delimited JSON from stdout with bounded record buffering and callback backpressure. */
-        execJsonLines(id: string, generation: number, options: {
+        execJsonLines<Value = unknown>(id: string, generation: number, options: {
             command: string[];
             environment?: [string, string][];
             /** Credential keys resolved by the host directly into process environment variables. */
@@ -1087,6 +1092,8 @@ export interface WorkspaceApi {
             maxLineBytes: number;
             /** Cancel before parsing or delivering a record beyond this aggregate result bound. */
             maxLines?: number;
+            /** Validate and map each parsed value before it reaches the result callback. */
+            decode?: (value: unknown, line: number) => Value;
             pageLimit?: number;
             pollIntervalMs?: number;
             signal?: AbortSignal;
@@ -1095,7 +1102,7 @@ export interface WorkspaceApi {
             /** Runs once the host returns the live execution identity, before output is consumed. */
             onStarted?: (executionId: string) => void | Promise<void>;
             onStderr?: (text: string) => void | Promise<void>;
-        }, onValue: (value: unknown, line: number) => void | Promise<void>): Promise<{
+        }, onValue: (value: Value, line: number) => void | Promise<void>): Promise<{
             executionId: string;
             execution: ExecutionSummary;
             lines: number;
