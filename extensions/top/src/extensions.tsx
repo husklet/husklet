@@ -1251,9 +1251,17 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                                   onInvoke={() => inspect(entry.reference)}
                                 />
                               </CardActions>
-                            ) : provider ? (
+                            ) : installedExtension ? (
                               <CardActions gap={1} align="start" justify="start" width="fill">
-                                {providerAction(installedExtension, provider)}
+                                {provider ? providerAction(installedExtension, provider) : null}
+                                <Button
+                                  label="Check current image"
+                                  tooltip={`Inspect ${entry.reference} again and compare its immutable digest`}
+                                  size="small"
+                                  variant="outline"
+                                  enabled={!busy && compatibility.compatible !== false}
+                                  onInvoke={() => inspect(entry.reference)}
+                                />
                               </CardActions>
                             ) : null}
                           </Card>

@@ -1507,6 +1507,26 @@ test('an up-to-date built-in is hidden by default and available through the inst
             },
           ],
           catalogue: firstPartyCatalogue,
+          startAcquisition: async (reference) => {
+            calls.push(['inspect', reference]);
+            return { job: 'current-image' };
+          },
+          acquisition: async () => ({
+            job: 'current-image',
+            reference: firstPartyCatalogue.entries[0].reference,
+            revision: 2,
+            state: 'ready',
+            progress: null,
+            candidate: {
+              name: 'storybook',
+              version: '2.0.0',
+              image_digest: `sha256:${'a'.repeat(64)}`,
+              installed_image_digest: `sha256:${'a'.repeat(64)}`,
+              requested: [],
+              required: [],
+            },
+            error: null,
+          }),
         },
         terminal: {
           openTabAndWait: async (...args) => {
@@ -1552,6 +1572,11 @@ test('an up-to-date built-in is hidden by default and available through the inst
   assert.equal(labelled(stage, 'Review access'), undefined);
   assert.equal(labelled(stage, 'Review update'), undefined);
   assert.ok(labelled(stage, 'Open Component playground'));
+  assert.ok(labelled(stage, 'Check current image'));
+  invoke(stage, 'Check current image');
+  await settled();
+  await settled();
+  assert.ok(calls.some(([operation]) => operation === 'inspect'));
   assert.deepEqual(
     taggedProperty(stage, 'Open Component playground', 'Button', 'Size'),
     { ControlSize: 'Small' },
@@ -1565,21 +1590,27 @@ test('an up-to-date built-in is hidden by default and available through the inst
     stage.frames.flatMap((frame) => frame.patches).some((patch) => patch.Create?.tag === 'Spinner'),
   );
   invoke(stage, 'Opening…');
-  assert.deepEqual(calls, [['open', 'Component playground']]);
+  assert.deepEqual(
+    calls.filter(([operation]) => operation !== 'inspect'),
+    [['open', 'Component playground']],
+  );
   releaseOpen();
   await settled();
   await settled();
-  assert.deepEqual(calls, [
-    ['open', 'Component playground'],
+  assert.deepEqual(
+    calls.filter(([operation]) => operation !== 'inspect'),
     [
-      'switch',
-      'pane-storybook',
-      7,
-      11,
-      { kind: 'surface', extension: 'storybook', provider: 'playground' },
+      ['open', 'Component playground'],
+      [
+        'switch',
+        'pane-storybook',
+        7,
+        11,
+        { kind: 'surface', extension: 'storybook', provider: 'playground' },
+      ],
+      ['focus', 'pane-storybook'],
     ],
-    ['focus', 'pane-storybook'],
-  ]);
+  );
   assert.ok(labelled(stage, 'Component playground opened in a new tab.'));
 });
 
