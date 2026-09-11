@@ -16,7 +16,8 @@ mod unix {
         NetworkSummary,
     };
     use hl_extension::{
-        Capability, ChannelId, ExtensionName, ExtensionPreferences, ExtensionSummary, Frame, Grant, Hello, PROTOCOL,
+        Capability, ChannelId, ExtensionName, ExtensionPreferences, ExtensionSummary, FilesystemGrant,
+        FilesystemSelector, Frame, Grant, Hello, PROTOCOL, RelativePath,
         PaneProvider, PreferenceValue, Reply, Request, Snapshot, Welcome, Wire, WorkspaceConfiguration, WorkspaceInfo,
         WorkspaceTerminal, codec,
     };
@@ -1148,13 +1149,21 @@ mod unix {
                             name: ExtensionName::new("developer-tool-01").expect("valid extension"),
                             version: "1.0.0".into(),
                             image_digest: next_digest.clone(),
-                            requested: Grant::new([Capability::ContainerRead, Capability::Interface]),
+                            requested: Grant::new([
+                                Capability::FilesystemRead,
+                                Capability::Interface,
+                            ]),
                             required: Grant::new([Capability::Interface]),
                             requested_images: Default::default(),
                             requested_containers: Default::default(),
                             requested_networks: Default::default(),
                             requested_volumes: Default::default(),
-                            requested_filesystem: Default::default(),
+                            requested_filesystem: FilesystemGrant {
+                                read: vec![FilesystemSelector::Exact {
+                                    exact: RelativePath::new("README.md").expect("valid exact path"),
+                                }],
+                                ..FilesystemGrant::default()
+                            },
                             requested_workspace_environment: Default::default(),
                             installed_image_digest: Some(old_digest.clone()),
                         }),
@@ -1169,7 +1178,7 @@ mod unix {
         drain_extension_renders(wire, tree, surface);
 
         let review_root = surface.widget().clone().upcast::<gtk::Widget>();
-        assert!(has_label(&review_root, "No access selected · 2 requested"));
+        assert!(has_label(&review_root, "No access selected · 3 requested"));
         assert!(has_label(
             &review_root,
             "Required to keep this extension available after the update: Render this extension interface. Select it below to continue."
@@ -1191,10 +1200,28 @@ mod unix {
             wire,
             tree,
             surface,
-            "Review decision · 1/2 selected",
+            "Review decision · 1/3 selected",
             |request| match request {
                 Request::EventUnsubscribe { .. } => Reply::Done,
                 other => panic!("unexpected extension consent call: {other:?}"),
+            },
+            || None,
+        );
+        let review_root = surface.widget().clone().upcast::<gtk::Widget>();
+        let exact = find_label(&review_root, "View contents file · README.md")
+            .mnemonic_widget()
+            .and_then(|widget| widget.downcast::<gtk::Switch>().ok())
+            .expect("exact-file label names its native switch");
+        let _ = surface.reports().drain();
+        let _: bool = exact.emit_by_name("state-set", &[&true]);
+        exact.set_active(true);
+        settle_toolkit();
+        send_report(surface, wire, 102, |event| matches!(event, hl_gui::Event::Toggle { .. }));
+        apply_extension_update_until(
+            wire, tree, surface, "Review decision · 3/3 selected",
+            |request| match request {
+                Request::EventUnsubscribe { .. } => Reply::Done,
+                other => panic!("unexpected exact-file consent call: {other:?}"),
             },
             || None,
         );
@@ -1228,13 +1255,21 @@ mod unix {
                             name: ExtensionName::new("developer-tool-01").expect("valid extension"),
                             version: "1.0.0".into(),
                             image_digest: next_digest.clone(),
-                            requested: Grant::new([Capability::ContainerRead, Capability::Interface]),
+                            requested: Grant::new([
+                                Capability::FilesystemRead,
+                                Capability::Interface,
+                            ]),
                             required: Grant::new([Capability::Interface]),
                             requested_images: Default::default(),
                             requested_containers: Default::default(),
                             requested_networks: Default::default(),
                             requested_volumes: Default::default(),
-                            requested_filesystem: Default::default(),
+                            requested_filesystem: FilesystemGrant {
+                                read: vec![FilesystemSelector::Exact {
+                                    exact: RelativePath::new("README.md").expect("valid exact path"),
+                                }],
+                                ..FilesystemGrant::default()
+                            },
                             requested_workspace_environment: Default::default(),
                             installed_image_digest: Some(old_digest.clone()),
                         }),
@@ -1246,12 +1281,25 @@ mod unix {
                     revision,
                     image_digest,
                     granted,
+                    filesystem,
                     ..
                 } => {
                     assert_eq!(job, "gtk-update");
                     assert_eq!(revision, 2);
                     assert_eq!(image_digest, next_digest);
-                    assert_eq!(granted, Grant::new([Capability::Interface]));
+                    assert_eq!(
+                        granted,
+                        Grant::new([Capability::FilesystemRead, Capability::Interface])
+                    );
+                    assert_eq!(
+                        filesystem,
+                        FilesystemGrant {
+                            read: vec![FilesystemSelector::Exact {
+                                exact: RelativePath::new("README.md").expect("valid exact path"),
+                            }],
+                            ..FilesystemGrant::default()
+                        }
+                    );
                     committed.set(true);
                     let updated = updated_extension(&next_digest);
                     Reply::Extension(updated)
