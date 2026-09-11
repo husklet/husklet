@@ -93,6 +93,12 @@ function exactExecutionPageLimit(limit) {
     }
     return limit;
 }
+function exactExecutionLineLimit(limit) {
+    if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1 || limit > 1_000_000)) {
+        throw new RangeError('execution maxLines must be an integer between 1 and 1000000');
+    }
+    return limit;
+}
 function exactExecutionOutputPage(page, limit) {
     if (page.entries.length > limit) {
         throw new TypeError('host returned an execution output page that exceeded its requested entry limit');
@@ -1325,7 +1331,7 @@ export function workspace(session, { signal } = {}) {
                 return { ...result, stdout, stderr };
             },
             execLines: async (id, generation, configuration, onLine) => {
-                const { maxLineBytes, onStderr, ...options } = configuration;
+                const { maxLineBytes, maxLines, onStderr, ...options } = configuration;
                 if (!Number.isSafeInteger(maxLineBytes) ||
                     maxLineBytes < 1 ||
                     maxLineBytes > 16 * 1024 * 1024) {
@@ -1335,6 +1341,7 @@ export function workspace(session, { signal } = {}) {
                     throw new TypeError('lines execution requires a line callback');
                 if (onStderr !== undefined && typeof onStderr !== 'function')
                     throw new TypeError('lines execution onStderr must be a function');
+                exactExecutionLineLimit(maxLines);
                 let pending = [];
                 let lines = 0;
                 const decoder = new TextDecoder('utf-8', { fatal: true });
@@ -1348,6 +1355,9 @@ export function workspace(session, { signal } = {}) {
                         throw new RangeError(`execution line exceeded the ${maxLineBytes} byte limit`);
                     const text = decoder.decode(Uint8Array.from(bytes));
                     const line = lines + 1;
+                    if (maxLines !== undefined && line > maxLines) {
+                        throw new RangeError(`execution output exceeded the ${maxLines} line limit`);
+                    }
                     await onLine(text, line);
                     lines = line;
                 };

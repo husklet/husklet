@@ -1049,6 +1049,8 @@ export interface WorkspaceApi {
             /** Bounded chunks written serially to stdin and half-closed before output is consumed. */
             input?: Iterable<string | Iterable<number>> | AsyncIterable<string | Iterable<number>>;
             maxLineBytes: number;
+            /** Cancel before delivering a record beyond this aggregate result bound. */
+            maxLines?: number;
             pageLimit?: number;
             pollIntervalMs?: number;
             signal?: AbortSignal;
@@ -1073,6 +1075,8 @@ export interface WorkspaceApi {
             /** Bounded chunks written serially to stdin and half-closed before output is consumed. */
             input?: Iterable<string | Iterable<number>> | AsyncIterable<string | Iterable<number>>;
             maxLineBytes: number;
+            /** Cancel before parsing or delivering a record beyond this aggregate result bound. */
+            maxLines?: number;
             pageLimit?: number;
             pollIntervalMs?: number;
             signal?: AbortSignal;

@@ -2837,6 +2837,114 @@ test('real Unix structured execution identifies the malformed record and preserv
   }
 });
 
+test('real Unix bounded query cancels before delivering an excess row and keeps the session reusable', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-query-row-limit-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const containerId = 'c'.repeat(64);
+  const executionId = 'e'.repeat(32);
+  const requests = [];
+  const connections = new Set();
+  const server = net.createServer((socket) => {
+    connections.add(socket);
+    socket.on('close', () => connections.delete(socket));
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.kind !== KIND.request) continue;
+        requests.push(frame.payload.call);
+        const payload =
+          frame.payload.call === 'container_exec'
+            ? { reply: 'identity', with: executionId }
+            : frame.payload.call === 'execution_output'
+              ? {
+                  reply: 'execution_output',
+                  with: {
+                    entries: [
+                      {
+                        sequence: 1,
+                        timestamp_ms: 1,
+                        stream: 'stdout',
+                        bytes: [...Buffer.from('{"id":1}\n{"id":2}\n')],
+                      },
+                    ],
+                    next: 1,
+                    more: false,
+                    eof: true,
+                    gap: false,
+                  },
+                }
+              : frame.payload.call === 'workspace_info'
+                ? {
+                    reply: 'workspace',
+                    with: { name: 'database', image: 'postgres', architecture: 'amd64' },
+                  }
+                : { reply: 'done' };
+        socket.write(encode({ channel: frame.channel, kind: KIND.response, payload }));
+      }
+    });
+    socket.write(
+      encode({
+        channel: CONTROL,
+        kind: KIND.open,
+        payload: {
+          protocol: 1,
+          peer: 'postgres-query-grid',
+          granted: [
+            'containers:read',
+            'containers:execute',
+            'containers:lifecycle',
+            'workspaces:read',
+          ],
+        },
+      }),
+    );
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    const containers = workspace(session).containers;
+    await assert.rejects(
+      containers.execJsonLines(
+        containerId,
+        2,
+        { command: ['psql'], maxLineBytes: 4096, maxLines: 0 },
+        () => {},
+      ),
+      /maxLines.*1.*1000000/,
+    );
+    assert.deepEqual(requests, [], 'invalid aggregate bounds must not start a query');
+    const rows = [];
+    await assert.rejects(
+      containers.execJsonLines(
+        containerId,
+        2,
+        { command: ['psql'], maxLineBytes: 4096, maxLines: 1 },
+        (row) => rows.push(row),
+      ),
+      (error) =>
+        error instanceof ExecutionOperationError &&
+        error.executionId === executionId &&
+        error.phase === 'output' &&
+        error.cause instanceof RangeError &&
+        /1 line limit/.test(error.cause.message),
+    );
+    assert.deepEqual(rows, [{ id: 1 }]);
+    assert.deepEqual(requests, ['container_exec', 'execution_output', 'execution_cancel']);
+    assert.equal((await workspace(session).info()).name, 'database');
+    assert.deepEqual(requests, [
+      'container_exec',
+      'execution_output',
+      'execution_cancel',
+      'workspace_info',
+    ]);
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('real Unix streaming cancellation preserves inspection, cleanup, and session reuse', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-stream-cancel-'));
   const socketPath = path.join(directory, 'host.sock');
