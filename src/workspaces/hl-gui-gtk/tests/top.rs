@@ -1588,6 +1588,7 @@ mod unix {
             reference: "ghcr.io/husklet/storybook:0.4.0".into(),
             publisher: "Husklet".into(),
             source: "Built in".into(),
+            publisher_verified: true,
             protocol: PROTOCOL,
             architectures: vec!["amd64".into(), "arm64".into()],
         }];
@@ -1599,6 +1600,7 @@ mod unix {
             reference: format!("ghcr.io/example/developer-tool-{index:02}:1.0.0"),
             publisher: if index % 2 == 0 { "Acme" } else { "Community" }.into(),
             source: format!("community/developer-tool-{index:02}"),
+            publisher_verified: false,
             protocol: if index == 19 { PROTOCOL + 1 } else { PROTOCOL },
             architectures: vec!["amd64".into(), "arm64".into()],
         }));

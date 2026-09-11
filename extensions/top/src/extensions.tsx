@@ -133,12 +133,9 @@ function catalogueCompatibility(entry: ExtensionCatalogueEntry, architecture: st
   } as const;
 }
 
-function catalogueTrust(entry: ExtensionCatalogueEntry) {
-  const firstParty =
-    entry.publisher.trim().toLowerCase() === 'husklet' &&
-    entry.source.startsWith('husklet:first-party/');
-  return firstParty
-    ? { label: 'Husklet first-party', tone: 'accent' as const }
+export function catalogueTrust(entry: ExtensionCatalogueEntry) {
+  return entry.publisher_verified
+    ? { label: `Verified publisher · ${entry.publisher}`, tone: 'accent' as const }
     : { label: `Publisher · ${entry.publisher}`, tone: 'neutral' as const };
 }
 
@@ -1167,14 +1164,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                                     updateAvailable || !installedExtension ? 'accent' : 'positive'
                                   }
                                 />
-                                <Text
-                                  label={
-                                    trust.label === 'Husklet first-party'
-                                      ? 'Verified publisher · Husklet'
-                                      : trust.label
-                                  }
-                                  color="text-dim"
-                                />
+                                <Text label={trust.label} color="text-dim" />
                                 {compatibility.compatible !== true ? (
                                   <Badge
                                     label={

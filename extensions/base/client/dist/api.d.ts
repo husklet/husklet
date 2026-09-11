@@ -154,6 +154,8 @@ export interface ExtensionCatalogueEntry {
     reference: string;
     publisher: string;
     source: string;
+    /** Host-attested publisher identity. Names and source labels never imply verification. */
+    publisher_verified: boolean;
     /** Discovery hint only; the acquired manifest remains authoritative. */
     protocol?: number;
     /** Bounded OCI architecture hints advertised by the catalogue source. */

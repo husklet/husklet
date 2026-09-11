@@ -2010,6 +2010,13 @@
           }
         },
         {
+          "name": "publisher_verified",
+          "optional": true,
+          "schema": {
+            "kind": "boolean"
+          }
+        },
+        {
           "name": "protocol",
           "optional": true,
           "schema": {
@@ -13790,7 +13797,7 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:7e0154c14d4ba51c",
+  "source_fingerprint": "fnv1a64:e4aeb34bd731df79",
   "specification_version": 1,
   "topics": [
     {

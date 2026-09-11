@@ -26,9 +26,26 @@ import {
   acquisitionFailure,
   acquisitionTechnicalDetail,
   acquisitionLabel,
+  catalogueTrust,
   filterCatalogueEntries,
   filterInstalledExtensions,
 } from '../dist/app.js';
+
+test('catalogue display strings cannot forge verified publisher status', () => {
+  const forged = {
+    publisher: 'Husklet',
+    source: 'husklet:first-party/storybook',
+    publisher_verified: false,
+  };
+  assert.deepEqual(catalogueTrust(forged), {
+    label: 'Publisher · Husklet',
+    tone: 'neutral',
+  });
+  assert.deepEqual(catalogueTrust({ ...forged, publisher_verified: true }), {
+    label: 'Verified publisher · Husklet',
+    tone: 'accent',
+  });
+});
 import {
   ContainerDetailsSource,
   ExecutionDetailsSource,
@@ -144,6 +161,7 @@ const firstPartyCatalogue = async () => ({
       reference: 'ghcr.io/husklet/husklet/extension-storybook:latest',
       publisher: 'Husklet',
       source: 'husklet:first-party/storybook',
+      publisher_verified: true,
     },
   ],
   complete: true,
@@ -169,6 +187,7 @@ const largeCatalogueEntries = [
     reference: 'registry/storybook:2',
     publisher: 'Husklet',
     source: 'husklet:first-party/storybook',
+    publisher_verified: true,
     protocol: 1,
     architectures: ['amd64'],
   },

@@ -276,6 +276,7 @@ fn first_party_catalogue(reference: Option<&str>, architecture: &str) -> Vec<Ext
         reference: reference.into(),
         publisher: "Husklet".into(),
         source: "husklet:first-party/storybook".into(),
+        publisher_verified: true,
         protocol: hl_extension::PROTOCOL,
         architectures: vec![architecture.into()],
     })

@@ -871,6 +871,9 @@ pub struct ExtensionCatalogueEntry {
     pub reference: String,
     pub publisher: String,
     pub source: String,
+    /// True only when the host authenticated this publisher; display strings never imply trust.
+    #[serde(default)]
+    pub publisher_verified: bool,
     /// Discovery-time protocol compatibility hint; acquisition remains authoritative.
     #[serde(default)]
     pub protocol: u32,
@@ -1756,6 +1759,7 @@ mod tests {
             reference: "registry/storybook:latest".into(),
             publisher: "Husklet".into(),
             source: "husklet:first-party/storybook".into(),
+            publisher_verified: true,
             protocol: crate::PROTOCOL,
             architectures: vec!["amd64".into()],
         };

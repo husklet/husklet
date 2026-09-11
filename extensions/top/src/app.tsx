@@ -55,6 +55,7 @@ export {
   acquisitionFailure,
   acquisitionTechnicalDetail,
   acquisitionLabel,
+  catalogueTrust,
   filterCatalogueEntries,
   filterInstalledExtensions,
 } from './extensions.js';
