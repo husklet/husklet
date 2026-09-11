@@ -91,12 +91,20 @@ impl ExtensionManagement {
         // Runtime cleanup can fail transiently. Keep the exact digest-bound
         // record until it succeeds so the same uninstall remains retryable.
         cleanup.retire()?;
-        let result = self.roster()?.remove_if_digest(&name, image_digest).map_err(failure);
-        self.changed(result)?;
-        cleanup.purge()?;
-        super::StateBlob::new(&self.workspace.storage_dir(&crate::paths::hl_root()), &name)
+        let mut roster = self.roster()?;
+        let removed = roster.take_if_digest(&name, image_digest).map_err(failure)?;
+        let cleanup_result = cleanup.purge().and_then(|()| {
+            super::StateBlob::new(&self.workspace.storage_dir(&crate::paths::hl_root()), &name)
             .map_err(|error| HostError::Failed(error.to_string()))?
             .purge()
+        });
+        if let Err(error) = cleanup_result {
+            roster.restore(&removed).map_err(|rollback| {
+                HostError::Failed(format!("{error}; restoring extension authority also failed: {rollback}"))
+            })?;
+            return Err(error);
+        }
+        self.changed(Ok(()))
     }
 }
 
@@ -374,6 +382,7 @@ mod tests {
     struct Cleanup {
         data: std::path::PathBuf,
         fail_retire: bool,
+        fail_purge: bool,
     }
 
     impl RemovalCleanup for Cleanup {
@@ -386,6 +395,9 @@ mod tests {
         }
 
         fn purge(self) -> Result<(), HostError> {
+            if self.fail_purge {
+                return Err(HostError::Failed("sidecar data purge timed out".into()));
+            }
             std::fs::remove_dir_all(self.data).map_err(|error| HostError::Failed(error.to_string()))
         }
     }
@@ -621,10 +633,27 @@ mod tests {
                 Cleanup {
                     data: data.clone(),
                     fail_retire: true,
+                    fail_purge: false,
                 },
             )
             .expect_err("runtime cleanup fails");
         assert!(matches!(failure, HostError::Failed(reason) if reason.contains("timed out")));
+        assert_eq!(management.inspect(name.as_str()).unwrap().image_digest, digest);
+        assert_eq!(state.read().unwrap().contents, b"retry-state");
+        assert_eq!(std::fs::read(data.join("index.db")).unwrap(), b"retry-data");
+
+        let failure = management
+            .remove_with(
+                name.clone(),
+                &digest,
+                Cleanup {
+                    data: data.clone(),
+                    fail_retire: false,
+                    fail_purge: true,
+                },
+            )
+            .expect_err("private data cleanup fails");
+        assert!(matches!(failure, HostError::Failed(reason) if reason.contains("data purge timed out")));
         assert_eq!(management.inspect(name.as_str()).unwrap().image_digest, digest);
         assert_eq!(state.read().unwrap().contents, b"retry-state");
         assert_eq!(std::fs::read(data.join("index.db")).unwrap(), b"retry-data");
@@ -636,6 +665,7 @@ mod tests {
                 Cleanup {
                     data: data.clone(),
                     fail_retire: false,
+                    fail_purge: false,
                 },
             )
             .unwrap();

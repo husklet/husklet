@@ -460,11 +460,38 @@ impl<S: Storage> Roster<S> {
 
     /// Forget only the exact image incarnation the caller inspected.
     pub fn remove_if_digest(&mut self, name: &ExtensionName, image_digest: &str) -> Result<(), Refusal> {
+        self.take_if_digest(name, image_digest).map(|_| ())
+    }
+
+    pub(crate) fn take_if_digest(
+        &mut self,
+        name: &ExtensionName,
+        image_digest: &str,
+    ) -> Result<Record, Refusal> {
         let current = self.entries().into_iter().find(|entry| entry.name == *name);
         if current.as_ref().map(|entry| entry.image_digest.as_str()) != Some(image_digest) {
             return Err(Objection::Changed(name.clone()).into());
         }
-        self.remove(name)
+        let previous = self.installation.clone();
+        let record = self
+            .installation
+            .uninstall(name)
+            .expect("digest check proved the record exists");
+        if let Err(fault) = self.records.forget(name) {
+            self.installation = previous;
+            return Err(fault.into());
+        }
+        Ok(record)
+    }
+
+    pub(crate) fn restore(&mut self, record: &Record) -> Result<(), Refusal> {
+        let previous = self.installation.clone();
+        enrol(&mut self.installation, record)?;
+        if let Err(fault) = self.records.save(record) {
+            self.installation = previous;
+            return Err(fault.into());
+        }
+        Ok(())
     }
 }
 
