@@ -798,6 +798,13 @@ export declare class FileTextLimitError extends RangeError {
     readonly total: number;
     readonly limit: number;
 }
+/** A ranged read crossed file generations and must be restarted from a coherent identity. */
+export declare class FileIdentityChangedError extends Error {
+    readonly path: string;
+    readonly expected: string;
+    readonly actual: string;
+    readonly offset: number;
+}
 export interface ConnectOptions {
     path?: string;
     /** Bounds pending calls, heartbeats, and queued event callback deliveries. */

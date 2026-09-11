@@ -98,6 +98,14 @@ export declare class FileTextLimitError extends RangeError {
     readonly limit: any;
     constructor(path: any, identity: any, total: any, limit: any);
 }
+/** A ranged read crossed file generations and must be restarted from a coherent identity. */
+export declare class FileIdentityChangedError extends Error {
+    readonly path: any;
+    readonly expected: any;
+    readonly actual: any;
+    readonly offset: any;
+    constructor(path: any, expected: any, actual: any, offset: any);
+}
 export declare function connect(options?: ConnectOptions): Promise<ClientSession>;
 /**
  * Opens a surface and paints a dependency-free first frame.

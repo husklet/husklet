@@ -285,6 +285,21 @@ export class FileTextLimitError extends RangeError {
         this.limit = limit;
     }
 }
+/** A ranged read crossed file generations and must be restarted from a coherent identity. */
+export class FileIdentityChangedError extends Error {
+    path;
+    expected;
+    actual;
+    offset;
+    constructor(path, expected, actual, offset) {
+        super(`filesystem file ${path} changed identity from ${expected} to ${actual} at offset ${offset}`);
+        this.name = 'FileIdentityChangedError';
+        this.path = path;
+        this.expected = expected;
+        this.actual = actual;
+        this.offset = offset;
+    }
+}
 /** Reference-counted host subscriptions, keyed by session and snapshot topic. */
 const subscriptions = new WeakMap();
 const SNAPSHOT_TOPICS = Object.freeze([
@@ -2239,10 +2254,16 @@ export function workspace(session, { signal } = {}) {
                     observed,
                 }), 'file_range');
                 const complete = range.offset >= range.total || range.contents.length >= range.total - range.offset;
+                if (observed !== null &&
+                    range.path === path &&
+                    range.identity &&
+                    new TextEncoder().encode(range.identity).byteLength <= 256 &&
+                    range.identity !== observed) {
+                    throw new FileIdentityChangedError(path, observed, range.identity, boundedOffset);
+                }
                 if (range.path !== path ||
                     !range.identity ||
                     new TextEncoder().encode(range.identity).byteLength > 256 ||
-                    (observed !== null && range.identity !== observed) ||
                     range.offset !== boundedOffset ||
                     range.contents.length > boundedLimit ||
                     range.eof !== complete ||
@@ -2297,7 +2318,7 @@ export function workspace(session, { signal } = {}) {
                     requireFilesystemActive(signal);
                     identity ??= range.identity;
                     if (range.identity !== identity) {
-                        throw new TypeError('host changed filesystem file identity during iteration');
+                        throw new FileIdentityChangedError(path, identity, range.identity, cursor);
                     }
                     const eof = range.eof;
                     const next = cursor + range.contents.length;
