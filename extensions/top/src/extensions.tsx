@@ -677,7 +677,25 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
       );
     } catch (cause) {
       try {
-        const status = await api.extensions.acquisition(acquisition.job);
+        let status = await api.extensions.acquisition(acquisition.job);
+        if (status.state === 'committing') {
+          setAcquisition(status);
+          setError('');
+          // A vanished reply does not mean the commit stopped. Follow the
+          // authoritative job instead of leaving a stale, replayable consent
+          // form on screen while the host may be publishing it.
+          const deadline = Date.now() + 30_000;
+          while (status.state === 'committing') {
+            const remaining = deadline - Date.now();
+            if (remaining <= 0) break;
+            const changed = await api.extensions.waitForAcquisition(status.job, status.revision, {
+              timeoutMs: Math.min(1_000, remaining),
+            });
+            if (!changed.changed) continue;
+            status = changed.status;
+            setAcquisition(status);
+          }
+        }
         if (status.state === 'failed' || status.state === 'cancelled') {
           setAcquisition(status);
           setError('');
@@ -698,7 +716,12 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
           } else {
             setError(message(cause));
           }
+        } else if (status.state === 'committing') {
+          setError(
+            'The install is still being saved after its confirmation reply was lost. Wait for completion before acting again.',
+          );
         } else {
+          setAcquisition(status);
           setError(message(cause));
         }
       } catch {
@@ -723,7 +746,9 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
   const cancel = async () => {
     if (
       !acquisition ||
-      ['ready', 'failed', 'cancelled'].includes(acquisition.state) ||
+      ['ready', 'committing', 'installed', 'updated', 'failed', 'cancelled'].includes(
+        acquisition.state,
+      ) ||
       cancelling.current
     )
       return;
@@ -1700,6 +1725,13 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                             onInvoke={dismissReview}
                           />
                         </Column>
+                      ) : acquisition.state === 'committing' ? (
+                        <Row gap={1} align="center" wrap>
+                          <Spinner />
+                          <Text label={acquisitionLabel(acquisition)} wrap />
+                        </Row>
+                      ) : ['installed', 'updated'].includes(acquisition.state) ? (
+                        <Text label={acquisitionLabel(acquisition)} wrap />
                       ) : (
                         <Row gap={1} align="center" wrap>
                           <Spinner />

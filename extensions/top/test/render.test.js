@@ -2549,6 +2549,115 @@ test('a ready extension review can be abandoned without granting authority', asy
   );
 });
 
+test('a lost install reply follows the committing job instead of replaying stale consent', async () => {
+  const digest = `sha256:${'e'.repeat(64)}`;
+  let committed = false;
+  let reads = 0;
+  let installs = 0;
+  const waits = [];
+  let finishCommit;
+  const stage = host();
+  stage.render(
+    h(Extensions, {
+      api: {
+        extensions: {
+          list: async () =>
+            committed
+              ? [
+                  {
+                    name: 'database-tools',
+                    version: '1.0.0',
+                    image_digest: digest,
+                    enabled: false,
+                    status: 'standby',
+                  },
+                ]
+              : [],
+          startAcquisition: async () => ({ job: 'commit-recovery' }),
+          acquisition: async () => {
+            reads += 1;
+            return {
+              job: 'commit-recovery',
+              reference: 'registry.example/database-tools:1',
+              revision: reads === 1 ? 2 : committed ? 4 : 3,
+              state: reads === 1 ? 'ready' : committed ? 'installed' : 'committing',
+              progress: null,
+              candidate:
+                reads === 1
+                  ? {
+                      name: 'database-tools',
+                      version: '1.0.0',
+                      image_digest: digest,
+                      installed_image_digest: null,
+                      requested: ['containers:read'],
+                    }
+                  : null,
+              error: null,
+            };
+          },
+          installAndWait: async () => {
+            installs += 1;
+            throw new Error('connection closed while install was committing');
+          },
+          waitForAcquisition: async (job, revision) => {
+            waits.push([job, revision]);
+            return new Promise((resolve) => {
+              finishCommit = () => {
+                committed = true;
+                resolve({
+                  changed: true,
+                  status: {
+                    job,
+                    reference: 'registry.example/database-tools:1',
+                    revision: 4,
+                    state: 'installed',
+                    progress: null,
+                    candidate: null,
+                    error: null,
+                  },
+                });
+              };
+            });
+          },
+        },
+        watchExtensions: async () => () => {},
+      },
+    }),
+  );
+  await settled();
+  selectExtensionMode(stage, 'Discover');
+  await settled();
+  change(stage, 'registry.example/extension:version', 'registry.example/database-tools:1');
+  invoke(stage, 'Inspect');
+  await settled();
+  await settled();
+  toggleSwitch(stage, 0, true);
+
+  // The host accepted the commit but the request/reply connection disappeared.
+  // Its authoritative job is already committing at revision 3.
+  invoke(stage, 'Install with selected access');
+  await settled();
+  await settled();
+  assert.ok(labelled(stage, 'Saving the reviewed extension and its granted access…'));
+  assert.equal(
+    labelled(stage, 'Cancel inspection'),
+    undefined,
+    'a commit cannot be cancelled after durable publication may have begun',
+  );
+  finishCommit();
+  await settled();
+  await settled();
+
+  assert.deepEqual(waits, [['commit-recovery', 3]]);
+  assert.equal(installs, 1);
+  assert.ok(
+    labelled(
+      stage,
+      'database-tools installed, but the confirmation reply was lost. Current extension state was verified by refresh.',
+    ),
+  );
+});
+
 test('installed extension removal requires final consent and a failure remains retryable', async () => {
   const calls = [];
   let removes = 0;
