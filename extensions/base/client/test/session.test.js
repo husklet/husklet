@@ -8,6 +8,7 @@ import test from 'node:test';
 import { queryObjects } from 'node:v8';
 import {
   connect,
+  ExecutionDeadlineError,
   ExecutionOperationError,
   ExecutionOutputGapError,
   ExecutionOutputProtocolError,
@@ -23,6 +24,117 @@ import {
 import { CONTROL, KIND, Reader, encode } from '../dist/wire.js';
 
 const FILE_JOURNAL = '0123456789abcdef0123456789abcdef';
+
+test('real Unix query deadline cancels its exact execution and preserves the session', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-query-deadline-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const containerId = 'c'.repeat(64);
+  const executionId = 'e'.repeat(32);
+  const requests = [];
+  const connections = new Set();
+  const server = net.createServer((socket) => {
+    connections.add(socket);
+    socket.on('close', () => connections.delete(socket));
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.kind !== KIND.request) continue;
+        requests.push(frame.payload);
+        const payload =
+          frame.payload.call === 'container_exec'
+            ? { reply: 'identity', with: executionId }
+            : frame.payload.call === 'execution_output'
+              ? {
+                  reply: 'execution_output',
+                  with: { entries: [], next: 0, more: false, eof: false, gap: false },
+                }
+              : frame.payload.call === 'workspace_info'
+                ? {
+                    reply: 'workspace',
+                    with: { name: 'database', image: 'postgres:17', architecture: 'amd64' },
+                  }
+                : { reply: 'done' };
+        const response = encode({ channel: frame.channel, kind: KIND.response, payload });
+        socket.write(response.subarray(0, 6));
+        socket.write(response.subarray(6));
+      }
+    });
+    const greeting = encode({
+      channel: CONTROL,
+      kind: KIND.open,
+      payload: {
+        protocol: 1,
+        peer: 'postgres-query-deadline',
+        granted: [
+          'containers:read',
+          'containers:execute',
+          'containers:lifecycle',
+          'workspaces:read',
+        ],
+      },
+    });
+    socket.write(greeting.subarray(0, 4));
+    socket.write(greeting.subarray(4));
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    const containers = workspace(session).containers;
+    await assert.rejects(
+      containers.execJsonLines(
+        containerId,
+        4,
+        { command: ['psql'], maxLineBytes: 4096, deadlineMs: 0 },
+        () => {},
+      ),
+      /deadline.*1.*86400000/,
+    );
+    assert.deepEqual(requests, [], 'invalid deadlines must not start a query');
+
+    await assert.rejects(
+      containers.execJsonLines(
+        containerId,
+        4,
+        {
+          command: ['psql', '--csv'],
+          maxLineBytes: 4096,
+          deadlineMs: 20,
+          pollIntervalMs: 50,
+          cancelSignal: 'SIGINT',
+          cancelTimeoutMs: 750,
+        },
+        () => {},
+      ),
+      (error) =>
+        error instanceof ExecutionOperationError &&
+        error.executionId === executionId &&
+        error.phase === 'output' &&
+        error.cause?.name === 'AbortError' &&
+        error.cause.cause instanceof ExecutionDeadlineError &&
+        error.cause.cause.executionId === executionId &&
+        error.cause.cause.deadlineMs === 20,
+    );
+    assert.deepEqual(
+      requests.map(({ call }) => call),
+      ['container_exec', 'execution_output', 'execution_cancel'],
+    );
+    assert.deepEqual(requests[2].with, {
+      id: executionId,
+      signal: 'SIGINT',
+      timeout_ms: 750,
+    });
+    assert.equal((await workspace(session).info()).name, 'database');
+    assert.deepEqual(
+      requests.map(({ call }) => call),
+      ['container_exec', 'execution_output', 'execution_cancel', 'workspace_info'],
+    );
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 test('real Unix chunk reads pin a prior file identity across fragmented frames', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-observed-chunks-'));

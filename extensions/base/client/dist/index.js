@@ -20,6 +20,17 @@ export class ExecutionOperationError extends Error {
         this.after = after;
     }
 }
+/** A client-owned execution exceeded its post-start wall-clock deadline. */
+export class ExecutionDeadlineError extends Error {
+    executionId;
+    deadlineMs;
+    constructor(executionId, deadlineMs) {
+        super(`execution ${executionId} exceeded its ${deadlineMs}ms deadline`);
+        this.name = 'ExecutionDeadlineError';
+        this.executionId = executionId;
+        this.deadlineMs = deadlineMs;
+    }
+}
 /** Output retention advanced past the cursor, so a transcript/result would be incomplete. */
 export class ExecutionOutputGapError extends Error {
     executionId;
@@ -108,6 +119,13 @@ function exactExecutionCancellation(timeoutMs) {
         throw new RangeError('execution cancellation timeout must be between 1 and 30000ms');
     }
     return timeoutMs;
+}
+function exactExecutionDeadline(deadlineMs) {
+    if (deadlineMs !== undefined &&
+        (!Number.isSafeInteger(deadlineMs) || deadlineMs < 1 || deadlineMs > 86_400_000)) {
+        throw new RangeError('execution deadline must be an integer between 1 and 86400000ms');
+    }
+    return deadlineMs;
 }
 function exactExecutionPageLimit(limit) {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 16) {
@@ -1274,13 +1292,14 @@ export function workspace(session, { signal } = {}) {
                     throw new ExecutionOperationError(executionId, phase, cause, execution);
                 }
             },
-            execStreaming: async (id, generation, { command, environment = [], credentials, user, workingDirectory, input, pageLimit = 16, pollIntervalMs = 25, signal, cancelSignal = 'SIGTERM', cancelTimeoutMs = 1_000, onStarted, }, onPage) => {
+            execStreaming: async (id, generation, { command, environment = [], credentials, user, workingDirectory, input, pageLimit = 16, pollIntervalMs = 25, signal, deadlineMs, cancelSignal = 'SIGTERM', cancelTimeoutMs = 1_000, onStarted, }, onPage) => {
                 if (typeof onPage !== 'function')
                     throw new TypeError('streaming execution requires an output callback');
                 if (onStarted !== undefined && typeof onStarted !== 'function')
                     throw new TypeError('streaming execution onStarted must be a function');
                 exactExecutionPageLimit(pageLimit);
                 exactExecutionPollInterval(pollIntervalMs);
+                exactExecutionDeadline(deadlineMs);
                 exactExecutionSignal(cancelSignal);
                 exactExecutionCancellation(cancelTimeoutMs);
                 requireOutputActive(signal);
@@ -1303,6 +1322,14 @@ export function workspace(session, { signal } = {}) {
                 let phase = 'output';
                 const streaming = new AbortController();
                 const inputStreaming = new AbortController();
+                const deadline = deadlineMs === undefined
+                    ? undefined
+                    : setTimeout(() => {
+                        const reason = new ExecutionDeadlineError(executionId, deadlineMs);
+                        streaming.abort(reason);
+                        inputStreaming.abort(reason);
+                    }, deadlineMs);
+                deadline?.unref?.();
                 const stopStreaming = () => {
                     streaming.abort(signal?.reason);
                     inputStreaming.abort(signal?.reason);
@@ -1379,6 +1406,8 @@ export function workspace(session, { signal } = {}) {
                     throw new ExecutionOperationError(executionId, phase, cause);
                 }
                 finally {
+                    if (deadline !== undefined)
+                        clearTimeout(deadline);
                     signal?.removeEventListener('abort', stopStreaming);
                 }
             },

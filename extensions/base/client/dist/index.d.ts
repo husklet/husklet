@@ -11,6 +11,12 @@ export declare class ExecutionOperationError extends Error {
     readonly after: any;
     constructor(executionId: any, phase: any, cause: any, execution?: any, after?: any);
 }
+/** A client-owned execution exceeded its post-start wall-clock deadline. */
+export declare class ExecutionDeadlineError extends Error {
+    readonly executionId: any;
+    readonly deadlineMs: any;
+    constructor(executionId: any, deadlineMs: any);
+}
 /** Output retention advanced past the cursor, so a transcript/result would be incomplete. */
 export declare class ExecutionOutputGapError extends Error {
     readonly executionId: any;

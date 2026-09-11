@@ -702,6 +702,12 @@ export declare class ExecutionOperationError extends Error {
   readonly after?: number;
 }
 
+/** A client-owned execution exceeded its post-start wall-clock deadline. */
+export declare class ExecutionDeadlineError extends Error {
+  readonly executionId: string;
+  readonly deadlineMs: number;
+}
+
 /** The host retained output, but not the complete sequence after the requested cursor. */
 export declare class ExecutionOutputGapError extends Error {
   readonly executionId: string;
@@ -1062,6 +1068,8 @@ export interface WorkspaceApi {
         pageLimit?: number;
         pollIntervalMs?: number;
         signal?: AbortSignal;
+        /** Post-start wall-clock deadline; expiry cancels the exact owned execution. */
+        deadlineMs?: number;
         cancelSignal?: string;
         cancelTimeoutMs?: number;
         /** Runs once the host returns the live execution identity, before output is consumed. */
@@ -1086,6 +1094,8 @@ export interface WorkspaceApi {
         pageLimit?: number;
         pollIntervalMs?: number;
         signal?: AbortSignal;
+        /** Post-start wall-clock deadline; expiry cancels the exact owned execution. */
+        deadlineMs?: number;
         cancelSignal?: string;
         cancelTimeoutMs?: number;
         /** Runs once the host returns the live execution identity, before output is consumed. */
@@ -1116,6 +1126,8 @@ export interface WorkspaceApi {
         pageLimit?: number;
         pollIntervalMs?: number;
         signal?: AbortSignal;
+        /** Post-start wall-clock deadline; expiry cancels the exact owned execution. */
+        deadlineMs?: number;
         cancelSignal?: string;
         cancelTimeoutMs?: number;
         /** Runs once the host returns the live execution identity, before output is consumed. */
@@ -1145,6 +1157,8 @@ export interface WorkspaceApi {
         pageLimit?: number;
         pollIntervalMs?: number;
         signal?: AbortSignal;
+        /** Post-start wall-clock deadline; expiry cancels the exact owned execution. */
+        deadlineMs?: number;
         cancelSignal?: string;
         cancelTimeoutMs?: number;
         /** Runs once the host returns the live execution identity, before output is consumed. */
