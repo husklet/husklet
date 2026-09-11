@@ -34,6 +34,11 @@ export declare class JsonLineDecodeError extends TypeError {
     readonly line: any;
     constructor(line: any, cause: any);
 }
+/** Durable JSON state could not be decoded; its exact identity remains available for CAS recovery. */
+export declare class StateDecodeError extends TypeError {
+    readonly identity: any;
+    constructor(identity: any, cause: any);
+}
 /** Catalogue discovery was bounded before it became a complete searchable set. */
 export declare class IncompleteCatalogueError extends Error {
     readonly received: any;

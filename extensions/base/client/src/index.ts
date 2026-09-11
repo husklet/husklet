@@ -136,6 +136,18 @@ export class JsonLineDecodeError extends TypeError {
   }
 }
 
+/** Durable JSON state could not be decoded; its exact identity remains available for CAS recovery. */
+export class StateDecodeError extends TypeError {
+  readonly identity;
+
+  constructor(identity, cause) {
+    super(`extension state ${identity} could not be decoded`);
+    this.name = 'StateDecodeError';
+    this.identity = identity;
+    this.cause = cause;
+  }
+}
+
 /** Catalogue discovery was bounded before it became a complete searchable set. */
 export class IncompleteCatalogueError extends Error {
   readonly received;
@@ -781,10 +793,14 @@ function exactStateCodec<T>(codec: StateCodec<T>) {
 }
 
 function decodeJsonState<T>(state: ExtensionState, codec: StateCodec<T>): JsonState<T> {
-  const bytes = Uint8Array.from(state.contents);
-  const encoded = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
-  const value = encoded.length === 0 ? undefined : JSON.parse(encoded);
-  return { identity: state.identity, value: exactStateCodec(codec).decode(value) };
+  try {
+    const bytes = Uint8Array.from(state.contents);
+    const encoded = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+    const value = encoded.length === 0 ? undefined : JSON.parse(encoded);
+    return { identity: state.identity, value: codec.decode(value) };
+  } catch (cause) {
+    throw new StateDecodeError(state.identity, cause);
+  }
 }
 
 function encodeJsonState<T>(value: T, codec: StateCodec<T>) {
@@ -2848,7 +2864,10 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
           'identity',
         ),
       clear: (observed) => done('state_clear', { observed: exactStateIdentity(observed) }),
-      readJson: async (codec) => decodeJsonState(await api.state.read(), codec),
+      readJson: async (codec) => {
+        const checked = exactStateCodec(codec);
+        return decodeJsonState(await api.state.read(), checked);
+      },
       writeJson: (observed, value, codec) =>
         api.state.write(observed, encodeJsonState(value, codec)),
       updateJson: async (

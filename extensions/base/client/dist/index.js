@@ -64,6 +64,16 @@ export class JsonLineDecodeError extends TypeError {
         this.cause = cause;
     }
 }
+/** Durable JSON state could not be decoded; its exact identity remains available for CAS recovery. */
+export class StateDecodeError extends TypeError {
+    identity;
+    constructor(identity, cause) {
+        super(`extension state ${identity} could not be decoded`);
+        this.name = 'StateDecodeError';
+        this.identity = identity;
+        this.cause = cause;
+    }
+}
 /** Catalogue discovery was bounded before it became a complete searchable set. */
 export class IncompleteCatalogueError extends Error {
     received;
@@ -592,10 +602,15 @@ function exactStateCodec(codec) {
     return codec;
 }
 function decodeJsonState(state, codec) {
-    const bytes = Uint8Array.from(state.contents);
-    const encoded = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
-    const value = encoded.length === 0 ? undefined : JSON.parse(encoded);
-    return { identity: state.identity, value: exactStateCodec(codec).decode(value) };
+    try {
+        const bytes = Uint8Array.from(state.contents);
+        const encoded = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+        const value = encoded.length === 0 ? undefined : JSON.parse(encoded);
+        return { identity: state.identity, value: codec.decode(value) };
+    }
+    catch (cause) {
+        throw new StateDecodeError(state.identity, cause);
+    }
 }
 function encodeJsonState(value, codec) {
     const encoded = JSON.stringify(exactStateCodec(codec).encode(value));
@@ -2184,7 +2199,10 @@ export function workspace(session, { signal } = {}) {
                 contents: exactStateBytes(contents),
             }), 'identity'),
             clear: (observed) => done('state_clear', { observed: exactStateIdentity(observed) }),
-            readJson: async (codec) => decodeJsonState(await api.state.read(), codec),
+            readJson: async (codec) => {
+                const checked = exactStateCodec(codec);
+                return decodeJsonState(await api.state.read(), checked);
+            },
             writeJson: (observed, value, codec) => api.state.write(observed, encodeJsonState(value, codec)),
             updateJson: async (codec, update, { attempts = 4, signal: updateSignal } = {}) => {
                 if (!Number.isSafeInteger(attempts) || attempts < 1 || attempts > 16)

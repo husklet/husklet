@@ -605,6 +605,12 @@ export interface JsonState<T> {
   identity: string;
   value: T;
 }
+
+/** Durable JSON state could not be decoded; its exact identity remains available for CAS recovery. */
+export declare class StateDecodeError extends TypeError {
+  readonly identity: string;
+  readonly cause: unknown;
+}
 export type WorkspaceEvent =
   | {
       event: 'key';

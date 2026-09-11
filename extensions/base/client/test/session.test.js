@@ -16,6 +16,7 @@ import {
   JsonLineParseError,
   PaneUnavailableError,
   Session,
+  StateDecodeError,
   TerminalOperationError,
   workspace,
 } from '../dist/index.js';
@@ -2104,6 +2105,98 @@ test('real Unix cancelled state update cannot publish a stale checkpoint', async
     assert.deepEqual(calls, ['state_read'], 'abort after computation must prevent state_write');
     assert.equal((await workspace(session).info()).name, 'index');
     assert.deepEqual(calls, ['state_read', 'workspace_info']);
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('real Unix JSON state decode failure retains exact identity for CAS recovery', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-state-recovery-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const staleIdentity = `sha256:${'a'.repeat(64)}`;
+  const recoveredIdentity = `sha256:${'b'.repeat(64)}`;
+  const calls = [];
+  const connections = new Set();
+  const server = net.createServer((socket) => {
+    connections.add(socket);
+    socket.on('close', () => connections.delete(socket));
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.kind !== KIND.request) continue;
+        calls.push(frame.payload);
+        const payload =
+          frame.payload.call === 'state_read'
+            ? {
+                reply: 'state',
+                with: {
+                  identity: staleIdentity,
+                  contents: [...Buffer.from('{"version":0,"revision":41}')],
+                },
+              }
+            : frame.payload.call === 'state_write'
+              ? { reply: 'identity', with: recoveredIdentity }
+              : {
+                  reply: 'workspace',
+                  with: { name: 'index', image: 'toolbox', architecture: 'amd64' },
+                };
+        socket.write(encode({ channel: frame.channel, kind: KIND.response, payload }));
+      }
+    });
+    socket.write(
+      encode({
+        channel: CONTROL,
+        kind: KIND.open,
+        payload: {
+          protocol: 1,
+          peer: 'checkpoint-recovery',
+          granted: ['state:read', 'state:write', 'workspaces:read'],
+        },
+      }),
+    );
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    const state = workspace(session).state;
+    await assert.rejects(state.readJson({ decode: 'invalid', encode: () => null }), /codec/);
+    assert.deepEqual(calls, [], 'invalid codecs must not read durable state');
+
+    const codec = {
+      decode(value) {
+        if (value?.version !== 1) throw new TypeError('unsupported checkpoint schema');
+        return value;
+      },
+      encode(value) {
+        return value;
+      },
+    };
+    let failure;
+    try {
+      await state.readJson(codec);
+    } catch (error) {
+      failure = error;
+    }
+    assert.ok(failure instanceof StateDecodeError);
+    assert.equal(failure.identity, staleIdentity);
+    assert.ok(failure.cause instanceof TypeError);
+    assert.match(failure.cause.message, /unsupported checkpoint schema/);
+
+    const checkpoint = { version: 1, revision: 0 };
+    assert.equal(await state.writeJson(failure.identity, checkpoint, codec), recoveredIdentity);
+    assert.equal(calls[1].with.observed, staleIdentity);
+    assert.deepEqual(
+      JSON.parse(new TextDecoder().decode(Uint8Array.from(calls[1].with.contents))),
+      checkpoint,
+    );
+    assert.equal((await workspace(session).info()).name, 'index');
+    assert.deepEqual(
+      calls.map(({ call }) => call),
+      ['state_read', 'state_write', 'workspace_info'],
+    );
     await session.close();
   } finally {
     for (const connection of connections) connection.destroy();
