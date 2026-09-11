@@ -446,10 +446,7 @@ impl Installation {
         }
         let granted =
             Grant::new(entry.record.granted.iter().chain(consented.iter())).intersect(&update.manifest.capabilities);
-        let required = Grant::new(
-            (update.manifest.interface.is_some() || !update.manifest.pane_providers.is_empty())
-                .then_some(Capability::Interface),
-        );
+        let required = update.manifest.required_update_consent();
         let missing = granted.missing(&required);
         if !missing.is_empty() {
             return Err(UpdateFailure::Refused(Objection::Consent(missing)));

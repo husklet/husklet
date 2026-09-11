@@ -173,6 +173,8 @@ export interface ExtensionCandidate {
   version: string;
   image_digest: string;
   requested: ExtensionCapability[];
+  /** Requested capabilities that this install or update operation cannot omit. */
+  required: ExtensionCapability[];
   requested_containers: ContainerGrant;
   requested_images: ImageGrant;
   requested_networks: NetworkGrant;

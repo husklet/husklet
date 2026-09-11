@@ -309,6 +309,7 @@ fn acquisition_status(job: String, snapshot: AcquisitionSnapshot) -> ExtensionAc
                 version: candidate.version,
                 image_digest: candidate.digest,
                 requested: candidate.requested,
+                required: candidate.required,
                 requested_images: candidate.requested_images,
                 requested_containers: candidate.requested_containers,
                 requested_networks: candidate.requested_networks,
@@ -463,6 +464,7 @@ mod tests {
                     name: "sample".into(),
                     version: "2".into(),
                     requested: Grant::new([hl_extension::Capability::Interface]),
+                    required: Grant::new([hl_extension::Capability::Interface]),
                     installed_digest: Some("sha256:old".into()),
                 }),
             },
@@ -491,6 +493,7 @@ mod tests {
                 name: "sample".into(),
                 version: "2".into(),
                 requested: Grant::default(),
+                required: Grant::default(),
                 installed_digest: None,
             }),
         };

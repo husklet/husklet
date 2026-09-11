@@ -84,7 +84,8 @@ test('installed catalogue extension starts an update review over real Unix frami
                           version: '2.0.0',
                           image_digest: nextDigest,
                           installed_image_digest: oldDigest,
-                          requested: [],
+                          requested: ['interface:render'],
+                          required: ['interface:render'],
                         },
                         error: null,
                       },
@@ -105,6 +106,12 @@ test('installed catalogue extension starts an update review over real Unix frami
     await until(() => labelled(stage, 'Review update'));
     invoke(stage, 'Review update');
     await until(() => labelled(stage, 'Update with selected access'));
+    await until(() =>
+      labelled(
+        stage,
+        'Required to keep this extension available after the update: Render this extension interface. Select it below to continue.',
+      ),
+    );
     assert.deepEqual(
       calls.filter(({ call }) => call.startsWith('extension_acquisition')),
       [

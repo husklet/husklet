@@ -596,6 +596,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
             setGrantedVolumes({ selectors: [], create: false });
             setGrantedFilesystem(emptyFilesystemGrant());
             setGrantedWorkspaceEnvironment({ read: [], write: [] });
+            setPermissionDetailsExpanded((status.candidate.required?.length ?? 0) > 0);
           }
         }
         if (
@@ -937,6 +938,10 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
     read: [],
     write: [],
   };
+  const requiredCapabilities = acquisition?.candidate?.required ?? [];
+  const missingRequiredCapabilities = requiredCapabilities.filter(
+    (capability) => !granted.includes(capability),
+  );
   const requestedPermissionCount = acquisition?.candidate
     ? acquisition.candidate.requested.length +
       requestedContainers.selectors.length +
@@ -1361,6 +1366,12 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                         label="All access is off. Expand exact grants and enable only what this extension needs."
                         tone="warning"
                       />
+                      {missingRequiredCapabilities.length > 0 ? (
+                        <InlineMessage
+                          label={`Required to keep this extension available after the update: ${missingRequiredCapabilities.map(capabilityLabel).join(', ')}. Select ${missingRequiredCapabilities.length === 1 ? 'it' : 'them'} below to continue.`}
+                          tone="warning"
+                        />
+                      ) : null}
                       {(requestedImages.remove.length > 0 || requestedImages.prune_all_unused) && (
                         <InlineMessage
                           label="Destructive access requested. Image removal deletes named images; prune deletes every unused image in this workspace."
@@ -1395,7 +1406,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                           {acquisition.candidate.requested.map((capability) => (
                             <FormControlLabel
                               key={capability}
-                              label={capabilityLabel(capability)}
+                              label={`${capabilityLabel(capability)}${requiredCapabilities.includes(capability) ? ' · Required' : ''}`}
                               tooltip={capability}
                               gap={2}
                             >
@@ -2019,7 +2030,9 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                       ? 'Update with selected access'
                       : 'Install with selected access'
               }
-              enabled={!busy && acquisition.state === 'ready'}
+              enabled={
+                !busy && acquisition.state === 'ready' && missingRequiredCapabilities.length === 0
+              }
               variant="filled"
               tone="accent"
               onInvoke={publish}

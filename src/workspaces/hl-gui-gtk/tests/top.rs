@@ -1148,7 +1148,8 @@ mod unix {
                             name: ExtensionName::new("developer-tool-01").expect("valid extension"),
                             version: "1.0.0".into(),
                             image_digest: next_digest.clone(),
-                            requested: Grant::new([Capability::ContainerRead]),
+                            requested: Grant::new([Capability::ContainerRead, Capability::Interface]),
+                            required: Grant::new([Capability::Interface]),
                             requested_images: Default::default(),
                             requested_containers: Default::default(),
                             requested_networks: Default::default(),
@@ -1167,10 +1168,39 @@ mod unix {
         );
 
         let review_root = surface.widget().clone().upcast::<gtk::Widget>();
-        assert!(has_label(&review_root, "No access selected · 1 requested"));
+        assert!(has_label(&review_root, "No access selected · 2 requested"));
+        assert!(has_label(
+            &review_root,
+            "Required to keep this extension available after the update: Render this extension interface. Select it below to continue."
+        ));
+        let update = find_button(&review_root, "Update with selected access");
+        assert!(!update.is_sensitive(), "mandatory consent cannot be omitted");
+        let interface = find_label(&review_root, "Render this extension interface · Required")
+            .mnemonic_widget()
+            .and_then(|widget| widget.downcast::<gtk::Switch>().ok())
+            .expect("required capability label names its native switch");
+        interface.set_active(true);
+        settle_toolkit();
+        send_report(surface, wire, 102, |event| {
+            matches!(event, hl_gui::Event::Change { .. })
+        });
+        apply_extension_update_until(
+            wire,
+            tree,
+            surface,
+            "Review decision · 1/2 selected",
+            |request| match request {
+                Request::EventUnsubscribe { .. } => Reply::Done,
+                other => panic!("unexpected extension consent call: {other:?}"),
+            },
+            || None,
+        );
+        let review_root = surface.widget().clone().upcast::<gtk::Widget>();
         assert!(has_label(&review_root, "Update with selected access"));
         capture_update_surface(window, &review_root, "update-review");
-        find_button(&review_root, "Update with selected access").emit_clicked();
+        let update = find_button(&review_root, "Update with selected access");
+        assert!(update.is_sensitive(), "required consent enables the update");
+        update.emit_clicked();
         settle_toolkit();
         send_report(surface, wire, 103, |event| {
             matches!(event, hl_gui::Event::Invoke { .. })
@@ -1195,7 +1225,8 @@ mod unix {
                             name: ExtensionName::new("developer-tool-01").expect("valid extension"),
                             version: "1.0.0".into(),
                             image_digest: next_digest.clone(),
-                            requested: Grant::new([Capability::ContainerRead]),
+                            requested: Grant::new([Capability::ContainerRead, Capability::Interface]),
+                            required: Grant::new([Capability::Interface]),
                             requested_images: Default::default(),
                             requested_containers: Default::default(),
                             requested_networks: Default::default(),
@@ -1217,7 +1248,7 @@ mod unix {
                     assert_eq!(job, "gtk-update");
                     assert_eq!(revision, 2);
                     assert_eq!(image_digest, next_digest);
-                    assert!(granted.is_empty(), "review begins with no implicit access");
+                    assert_eq!(granted, Grant::new([Capability::Interface]));
                     committed.set(true);
                     let updated = updated_extension(&next_digest);
                     Reply::Extension(updated)

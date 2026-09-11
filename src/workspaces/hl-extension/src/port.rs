@@ -821,6 +821,8 @@ pub struct ExtensionCandidate {
     pub version: String,
     pub image_digest: String,
     pub requested: crate::Grant,
+    /// Requested capabilities the current install/update operation cannot omit.
+    pub required: crate::Grant,
     #[serde(default)]
     pub requested_images: crate::ImageGrant,
     #[serde(default)]

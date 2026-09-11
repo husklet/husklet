@@ -747,6 +747,19 @@ impl Manifest {
     /// Largest manifest document accepted.
     pub const LIMIT: usize = 64 * 1024;
 
+    /// Consent that cannot be omitted while replacing an installed extension.
+    ///
+    /// An authored surface or pane provider is part of the installed product;
+    /// silently removing its render authority during an update would make the
+    /// replacement inaccessible. Initial installation may still deliberately
+    /// record no authority and leave the extension disabled.
+    #[must_use]
+    pub fn required_update_consent(&self) -> Grant {
+        Grant::new(
+            (self.interface.is_some() || !self.pane_providers.is_empty()).then_some(Capability::Interface),
+        )
+    }
+
     /// Reads a manifest from the document an image carries.
     ///
     /// # Errors
@@ -927,7 +940,7 @@ mod tests {
         ContainerGrant, ContainerSelector, FilesystemGrant, FilesystemSelector, ImageGrant, ImageSelector, Manifest,
         NetworkGrant, NetworkSelector, VolumeGrant, VolumeSelector,
     };
-    use crate::{PROTOCOL, RelativePath};
+    use crate::{Capability, Grant, PROTOCOL, RelativePath};
 
     fn document(extra: &str) -> String {
         format!(
@@ -1127,5 +1140,29 @@ mod tests {
             );
             assert!(Manifest::parse(&manifest, PROTOCOL).is_err(), "accepted {invalid:?}");
         }
+    }
+
+    #[test]
+    fn update_consent_is_derived_from_manifest_surface_authority() {
+        let interactive = Manifest::parse(
+            &format!(
+                "name = \"sample\"\ndisplay_name = \"Sample\"\nversion = \"1\"\nprotocol = {PROTOCOL}\ncapabilities = [\"interface:render\"]\n[interface]\ntab_title = \"Sample\"\n"
+            ),
+            PROTOCOL,
+        )
+        .expect("interactive manifest parses");
+        assert_eq!(
+            interactive.required_update_consent(),
+            Grant::new([Capability::Interface])
+        );
+
+        let background = Manifest::parse(
+            &format!(
+                "name = \"sample\"\ndisplay_name = \"Sample\"\nversion = \"1\"\nprotocol = {PROTOCOL}\ncapabilities = []\n"
+            ),
+            PROTOCOL,
+        )
+        .expect("background manifest parses");
+        assert!(background.required_update_consent().is_empty());
     }
 }

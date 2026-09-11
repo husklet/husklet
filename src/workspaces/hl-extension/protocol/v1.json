@@ -1854,6 +1854,14 @@
           }
         },
         {
+          "name": "required",
+          "optional": false,
+          "schema": {
+            "kind": "ref",
+            "name": "Grant"
+          }
+        },
+        {
           "name": "requested_images",
           "optional": true,
           "schema": {
@@ -13771,7 +13779,7 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:139a62076c08cb1e",
+  "source_fingerprint": "fnv1a64:2cd21f83c2b97dbd",
   "specification_version": 1,
   "topics": [
     {

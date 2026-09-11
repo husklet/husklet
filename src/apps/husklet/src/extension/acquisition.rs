@@ -44,6 +44,7 @@ pub(crate) struct AcquisitionCandidate {
     pub name: String,
     pub version: String,
     pub requested: Grant,
+    pub required: Grant,
     pub requested_images: hl_extension::ImageGrant,
     pub requested_containers: hl_extension::ContainerGrant,
     pub requested_networks: hl_extension::NetworkGrant,
@@ -495,6 +496,10 @@ fn snapshot(event: Acquisition, workspace: &WorkspaceConfig) -> (AcquisitionStat
                 name: candidate.manifest.name.to_string(),
                 version: candidate.manifest.version.clone(),
                 requested: candidate.manifest.capabilities.clone(),
+                required: installed_digest
+                    .is_some()
+                    .then(|| candidate.manifest.required_update_consent())
+                    .unwrap_or_default(),
                 requested_images: candidate.manifest.images.clone(),
                 requested_containers: candidate.manifest.containers.clone(),
                 requested_networks: candidate.manifest.networks.clone(),
