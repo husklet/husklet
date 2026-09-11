@@ -1406,6 +1406,43 @@ mod unix {
             || None,
         );
         let review_root = surface.widget().clone().upcast::<gtk::Widget>();
+        let file_capability = find_label(&review_root, "Read selected workspace files")
+            .mnemonic_widget()
+            .and_then(|widget| widget.downcast::<gtk::Switch>().ok())
+            .expect("file capability label names its native switch");
+        let _ = surface.reports().drain();
+        let _: bool = file_capability.emit_by_name("state-set", &[&false]);
+        file_capability.set_active(false);
+        settle_toolkit();
+        send_report(surface, wire, 102, |event| matches!(event, hl_gui::Event::Toggle { .. }));
+        apply_extension_update_until(
+            wire, tree, surface, "Review decision · 1/6 selected",
+            |request| match request {
+                Request::EventUnsubscribe { .. } => Reply::Done,
+                other => panic!("unexpected exact-file clearing call: {other:?}"),
+            },
+            || None,
+        );
+        let review_root = surface.widget().clone().upcast::<gtk::Widget>();
+        let exact = find_label(&review_root, "View contents file · README.md")
+            .mnemonic_widget()
+            .and_then(|widget| widget.downcast::<gtk::Switch>().ok())
+            .expect("cleared exact-file label names its native switch");
+        assert!(!exact.is_active(), "clearing file read authority clears its exact roots");
+        let _ = surface.reports().drain();
+        let _: bool = exact.emit_by_name("state-set", &[&true]);
+        exact.set_active(true);
+        settle_toolkit();
+        send_report(surface, wire, 102, |event| matches!(event, hl_gui::Event::Toggle { .. }));
+        apply_extension_update_until(
+            wire, tree, surface, "Review decision · 3/6 selected",
+            |request| match request {
+                Request::EventUnsubscribe { .. } => Reply::Done,
+                other => panic!("unexpected exact-file reselection call: {other:?}"),
+            },
+            || None,
+        );
+        let review_root = surface.widget().clone().upcast::<gtk::Widget>();
         let environment = find_label(&review_root, "Read DATABASE_URL in workspace development")
             .mnemonic_widget()
             .and_then(|widget| widget.downcast::<gtk::Switch>().ok())

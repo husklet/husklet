@@ -2461,6 +2461,13 @@ for (const updating of [false, true]) {
     assert.ok(labelled(stage, '0/6 workspace paths allowed'));
     assert.deepEqual(latestSwitchValues(stage), Array(12).fill(false));
 
+    toggleSwitch(stage, 7, true);
+    assert.deepEqual(latestSwitchValues(stage).slice(0, 2), [true, false]);
+    assert.ok(labelled(stage, 'Review decision · 2/12 selected'));
+    toggleSwitch(stage, 0, false);
+    assert.deepEqual(latestSwitchValues(stage), Array(12).fill(false));
+    assert.ok(labelled(stage, 'No access selected · 12 requested'));
+
     toggleSwitch(stage, 2, true);
     toggleSwitch(stage, 5, true);
     toggleSwitch(stage, 7, true);

@@ -265,12 +265,12 @@ function FilesystemConsent({
   requested,
   granted,
   onChange,
-  onGrantCapability,
+  onCapabilityChange,
 }: {
   requested: FilesystemGrant;
   granted: FilesystemGrant;
   onChange: React.Dispatch<React.SetStateAction<FilesystemGrant>>;
-  onGrantCapability: (capability: ExtensionCapability) => void;
+  onCapabilityChange: (capability: ExtensionCapability, enabled: boolean) => void;
 }) {
   const requestCount = FILESYSTEM_VERBS.reduce(
     (count, { key }) => count + filesystemRoots(requested, key).length,
@@ -300,22 +300,27 @@ function FilesystemConsent({
               checked={filesystemRoots(granted, key).some(
                 (candidate) => filesystemSelectorKey(candidate) === filesystemSelectorKey(selector),
               )}
-              onToggle={(event: Change) =>
-                onChange((current) => {
-                  if (event.value)
-                    onGrantCapability(key === 'read' ? 'filesystem:read' : 'filesystem:write');
-                  const roots = filesystemRoots(current, key);
-                  return {
-                    ...current,
-                    [key]: event.value
-                      ? [...roots, selector]
-                      : roots.filter(
-                          (candidate) =>
-                            filesystemSelectorKey(candidate) !== filesystemSelectorKey(selector),
-                        ),
-                  };
-                })
-              }
+              onToggle={(event: Change) => {
+                const roots = filesystemRoots(granted, key);
+                const next = {
+                  ...granted,
+                  [key]: event.value
+                    ? [...roots, selector]
+                    : roots.filter(
+                        (candidate) =>
+                          filesystemSelectorKey(candidate) !== filesystemSelectorKey(selector),
+                      ),
+                };
+                const capability = key === 'read' ? 'filesystem:read' : 'filesystem:write';
+                const enabled =
+                  capability === 'filesystem:read'
+                    ? filesystemRoots(next, 'read').length > 0
+                    : (['write', 'create', 'delete', 'rename'] as const).some(
+                        (verb) => filesystemRoots(next, verb).length > 0,
+                      );
+                onCapabilityChange(capability, enabled);
+                onChange(next);
+              }}
             />
           </FormControlLabel>
         )),
@@ -1438,7 +1443,11 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                                 <Button
                                   label="Clear product access"
                                   variant="ghost"
-                                  onInvoke={() => setGranted([])}
+                                  onInvoke={() => {
+                                    setGranted([]);
+                                    setGrantedFilesystem(emptyFilesystemGrant());
+                                    setGrantedWorkspaceEnvironment({ read: [], write: [] });
+                                  }}
                                 />
                               )}
                             </Row>
@@ -1466,6 +1475,16 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                                     setGrantedWorkspaceEnvironment((current) => ({
                                       ...current,
                                       write: [],
+                                    }));
+                                  if (!enabled && capability === 'filesystem:read')
+                                    setGrantedFilesystem((current) => ({ ...current, read: [] }));
+                                  if (!enabled && capability === 'filesystem:write')
+                                    setGrantedFilesystem((current) => ({
+                                      ...current,
+                                      write: [],
+                                      create: [],
+                                      delete: [],
+                                      rename: [],
                                     }));
                                 }}
                               />
@@ -1692,8 +1711,10 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                                 requested={requestedFilesystem}
                                 granted={grantedFilesystem}
                                 onChange={setGrantedFilesystem}
-                                onGrantCapability={(capability) =>
-                                  setGranted((current) => [...new Set([...current, capability])])
+                                onCapabilityChange={(capability, enabled) =>
+                                  setGranted((current) =>
+                                    withCapability(current, capability, enabled),
+                                  )
                                 }
                               />
                             </>
