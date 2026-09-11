@@ -208,7 +208,11 @@ impl Weave {
                 main -= extent;
             }
             let (x, y) = if vertical { (cross, main) } else { (main, cross) };
-            let cross_extent = if if vertical { child.hexpands() } else { child.vexpands() } {
+            let cross_extent = if if vertical {
+                child.hexpands()
+            } else {
+                child.vexpands() || child.has_css_class("hl-card")
+            } {
                 line_cross
             } else {
                 *child_cross

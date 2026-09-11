@@ -804,6 +804,12 @@ mod unix {
                         access_bounds.y(),
                         "wide Discover actions must align despite unequal card copy"
                     );
+                } else {
+                    let heights = [review_card.height(), access_card.height()];
+                    assert!(
+                        heights.iter().all(|height| *height <= 225),
+                        "narrow Discover cards stretched sparse content into {heights:?}px panels"
+                    );
                 }
                 assert!(
                     vertical_end(&discover_root, review.upcast_ref()) <= 800,

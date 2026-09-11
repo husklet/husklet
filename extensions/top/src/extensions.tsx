@@ -1139,7 +1139,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                         );
                         const provider = installedExtension?.pane_providers?.[0];
                         return (
-                          <Card key={entry.id} grow width={{ chars: 38 }} variant="outline">
+                          <Card key={entry.id} grow={false} width={{ chars: 38 }} variant="outline">
                             <CardHeader
                               label={entry.title}
                               detail={`${entry.publisher} · Version ${entry.version}`}
