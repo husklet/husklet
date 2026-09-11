@@ -83,6 +83,13 @@ export declare class FilesystemJournalGapError extends Error {
     readonly replacement: any;
     constructor(requested: any, replacement: any);
 }
+/** One exact file generation could not be decoded as UTF-8. */
+export declare class FileTextDecodeError extends TypeError {
+    readonly path: any;
+    readonly identity: any;
+    readonly bytes: any;
+    constructor(path: any, identity: any, bytes: any, cause: any);
+}
 export declare function connect(options?: ConnectOptions): Promise<ClientSession>;
 /**
  * Opens a surface and paints a dependency-free first frame.

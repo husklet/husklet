@@ -5,7 +5,7 @@ import path from 'node:path';
 import { mkdtemp, rm } from 'node:fs/promises';
 import test from 'node:test';
 
-import { connect, workspace } from '../dist/index.js';
+import { connect, FileTextDecodeError, workspace } from '../dist/index.js';
 import { CONTROL, KIND, Reader, encode } from '../dist/wire.js';
 
 test('readText decodes split UTF-8 over fragmented real Unix frames and enforces its bound', async () => {
@@ -87,9 +87,18 @@ test('readText decodes split UTF-8 over fragmented real Unix frames and enforces
     );
     assert.equal(requests.length, beforeLarge + 1, 'reported total stops the read after one page');
 
-    await assert.rejects(
-      files.readText('docs/bad.txt', { maxBytes: 3, chunkBytes: 1 }),
-      /not valid UTF-8/,
+    await assert.rejects(files.readText('docs/bad.txt', { maxBytes: 3, chunkBytes: 1 }), (error) => {
+      assert(error instanceof FileTextDecodeError);
+      assert.equal(error.path, 'docs/bad.txt');
+      assert.equal(error.identity, 'bad-v1');
+      assert.equal(error.bytes, 3);
+      assert(error.cause instanceof TypeError);
+      return true;
+    });
+    assert.equal(
+      (await files.readText('docs/good.txt', { maxBytes: 5, chunkBytes: 5 })).identity,
+      'good-v1',
+      'the ordered session remains reusable after a decode failure',
     );
     await session.close();
   } finally {

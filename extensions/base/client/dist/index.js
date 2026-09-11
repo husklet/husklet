@@ -257,6 +257,19 @@ export class FilesystemJournalGapError extends Error {
         this.replacement = Object.freeze({ ...replacement });
     }
 }
+/** One exact file generation could not be decoded as UTF-8. */
+export class FileTextDecodeError extends TypeError {
+    path;
+    identity;
+    bytes;
+    constructor(path, identity, bytes, cause) {
+        super(`filesystem text ${path} at identity ${identity} is not valid UTF-8`, { cause });
+        this.name = 'FileTextDecodeError';
+        this.path = path;
+        this.identity = identity;
+        this.bytes = bytes;
+    }
+}
 /** Reference-counted host subscriptions, keyed by session and snapshot topic. */
 const subscriptions = new WeakMap();
 const SNAPSHOT_TOPICS = Object.freeze([
@@ -2304,8 +2317,10 @@ export function workspace(session, { signal } = {}) {
                     parts.push(decoder.decode());
                 }
                 catch (error) {
-                    if (error instanceof TypeError && /encoded data was not valid/i.test(error.message)) {
-                        throw new TypeError(`filesystem text ${path} is not valid UTF-8`, { cause: error });
+                    if (identity &&
+                        error instanceof TypeError &&
+                        /encoded data was not valid/i.test(error.message)) {
+                        throw new FileTextDecodeError(path, identity, bytes, error);
                     }
                     throw error;
                 }

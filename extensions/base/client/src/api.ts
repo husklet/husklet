@@ -745,6 +745,14 @@ export declare class FilesystemJournalGapError extends Error {
   readonly replacement: Readonly<FileCursor>;
 }
 
+/** One exact file generation could not be decoded as UTF-8. */
+export declare class FileTextDecodeError extends TypeError {
+  readonly path: string;
+  readonly identity: string;
+  readonly bytes: number;
+  readonly cause: unknown;
+}
+
 export interface ConnectOptions {
   path?: string;
   /** Bounds pending calls, heartbeats, and queued event callback deliveries. */
