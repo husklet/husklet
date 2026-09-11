@@ -246,10 +246,12 @@ function FilesystemConsent({
   requested,
   granted,
   onChange,
+  onGrantCapability,
 }: {
   requested: FilesystemGrant;
   granted: FilesystemGrant;
   onChange: React.Dispatch<React.SetStateAction<FilesystemGrant>>;
+  onGrantCapability: (capability: ExtensionCapability) => void;
 }) {
   const requestCount = FILESYSTEM_VERBS.reduce(
     (count, { key }) => count + filesystemRoots(requested, key).length,
@@ -260,7 +262,7 @@ function FilesystemConsent({
   return (
     <Column gap={1}>
       <Text
-        label="Each switch grants only the named action and root. Modify cannot create, delete, or rename."
+        label="Each switch grants only the named action and root, and includes the matching file capability. Modify cannot create, delete, or rename."
         color="text-dim"
         wrap
       />
@@ -281,6 +283,8 @@ function FilesystemConsent({
               )}
               onToggle={(event: Change) =>
                 onChange((current) => {
+                  if (event.value)
+                    onGrantCapability(key === 'read' ? 'filesystem:read' : 'filesystem:write');
                   const roots = filesystemRoots(current, key);
                   return {
                     ...current,
@@ -1643,6 +1647,9 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                                 requested={requestedFilesystem}
                                 granted={grantedFilesystem}
                                 onChange={setGrantedFilesystem}
+                                onGrantCapability={(capability) =>
+                                  setGranted((current) => [...new Set([...current, capability])])
+                                }
                               />
                             </>
                           )}
