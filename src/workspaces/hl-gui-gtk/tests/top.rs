@@ -303,7 +303,7 @@ mod unix {
             root.measure(gtk::Orientation::Vertical, width);
             root.allocate(width, 1_600, -1, None);
             window.queue_draw();
-            settle_toolkit();
+            settle_frame();
             assert_eq!(root.width(), width, "{fixture}/{name} rejected {width}px");
             assert_contained(&root, &format!("{fixture}/{name}/{width_name}"));
             if fixture == "populated" && name == "settings" {
@@ -729,7 +729,7 @@ mod unix {
                 settle_toolkit();
                 discover_root.allocate(width, 1_600, -1, None);
                 window.queue_draw();
-                settle_toolkit();
+                settle_frame();
                 assert_contained(&discover_root, &format!("discover/extensions/{width_name}"));
                 for (label, action) in [("update", &review), ("access", &review_access)] {
                     assert_eq!(
@@ -851,7 +851,7 @@ mod unix {
                 expanded_root.measure(gtk::Orientation::Vertical, width);
                 expanded_root.allocate(width, 1_600, -1, None);
                 window.queue_draw();
-                settle_toolkit();
+                settle_frame();
                 assert_contained(&expanded_root, &format!("expanded/networks/{width_name}"));
                 capture(&window, &format!("expanded-networks-{width_name}"), width, 800);
             }
@@ -960,7 +960,7 @@ mod unix {
                 success_root.measure(gtk::Orientation::Vertical, width);
                 success_root.allocate(width, 1_600, -1, None);
                 window.queue_draw();
-                settle_toolkit();
+                settle_frame();
                 assert_contained(&success_root, &format!("post-success/networks/{width_name}"));
                 if width == 1_200 {
                     assert_labels_painted(
@@ -1463,6 +1463,11 @@ mod unix {
         while context.pending() {
             context.iteration(false);
         }
+    }
+
+    fn settle_frame() {
+        std::thread::sleep(Duration::from_millis(20));
+        settle_toolkit();
     }
 
     fn has_label(root: &gtk::Widget, wanted: &str) -> bool {
