@@ -5,7 +5,7 @@ import path from 'node:path';
 import { mkdtemp, rm } from 'node:fs/promises';
 import test from 'node:test';
 
-import { connect, FileTextDecodeError, workspace } from '../dist/index.js';
+import { connect, FileTextDecodeError, FileTextLimitError, workspace } from '../dist/index.js';
 import { CONTROL, KIND, Reader, encode } from '../dist/wire.js';
 
 test('readText decodes split UTF-8 over fragmented real Unix frames and enforces its bound', async () => {
@@ -83,7 +83,14 @@ test('readText decodes split UTF-8 over fragmented real Unix frames and enforces
     const beforeLarge = requests.length;
     await assert.rejects(
       files.readText('docs/large.txt', { maxBytes: 2, chunkBytes: 1 }),
-      /exceeds the caller's 2 byte limit/,
+      (error) => {
+        assert(error instanceof FileTextLimitError);
+        assert.equal(error.path, 'docs/large.txt');
+        assert.equal(error.identity, 'large-v1');
+        assert.equal(error.total, 3);
+        assert.equal(error.limit, 2);
+        return true;
+      },
     );
     assert.equal(requests.length, beforeLarge + 1, 'reported total stops the read after one page');
 

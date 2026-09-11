@@ -90,6 +90,14 @@ export declare class FileTextDecodeError extends TypeError {
     readonly bytes: any;
     constructor(path: any, identity: any, bytes: any, cause: any);
 }
+/** One exact file generation exceeded the caller-owned text collection bound. */
+export declare class FileTextLimitError extends RangeError {
+    readonly path: any;
+    readonly identity: any;
+    readonly total: any;
+    readonly limit: any;
+    constructor(path: any, identity: any, total: any, limit: any);
+}
 export declare function connect(options?: ConnectOptions): Promise<ClientSession>;
 /**
  * Opens a surface and paints a dependency-free first frame.

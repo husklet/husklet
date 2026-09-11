@@ -791,6 +791,13 @@ export declare class FileTextDecodeError extends TypeError {
     readonly bytes: number;
     readonly cause: unknown;
 }
+/** One exact file generation exceeded the caller-owned text collection bound. */
+export declare class FileTextLimitError extends RangeError {
+    readonly path: string;
+    readonly identity: string;
+    readonly total: number;
+    readonly limit: number;
+}
 export interface ConnectOptions {
     path?: string;
     /** Bounds pending calls, heartbeats, and queued event callback deliveries. */

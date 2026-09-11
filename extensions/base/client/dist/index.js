@@ -270,6 +270,21 @@ export class FileTextDecodeError extends TypeError {
         this.bytes = bytes;
     }
 }
+/** One exact file generation exceeded the caller-owned text collection bound. */
+export class FileTextLimitError extends RangeError {
+    path;
+    identity;
+    total;
+    limit;
+    constructor(path, identity, total, limit) {
+        super(`filesystem text ${path} at identity ${identity} exceeds the caller's ${limit} byte limit`);
+        this.name = 'FileTextLimitError';
+        this.path = path;
+        this.identity = identity;
+        this.total = total;
+        this.limit = limit;
+    }
+}
 /** Reference-counted host subscriptions, keyed by session and snapshot topic. */
 const subscriptions = new WeakMap();
 const SNAPSHOT_TOPICS = Object.freeze([
@@ -2307,10 +2322,10 @@ export function workspace(session, { signal } = {}) {
                         observed,
                         signal,
                     })) {
-                        if (range.total > maxBytes || bytes + range.contents.length > maxBytes) {
-                            throw new RangeError(`filesystem text ${path} exceeds the caller's ${maxBytes} byte limit`);
-                        }
                         identity ??= range.identity;
+                        if (range.total > maxBytes || bytes + range.contents.length > maxBytes) {
+                            throw new FileTextLimitError(path, range.identity, range.total, maxBytes);
+                        }
                         bytes += range.contents.length;
                         parts.push(decoder.decode(Uint8Array.from(range.contents), { stream: !range.eof }));
                     }
