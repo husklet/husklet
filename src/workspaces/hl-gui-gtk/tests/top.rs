@@ -782,8 +782,8 @@ mod unix {
                     .and_then(|widget| widget.downcast::<gtk::ScrolledWindow>().ok())
                     .expect("process DataTable retains its scrolling viewport");
                 assert!(
-                    (158..=162).contains(&table.height()),
-                    "{width_name} sparse process DataTable allocated {}px instead of its 160px floor",
+                    (78..=92).contains(&table.height()),
+                    "{width_name} sparse process DataTable allocated {}px outside its compact 80px floor and one-row natural height",
                     table.height(),
                 );
                 assert_eq!(table.max_content_height(), 320);

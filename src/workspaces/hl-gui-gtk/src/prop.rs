@@ -307,6 +307,13 @@ fn span_across(widget: &gtk::Widget, axis: gtk::Orientation, bounds: hl_gui::Bou
     let horizontal = axis == gtk::Orientation::Horizontal;
     if let Some(pixels) = bounds.minimum.and_then(|length| dimension_pixels(length, horizontal)) {
         let request = i32::from(pixels);
+        if let Some(window) = widget.downcast_ref::<gtk::ScrolledWindow>() {
+            if horizontal {
+                window.set_min_content_width(request);
+            } else {
+                window.set_min_content_height(request);
+            }
+        }
         // One size request carries both axes, so a floor on one of them must
         // carry the other axis forward or describing a height would erase a
         // width the producer asked for a patch earlier.
@@ -594,14 +601,15 @@ mod tests {
             height(
                 &table,
                 &PropValue::Bounds(hl_gui::Bounds {
-                    minimum: Some(Length::Step(40)),
+                    minimum: Some(Length::Step(20)),
                     maximum: Some(Length::Step(80)),
                 }),
             );
             let window = table
                 .downcast_ref::<gtk::ScrolledWindow>()
                 .expect("DataTable is a scrolling viewport");
-            assert_eq!(table.height_request(), 160);
+            assert_eq!(table.height_request(), 80);
+            assert_eq!(window.min_content_height(), 80);
             assert_eq!(window.max_content_height(), 320);
             assert!(
                 window.propagates_natural_height(),

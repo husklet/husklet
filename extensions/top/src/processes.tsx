@@ -183,7 +183,7 @@ export function Processes({
           source={PROCESS_TABLE_SOURCE}
           schema={schema}
           width="fill"
-          height={{ minimum: { step: 40 }, maximum: { step: 80 } }}
+          height={{ minimum: { step: 20 }, maximum: { step: 80 } }}
           onSort={(event: SortReport) => {
             if (table.accepts(event)) {
               setSort({ column: event.column, descending: Boolean(event.descending) });

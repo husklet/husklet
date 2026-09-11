@@ -4397,6 +4397,10 @@ test('process snapshots disclose initial-only reusable PID scope and host trunca
     ['container', 'pid', 'user', 'command'],
   );
   assert.equal(latestPropertyForTag(stage, 'DataTable', 'Source')?.Source, 206);
+  assert.deepEqual(latestPropertyForTag(stage, 'DataTable', 'Height')?.Bounds, {
+    minimum: { Step: 20 },
+    maximum: { Step: 80 },
+  });
   assert.ok(processTable.version >= 1);
   assert.ok(!labelled(stage, 'Signal'), 'snapshot PID rows never acquire a control action');
   assert.ok(!labelled(stage, 'Kill'), 'snapshot PID rows never acquire a control action');
