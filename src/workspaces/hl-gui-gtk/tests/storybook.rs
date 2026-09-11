@@ -1377,7 +1377,7 @@ mod unix {
             );
             let details = descendants::<gtk::MenuButton>(&root)
                 .into_iter()
-                .find(|button| button.label().as_deref() == Some("3 details"))
+                .find(|button| button.label().as_deref() == Some("View 3 fields"))
                 .expect("narrow DataTable rows expose keyboard-reachable details");
             assert!(details.is_focusable());
             assert!(details.tooltip_text().is_some_and(|text| {

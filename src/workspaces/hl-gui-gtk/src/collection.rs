@@ -128,7 +128,10 @@ fn details_column(
             if count == 1 { "" } else { "s" },
             item.position() + 1
         );
-        button.set_label(&format!("{count} details"));
+        button.set_label(&format!(
+            "View {count} field{}",
+            if count == 1 { "" } else { "s" }
+        ));
         button.set_tooltip_text(Some(&format!("{accessible}: {}", disclosure.join("; "))));
         button.update_property(&[gtk::accessible::Property::Label(&accessible)]);
         if let Some(popover) = button.popover() {

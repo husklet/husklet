@@ -684,9 +684,19 @@ mod unix {
                     .collect::<Vec<_>>();
                 if width == 600 {
                     assert_eq!(visible, ["container", "pid", "command", "__responsive_details:0:2,3,4"],);
-                    let details =
-                        find_menu_button(&root, "3 details").expect("narrow Processes exposes optional metrics");
+                    let details = find_menu_button(&root, "View 3 fields")
+                        .expect("narrow Processes exposes optional metrics as an explicit action");
                     assert!(details.is_focusable());
+                    let disclosure = details
+                        .popover()
+                        .and_then(|popover| popover.child())
+                        .and_then(|child| child.downcast::<gtk::Label>().ok())
+                        .expect("narrow process details retain their disclosure content");
+                    assert_eq!(
+                        disclosure.text(),
+                        "User: developer\nCPU: 2.4\nMemory: 64 MiB",
+                        "responsive process details name every hidden field and value"
+                    );
                 } else {
                     assert_eq!(visible, ["container", "pid", "user", "cpu", "memory", "command"]);
                 }
