@@ -310,7 +310,8 @@ fn themed_icon(image: &gtk::Image, name: Option<&str>) {
     let alias = match name {
         "info" => "dialog-information-symbolic",
         "document-open" => "document-open-symbolic",
-        "utilities-terminal-symbolic" => "system-run-symbolic",
+        "preferences-system-symbolic" => "emblem-system-symbolic",
+        "utilities-terminal-symbolic" => "application-x-executable-symbolic",
         _ => name,
     };
     let theme = gtk::IconTheme::for_display(&image.display());

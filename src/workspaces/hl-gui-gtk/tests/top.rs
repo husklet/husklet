@@ -551,6 +551,25 @@ mod unix {
                 assert!(!hovered.is_active());
                 assert!(hovered.has_css_class("variant-ghost"));
                 assert!(hovered.has_css_class("tone-neutral"));
+                for (label, icon) in [
+                    ("Settings", "emblem-system-symbolic"),
+                    ("Terminals", "application-x-executable-symbolic"),
+                ] {
+                    let destination = destinations
+                        .iter()
+                        .find(|destination| has_label(destination, label))
+                        .expect("semantic Top destination exists");
+                    let emblem = widgets_with_class(destination, "hl-emblem")
+                        .into_iter()
+                        .next()
+                        .and_then(|widget| widget.downcast::<gtk::Image>().ok())
+                        .expect("Top destination retains an emblem");
+                    assert_eq!(
+                        emblem.icon_name().as_deref(),
+                        Some(icon),
+                        "{label} must not collapse to the generic more-actions icon"
+                    );
+                }
                 assert!(selected.grab_focus(), "selected Top destination accepts keyboard focus");
                 hovered.set_state_flags(gtk::StateFlags::PRELIGHT, false);
                 settle_toolkit();

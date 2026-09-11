@@ -99,7 +99,7 @@ function navigationIcon(section: Section): string {
   if (section === 'images') return 'drive-harddisk-symbolic';
   if (section === 'volumes') return 'folder-symbolic';
   if (section === 'networks') return 'network-workgroup-symbolic';
-  return 'view-more-symbolic';
+  return 'utilities-terminal-symbolic';
 }
 
 function navigationTitle(section: Section): string {

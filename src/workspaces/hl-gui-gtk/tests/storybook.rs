@@ -895,10 +895,10 @@ mod unix {
                     terminal_icon.icon_name().as_deref(),
                     Some("utilities-terminal-symbolic")
                 );
-            } else if icon_theme.has_icon("system-run-symbolic") {
+            } else if icon_theme.has_icon("application-x-executable-symbolic") {
                 assert_eq!(
                     terminal_icon.icon_name().as_deref(),
-                    Some("system-run-symbolic")
+                    Some("application-x-executable-symbolic")
                 );
             } else {
                 let terminal_names = terminal_icon
