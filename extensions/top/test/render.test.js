@@ -769,6 +769,11 @@ test('Top owns workspace settings and extension management in the same tab', asy
   );
   assert.equal(labelled(stage, 'Version 2.0.0'), undefined, 'the header version is not repeated');
   assert.ok(labelled(stage, 'Trust & compatibility'));
+  assert.equal(
+    ancestorTags(stage, 'Published by Husklet').includes('Expander'),
+    false,
+    'publisher provenance remains visible before acquisition starts',
+  );
   assert.ok(labelled(stage, 'Verified publisher · Husklet'));
   assert.ok(labelled(stage, 'Compatibility undeclared'));
   assert.equal(labelled(stage, 'Review requested access before anything is installed.'), undefined);
