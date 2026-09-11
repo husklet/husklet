@@ -1,4 +1,4 @@
-import type { FilesystemSelector, ExtensionPreferences, PreferenceValue, Row as WireRow, WireCall, WireReplyFor, WireRequestFor, WireUiEvent } from './generated-protocol.js';
+import type { Capability as GeneratedCapability, FilesystemSelector, ExtensionPreferences, PreferenceValue, Row as WireRow, WireCall, WireReplyFor, WireRequestFor, WireUiEvent } from './generated-protocol.js';
 export type { ExtensionPreferences, FilesystemSelector, PreferenceValue, } from './generated-protocol.js';
 /** One row delivered to a virtualized interface data source. */
 export type DataRow = WireRow;
@@ -53,7 +53,8 @@ export interface ExtensionProviderCatalogue {
     providers: ExtensionProviderDeclaration[];
     truncated: boolean;
 }
-export type ExtensionCapability = 'workspaces:read' | 'workspaces:configure' | 'workspaces:control' | 'workspaces:events' | 'workspace-environment:read' | 'workspace-environment:write' | 'containers:read' | 'containers:create' | 'containers:execute' | 'containers:input' | 'containers:lifecycle' | 'containers:remove' | 'containers:attach' | 'images:read' | 'images:pull' | 'images:remove' | 'images:prune' | 'volumes:read' | 'volumes:write' | 'networks:read' | 'networks:write' | 'terminals:read' | 'terminals:input' | 'terminals:layout-control' | 'terminals:process-control' | 'terminals:output' | 'panes:observe' | 'panes:semantic-read' | 'panes:semantic-control' | 'extensions:read' | 'extensions:control' | 'extensions:remove' | 'extensions:install' | 'filesystem:read' | 'filesystem:write' | 'state:read' | 'state:write' | 'credentials:read' | 'credentials:inject' | 'credentials:write' | 'interface:render' | 'notifications:publish';
+/** Capability vocabulary generated from the authoritative Rust protocol. */
+export type ExtensionCapability = GeneratedCapability;
 export type ContainerSelector = {
     id: string;
 } | {

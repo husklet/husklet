@@ -1402,6 +1402,12 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                           tone="warning"
                         />
                       )}
+                      {acquisition.candidate.requested.includes('workspaces:control') && (
+                        <InlineMessage
+                          label="Workspace lifecycle access requested. This extension could create or delete workspaces and start or stop their workloads."
+                          tone="warning"
+                        />
+                      )}
                       <Expander
                         label={`Exact grants · ${grantedPermissionCount}/${requestedPermissionCount} selected`}
                         expanded={permissionDetailsExpanded}
@@ -2302,11 +2308,14 @@ function newerVersion(candidate: string, installed?: string): boolean {
   return false;
 }
 
-function capabilityLabel(capability: ExtensionCapability): string {
-  const known: Partial<Record<ExtensionCapability, string>> = {
+export function capabilityLabel(capability: ExtensionCapability): string {
+  const known: Record<ExtensionCapability, string> = {
     'workspaces:read': 'View workspace settings',
-    'workspaces:control': 'Modify workspace settings',
+    'workspaces:configure': 'Modify workspace settings',
+    'workspaces:control': 'Create, start, stop, and delete workspaces',
     'workspaces:events': 'Observe workspace lifecycle',
+    'workspace-environment:read': 'Read selected workspace environment values',
+    'workspace-environment:write': 'Change selected workspace environment values',
     'extensions:read': 'View installed extensions',
     'extensions:control': 'Enable, disable, and retry extensions',
     'extensions:install': 'Install and update extensions',
@@ -2314,7 +2323,8 @@ function capabilityLabel(capability: ExtensionCapability): string {
     'containers:read': 'View containers and processes',
     'containers:create': 'Create containers from consented images',
     'containers:execute': 'Run and control detached processes in containers',
-    'containers:lifecycle': 'Start, stop, pause, rename, and signal containers',
+    'containers:input': 'Write to detached process input',
+    'containers:lifecycle': 'Start, stop, pause, restart, rename, and signal containers',
     'containers:remove': 'Permanently remove containers',
     'containers:attach': 'Run commands inside containers',
     'images:read': 'View images',
@@ -2327,6 +2337,7 @@ function capabilityLabel(capability: ExtensionCapability): string {
     'networks:write': 'Create and modify networks',
     'terminals:read': 'View terminal tabs and panes',
     'terminals:input': 'Type into terminal panes',
+    'terminals:focus': 'Move keyboard focus between terminal panes',
     'terminals:layout-control': 'Create and rearrange terminal panes',
     'terminals:process-control': 'Replace processes in terminal panes',
     'terminals:output': 'Read terminal text',
@@ -2334,34 +2345,18 @@ function capabilityLabel(capability: ExtensionCapability): string {
     'panes:semantic-read': 'Read structured pane interfaces',
     'panes:semantic-control': 'Operate structured pane interfaces',
     'interface:render': 'Render this extension interface',
+    'filesystem:read': 'Read selected workspace files',
+    'filesystem:write': 'Change selected workspace files',
+    'state:read': 'Read this extension’s private state',
+    'state:write': 'Change this extension’s private state',
+    'preferences:read': 'Read this extension’s interface preferences',
+    'preferences:write': 'Change this extension’s interface preferences',
+    'credentials:read': 'Read selected extension credentials',
+    'credentials:inject': 'Inject selected credentials into container processes',
+    'credentials:write': 'Change selected extension credentials',
+    'notifications:publish': 'Show workspace notifications',
   };
-  if (known[capability]) return known[capability];
-  const [resource, authority] = capability.split(':');
-  const action =
-    authority === 'read'
-      ? 'View'
-      : authority === 'control'
-        ? 'Control'
-        : authority === 'install'
-          ? 'Install'
-          : authority === 'write'
-            ? 'Modify'
-            : authority === 'output'
-              ? 'Read output from'
-              : authority === 'observe'
-                ? 'Observe'
-                : authority === 'render'
-                  ? 'Render'
-                  : titleWords(authority);
-  return `${action} ${titleWords(resource)}`;
-}
-
-function titleWords(value = ''): string {
-  return value
-    .split('-')
-    .filter(Boolean)
-    .map((word) => `${word[0]?.toUpperCase() ?? ''}${word.slice(1)}`)
-    .join(' ');
+  return known[capability];
 }
 
 function compactDigest(digest: string): string {

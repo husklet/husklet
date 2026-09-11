@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement as h } from 'react';
+import { PROTOCOL_CAPABILITIES } from '@husklet/client';
 import {
   Containers,
   Executions,
@@ -28,9 +29,18 @@ import {
   acquisitionLabel,
   catalogueTrust,
   catalogueCandidateMismatch,
+  capabilityLabel,
   filterCatalogueEntries,
   filterInstalledExtensions,
 } from '../dist/app.js';
+
+test('every host capability has explicit consent language and workspace lifecycle is not settings', () => {
+  for (const { wire } of PROTOCOL_CAPABILITIES) {
+    assert.ok(capabilityLabel(wire), `missing consent language for ${wire}`);
+  }
+  assert.equal(capabilityLabel('workspaces:configure'), 'Modify workspace settings');
+  assert.equal(capabilityLabel('workspaces:control'), 'Create, start, stop, and delete workspaces');
+});
 
 test('catalogue display strings cannot forge verified publisher status', () => {
   const forged = {

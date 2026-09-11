@@ -1227,6 +1227,7 @@ mod unix {
                             requested: Grant::new([
                                 Capability::FilesystemRead,
                                 Capability::Interface,
+                                Capability::WorkspaceControl,
                             ]),
                             required: Grant::new([Capability::Interface]),
                             requested_images: Default::default(),
@@ -1253,7 +1254,15 @@ mod unix {
         drain_extension_renders(wire, tree, surface);
 
         let review_root = surface.widget().clone().upcast::<gtk::Widget>();
-        assert!(has_label(&review_root, "No access selected · 3 requested"));
+        assert!(has_label(&review_root, "No access selected · 4 requested"));
+        assert!(has_label(
+            &review_root,
+            "Create, start, stop, and delete workspaces"
+        ));
+        assert!(has_label(
+            &review_root,
+            "Workspace lifecycle access requested. This extension could create or delete workspaces and start or stop their workloads."
+        ));
         assert!(has_label(
             &review_root,
             "Required to keep this extension available after the update: Render this extension interface. Select it below to continue."
@@ -1275,7 +1284,7 @@ mod unix {
             wire,
             tree,
             surface,
-            "Review decision · 1/3 selected",
+            "Review decision · 1/4 selected",
             |request| match request {
                 Request::EventUnsubscribe { .. } => Reply::Done,
                 other => panic!("unexpected extension consent call: {other:?}"),
@@ -1293,7 +1302,7 @@ mod unix {
         settle_toolkit();
         send_report(surface, wire, 102, |event| matches!(event, hl_gui::Event::Toggle { .. }));
         apply_extension_update_until(
-            wire, tree, surface, "Review decision · 3/3 selected",
+            wire, tree, surface, "Review decision · 3/4 selected",
             |request| match request {
                 Request::EventUnsubscribe { .. } => Reply::Done,
                 other => panic!("unexpected exact-file consent call: {other:?}"),
@@ -1333,6 +1342,7 @@ mod unix {
                             requested: Grant::new([
                                 Capability::FilesystemRead,
                                 Capability::Interface,
+                                Capability::WorkspaceControl,
                             ]),
                             required: Grant::new([Capability::Interface]),
                             requested_images: Default::default(),
