@@ -2365,7 +2365,8 @@ mod tests {
         let mut conversation = Conversation::new(ours, authority(), "dev", Queue::new()).expect("conversation");
         conversation.session.follow(hl_extension::Topic::ExtensionAcquisitions);
         let events = super::super::management_events::ExtensionEvents::default();
-        let job = super::super::acquisition::AcquisitionJob::parse("7").expect("job");
+        let job = super::super::acquisition::AcquisitionJob::test(7);
+        let job_wire = job.wire();
         events.acquisition(
             job,
             super::super::acquisition::AcquisitionSnapshot {
@@ -2384,7 +2385,7 @@ mod tests {
         assert!(matches!(
             snapshot,
             Snapshot::ExtensionAcquisitions(change)
-                if change.job == "7" && change.revision == 3 && change.state == "reading-manifest"
+                if change.job == job_wire && change.revision == 3 && change.state == "reading-manifest"
         ));
     }
 
