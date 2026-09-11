@@ -476,6 +476,26 @@ mod unix {
                     );
                 }
             }
+            if fixture == "populated" && name == "images" {
+                let card = widgets_with_class(&root, "hl-card")
+                    .into_iter()
+                    .next()
+                    .expect("image inventory renders a card");
+                let minimum = if width == 1_200 { 900 } else { 540 };
+                assert!(
+                    card.width() >= minimum,
+                    "{width_name} image card collapsed to {}px instead of using the page width",
+                    card.width()
+                );
+                let inspect = find_button(&card, "Inspect");
+                assert!(inspect.has_css_class("size-small"));
+                assert!(
+                    inspect.height() <= 32,
+                    "{width_name} image Inspect action exceeded 32px: {}",
+                    inspect.height()
+                );
+                assert!(inspect.grab_focus(), "image Inspect action is keyboard reachable");
+            }
             if fixture != "error" && name == "processes" && width == 1_200 {
                 settle_toolkit();
                 let request = surface

@@ -6,9 +6,9 @@ import { host } from './host.js';
 
 const resource = (data) => ({ data, loading: false, error: null, reload: async () => {} });
 
-test('image inventory labels pull input and keeps destructive actions disclosed', async () => {
+test('image inventory is a full-width resource card with compact actions and disclosed destruction', async () => {
   const stage = host();
-  stage.render(
+  const frame = stage.render(
     h(Images, {
       api: {
         images: {
@@ -24,6 +24,33 @@ test('image inventory labels pull input and keeps destructive actions disclosed'
   assert.ok(labelled(stage, 'Image reference'));
   assert.ok(labelled(stage, 'Image maintenance'));
   assert.ok(labelled(stage, 'Danger zone'));
+  const card = frame.patches.find((patch) => patch.Create?.tag === 'Card')?.Create.id;
+  assert.ok(card, 'the image inventory renders a resource card');
+  assert.ok(
+    frame.patches.some(
+      (patch) =>
+        patch.SetProp?.id === card &&
+        patch.SetProp.prop === 'Width' &&
+        patch.SetProp.value?.Length === 'Fill',
+    ),
+    'the resource card consumes the readable page width',
+  );
+  assert.ok(
+    frame.patches.some((patch) => patch.Create?.tag === 'CardActions'),
+    'resource operations use canonical card actions',
+  );
+  const inspect = frame.patches.find(
+    (patch) => patch.SetProp?.prop === 'Label' && patch.SetProp.value?.Text === 'Inspect',
+  )?.SetProp.id;
+  assert.ok(
+    frame.patches.some(
+      (patch) =>
+        patch.SetProp?.id === inspect &&
+        patch.SetProp.prop === 'Size' &&
+        patch.SetProp.value?.ControlSize === 'Small',
+    ),
+    'the frequent inspect operation remains compact',
+  );
   invoke(stage, 'Inspect');
   await settled();
   assert.ok(
