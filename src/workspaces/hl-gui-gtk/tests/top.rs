@@ -823,13 +823,33 @@ mod unix {
                         access_bounds.y(),
                         "wide Discover actions must align despite unequal card copy"
                     );
+                    assert_eq!(
+                        review_card.width(),
+                        access_card.width(),
+                        "wide Discover columns must share the available content width"
+                    );
                 } else {
                     let heights = [review_card.height(), access_card.height()];
                     assert!(
                         heights.iter().all(|height| *height <= 225),
                         "narrow Discover cards stretched sparse content into {heights:?}px panels"
                     );
+                    assert_eq!(
+                        review_card.width(),
+                        access_card.width(),
+                        "narrow Discover cards must use one consistent full-width column"
+                    );
                 }
+                let right_edge = widgets_with_class(&discover_root, "hl-card")
+                    .into_iter()
+                    .filter_map(|card| card.compute_bounds(&discover_root))
+                    .map(|bounds| bounds.x() + bounds.width())
+                    .max_by(f32::total_cmp)
+                    .expect("Discover renders cards");
+                assert!(
+                    right_edge >= width as f32 - if width == 600 { 17.0 } else { 77.0 },
+                    "{width_name} Discover grid stopped at {right_edge}px in a {width}px surface"
+                );
                 assert!(
                     vertical_end(&discover_root, review.upcast_ref()) <= 800,
                     "{width_name} Discover update action fell below the first viewport"

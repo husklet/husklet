@@ -156,7 +156,14 @@ impl Weave {
         let packs_cards = !vertical && children.iter().any(|child| child.has_css_class("hl-card"));
         let mut lines = vec![Line::default()];
         for child in children {
-            let (main, cross) = size(&child, vertical, room, packs_cards);
+            let (mut main, mut cross) = size(&child, vertical, room, packs_cards);
+            if compact_cards {
+                // A compact card owns its complete row. Measure its height at
+                // that final width rather than retaining the taller
+                // height-for-width result from its authored packing floor.
+                main = room;
+                cross = child.measure(gtk::Orientation::Vertical, room).1;
+            }
             let line = lines.last_mut().expect("a line is always open");
             let advance = if line.children.is_empty() { main } else { main + spacing };
             if room >= 0 && !line.children.is_empty() && (compact_cards || line.main + advance > room) {

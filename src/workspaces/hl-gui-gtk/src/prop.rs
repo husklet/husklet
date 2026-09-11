@@ -337,6 +337,11 @@ fn dimension_pixels(length: Length, horizontal: bool) -> Option<u16> {
 }
 
 fn ceiling_of(widget: &gtk::Widget, horizontal: bool, ceiling: Length) {
+    if horizontal && ceiling == Length::Fill {
+        widget.set_hexpand(true);
+        widget.set_halign(gtk::Align::Fill);
+        return;
+    }
     if let Some(window) = widget.downcast_ref::<gtk::ScrolledWindow>() {
         let pixels = i32::from(dimension_pixels(ceiling, horizontal).unwrap_or(0));
         if horizontal {
@@ -546,6 +551,25 @@ mod tests {
             grow(&card, &PropValue::Number(1.0));
             assert!(card.hexpands(), "explicit grow grants fill authority");
             assert_eq!(card.halign(), gtk::Align::Fill);
+        });
+    }
+
+    #[test]
+    fn a_fill_ceiling_expands_from_an_authored_width_floor_without_vertical_growth() {
+        let _ = crate::test_support::on_the_toolkit_thread(|| {
+            let card: gtk::Widget = crate::component::card::widget(hl_gui::Tag::Card);
+            width(
+                &card,
+                &PropValue::Bounds(hl_gui::Bounds {
+                    minimum: Some(Length::Chars(38)),
+                    maximum: Some(Length::Fill),
+                }),
+            );
+
+            assert!(card.width_request() > 0, "the character floor remains measurable");
+            assert!(card.hexpands(), "Fill grants available horizontal width");
+            assert_eq!(card.halign(), gtk::Align::Fill);
+            assert!(!card.vexpands(), "a width bound must not grant vertical growth");
         });
     }
 
