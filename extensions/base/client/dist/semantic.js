@@ -25,8 +25,8 @@ const escapeXml = (value) => Array.from(String(value), (character) => {
     .replaceAll('\t', '&#x9;')
     .replaceAll('\n', '&#xA;')
     .replaceAll('\r', '&#xD;');
-/** Deterministic bounded XML projection of one validated semantic snapshot. */
-export function semanticXml(tree) {
+/** Deterministic bounded XML projection with explicit source and projection completeness. */
+export function semanticText(tree) {
     if (!Number.isSafeInteger(tree?.generation) ||
         tree.generation < 0 ||
         !Number.isSafeInteger(tree?.revision) ||
@@ -87,5 +87,15 @@ export function semanticXml(tree) {
     if (cut)
         append('<truncated/>', bytes(close));
     append(close);
-    return output;
+    const sourceTruncated = tree?.truncated === true;
+    return Object.freeze({
+        text: output,
+        complete: !sourceTruncated && !cut,
+        sourceTruncated,
+        projectionTruncated: cut,
+    });
+}
+/** Compatibility shorthand when the caller only needs the bounded XML bytes. */
+export function semanticXml(tree) {
+    return semanticText(tree).text;
 }

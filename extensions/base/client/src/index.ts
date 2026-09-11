@@ -22,8 +22,8 @@ export {
   validateFailure,
   validateSnapshot,
 } from './generated-protocol.js';
-import { semanticXml } from './semantic.js';
-export { semanticXml };
+import { semanticText, semanticXml } from './semantic.js';
+export { semanticText, semanticXml };
 import { ExtensionError, Session } from './session.js';
 import type {
   CallOptions,
@@ -2256,7 +2256,7 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
         if (snapshot.generation !== pane.generation || snapshot.revision !== pane.revision) {
           throw new PaneChangedError(slot, pane, snapshot);
         }
-        return { kind: 'ui', text: semanticXml(snapshot), snapshot };
+        return { kind: 'ui', snapshot, ...semanticText(snapshot) };
       },
       readAll: async ({ lines }: { lines?: number } = {}) => {
         const inventory = exactPaneInventory(expect(await session.call('pane_list'), 'panes'));
@@ -2292,7 +2292,7 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
             }
             panes.push({
               pane,
-              readable: { kind: 'ui', text: semanticXml(snapshot), snapshot },
+              readable: { kind: 'ui', snapshot, ...semanticText(snapshot) },
             });
           }
         }
@@ -4140,7 +4140,7 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
       if (node.disabled) throw new Error('semantic node is disabled');
       if (!node.actions.includes(proposal.action))
         throw new Error('semantic node does not advertise the requested action');
-      const before = { snapshot, text: semanticXml(snapshot) };
+      const before = { snapshot, ...semanticText(snapshot) };
       await scoped.terminal.act(slot, {
         ...cursor,
         node: proposal.node,
@@ -4171,7 +4171,7 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
       return {
         changed: true,
         before,
-        after: { snapshot: afterSnapshot, text: semanticXml(afterSnapshot) },
+        after: { snapshot: afterSnapshot, ...semanticText(afterSnapshot) },
       };
     } finally {
       clearTimeout(timer);

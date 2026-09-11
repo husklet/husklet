@@ -11,12 +11,15 @@ const session = await connect({ path: configuration.path, pendingLimit: 8, timeo
 try {
   const terminal = workspace(session).terminal;
   const context = await terminal.readAllStable({ lines: 80, attempts: 3 });
+  const contextIncomplete =
+    !context.complete ||
+    context.panes.some(({ readable }) => readable.kind === 'ui' && !readable.complete);
   const selected = context.panes.find(({ pane }) => pane.slot === configuration.slot);
   if (!selected) throw new Error('pane is not available in the bounded inventory');
   const observed = selected.readable;
   if (observed.kind === 'ui') {
     process.stdout.write(
-      `${JSON.stringify({ context: context.panes.map(({ pane, readable }) => ({ slot: pane.slot, kind: readable.kind, text: readable.text })), incomplete: !context.complete, selected: { kind: 'ui', text: observed.text } })}\n`,
+      `${JSON.stringify({ context: context.panes.map(({ pane, readable }) => ({ slot: pane.slot, kind: readable.kind, text: readable.text })), incomplete: contextIncomplete, selected: { kind: 'ui', text: observed.text, complete: observed.complete } })}\n`,
     );
   } else {
     const deadlineMs = configuration.deadlineMs ?? 2_000;
@@ -37,7 +40,7 @@ try {
         },
       );
       process.stdout.write(
-        `${JSON.stringify({ context: context.panes.map(({ pane, readable }) => ({ slot: pane.slot, kind: readable.kind, text: readable.text })), incomplete: !context.complete || !result.settled, selected: { kind: 'terminal', before: observed.text, after: result.changed ? result.after.text : null, afterKind: result.changed ? result.after.kind : null, replacement: result.changed && result.after.snapshot.generation !== observed.snapshot.generation } })}\n`,
+        `${JSON.stringify({ context: context.panes.map(({ pane, readable }) => ({ slot: pane.slot, kind: readable.kind, text: readable.text })), incomplete: contextIncomplete || !result.settled || (result.changed && result.after.kind === 'ui' && !result.after.complete), selected: { kind: 'terminal', before: observed.text, after: result.changed ? result.after.text : null, afterKind: result.changed ? result.after.kind : null, replacement: result.changed && result.after.snapshot.generation !== observed.snapshot.generation } })}\n`,
       );
     } finally {
       clearTimeout(deadline);

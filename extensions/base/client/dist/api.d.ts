@@ -460,15 +460,24 @@ export interface PaneSemanticTree {
     root: SemanticNode;
     truncated: boolean;
 }
+export interface SemanticTextProjection {
+    text: string;
+    /** False when either the host tree or the client XML projection was truncated. */
+    complete: boolean;
+    sourceTruncated: boolean;
+    projectionTruncated: boolean;
+}
+export type SemanticTextObservation = {
+    snapshot: PaneSemanticTree;
+} & SemanticTextProjection;
 export type ReadablePane = {
     kind: 'terminal';
     text: string;
     snapshot: PaneText;
-} | {
+} | ({
     kind: 'ui';
-    text: string;
     snapshot: PaneSemanticTree;
-};
+} & SemanticTextProjection);
 export interface ReadablePaneInventory {
     panes: Array<{
         pane: InspectablePane;
@@ -1449,20 +1458,11 @@ export interface WorkspaceApi {
             signal?: AbortSignal;
         }): Promise<{
             changed: true;
-            before: {
-                snapshot: PaneSemanticTree;
-                text: string;
-            };
-            after: {
-                snapshot: PaneSemanticTree;
-                text: string;
-            };
+            before: SemanticTextObservation;
+            after: SemanticTextObservation;
         } | {
             changed: false;
-            before: {
-                snapshot: PaneSemanticTree;
-                text: string;
-            };
+            before: SemanticTextObservation;
         }>;
         writeInput(slot: string, generation: number, revision: number, input: string | Iterable<number>): Promise<void>;
         /** Arm and read before CAS input, then return a later bounded terminal screen revision. */
@@ -1831,4 +1831,5 @@ export declare const protocolCoverage: Readonly<{
     unavailable: Readonly<Record<string, readonly string[]>>;
 }>;
 export declare function semanticXml(tree: PaneSemanticTree): string;
+export declare function semanticText(tree: PaneSemanticTree): SemanticTextProjection;
 export * from './generated-protocol.js';

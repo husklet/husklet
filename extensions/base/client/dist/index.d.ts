@@ -1,7 +1,7 @@
 export { ExtensionError, Session, DATA, SOCKET, PROTOCOL, validateRowRequest, validateUiEvent, } from './session.js';
 export { PROTOCOL_SPECIFICATION_VERSION, PROTOCOL_VERSION, PROTOCOL_BOUNDS, PROTOCOL_CAPABILITIES, PROTOCOL_TOPICS, PROTOCOL_REPLIES, PROTOCOL_REQUEST_CAPABILITIES, encodeRequest, validateRequest, validateReply, validateReplyFor, validateFailure, validateSnapshot, } from './generated-protocol.js';
-import { semanticXml } from './semantic.js';
-export { semanticXml };
+import { semanticText, semanticXml } from './semantic.js';
+export { semanticText, semanticXml };
 import type { CallOptions, ConnectOptions, Session as ClientSession, WorkspaceApi } from './api.js';
 /** A post-creation execution failure whose immutable identity remains recoverable. */
 export declare class ExecutionOperationError extends Error {

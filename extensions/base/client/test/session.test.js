@@ -10112,6 +10112,99 @@ test('real Unix stable pane inventory retries a layout race and keeps the sessio
   }
 });
 
+test('real Unix semantic inventory discloses client projection truncation and preserves identity', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-semantic-projection-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const connections = new Set();
+  const calls = [];
+  const node = (id) => ({
+    id,
+    role: 'button',
+    label: 'label'.repeat(80),
+    value: null,
+    disabled: false,
+    destructive: false,
+    actions: ['invoke'],
+    children: [],
+  });
+  const tree = {
+    slot: 'surface-1',
+    generation: 8,
+    revision: 14,
+    truncated: false,
+    root: { ...node(0), children: Array.from({ length: 255 }, (_, index) => node(index + 1)) },
+  };
+  const pane = {
+    slot: 'surface-1',
+    generation: 8,
+    revision: 14,
+    kind: 'surface',
+    provider: { extension: 'database', provider: 'browser' },
+    tab: 'tab-4',
+    title: 'Database',
+    focused: true,
+  };
+  const fragmented = (socket, value) => {
+    const frame = encode(value);
+    socket.write(frame.subarray(0, 7));
+    setImmediate(() => socket.write(frame.subarray(7)));
+  };
+  const server = net.createServer((socket) => {
+    connections.add(socket);
+    socket.on('close', () => connections.delete(socket));
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.kind !== KIND.request) continue;
+        calls.push(frame.payload.call);
+        const payload =
+          frame.payload.call === 'pane_list'
+            ? { reply: 'panes', with: { panes: [pane], truncated: false } }
+            : { reply: 'semantics', with: tree };
+        fragmented(socket, { channel: 2, kind: KIND.response, payload });
+      }
+    });
+    fragmented(socket, {
+      channel: CONTROL,
+      kind: KIND.open,
+      payload: {
+        protocol: 1,
+        peer: 'semantic-projection',
+        granted: ['panes:observe', 'panes:semantic-read'],
+      },
+    });
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    const terminal = workspace(session).terminal;
+    const cancelled = new AbortController();
+    cancelled.abort('agent stopped');
+    await assert.rejects(
+      terminal.readAllStable({ signal: cancelled.signal }),
+      (error) => error?.name === 'AbortError',
+    );
+    assert.deepEqual(calls, [], 'pre-cancelled semantic inspection emits no request');
+
+    const inventory = await terminal.readAllStable({ attempts: 2 });
+    const [{ pane: identity, readable }] = inventory.panes;
+    assert.deepEqual(identity.provider, { extension: 'database', provider: 'browser' });
+    assert.equal(readable.kind, 'ui');
+    assert.equal(readable.complete, false);
+    assert.equal(readable.sourceTruncated, false);
+    assert.equal(readable.projectionTruncated, true);
+    assert.match(readable.text, /<truncated\/>/);
+    assert.deepEqual(calls, ['pane_list', 'pane_semantic_read', 'pane_list']);
+    assert.equal((await terminal.semantics('surface-1')).revision, 14);
+    assert.equal(calls.at(-1), 'pane_semantic_read', 'the ordered session remains reusable');
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('real Unix execAndWait preserves the completed execution when bounded log retrieval fails', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-exec-log-failure-'));
   const socketPath = path.join(directory, 'host.sock');
