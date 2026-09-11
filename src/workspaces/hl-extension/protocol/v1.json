@@ -20,6 +20,11 @@
       "wire": "workspaces:read"
     },
     {
+      "executes": false,
+      "mutates": true,
+      "wire": "workspaces:configure"
+    },
+    {
       "executes": true,
       "mutates": true,
       "wire": "workspaces:control"
@@ -300,6 +305,12 @@
       "variants": [
         {
           "name": "workspaces:read",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "workspaces:configure",
           "payload": {
             "kind": "unit"
           }
@@ -8054,7 +8065,7 @@
       "request": "workspace_create"
     },
     {
-      "capability": "workspaces:control",
+      "capability": "workspaces:configure",
       "request": "workspace_update"
     },
     {
@@ -13779,7 +13790,7 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:2cd21f83c2b97dbd",
+  "source_fingerprint": "fnv1a64:7e0154c14d4ba51c",
   "specification_version": 1,
   "topics": [
     {

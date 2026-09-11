@@ -1224,7 +1224,7 @@ fn calls() -> Vec<(Request, Capability)> {
                 configuration_revision: "abcdef0123456789abcdef0123456789".into(),
                 configuration: workspace_configuration(),
             },
-            Capability::WorkspaceControl,
+            Capability::WorkspaceConfigure,
         ),
         (
             Request::WorkspaceEnvironmentPatch {
@@ -2114,21 +2114,26 @@ fn every_call_succeeds_with_its_capability_and_fails_without_it() {
 #[test]
 fn workspace_mutations_require_a_complete_generation_before_host_authority() {
     let host = Host::new();
-    let mut session = session(&[Capability::WorkspaceControl], &[]);
-    for request in [
-        Request::WorkspaceUpdate {
-            name: "other".into(),
-            generation: "short".into(),
-            configuration_revision: "abcdef0123456789abcdef0123456789".into(),
-            configuration: workspace_configuration(),
-        },
-        Request::WorkspaceDelete {
-            name: "other".into(),
-            generation: String::new(),
-        },
-    ] {
-        assert!(session.dispatch(&request, &services(&host)).is_err());
-    }
+    let update = Request::WorkspaceUpdate {
+        name: "other".into(),
+        generation: "short".into(),
+        configuration_revision: "abcdef0123456789abcdef0123456789".into(),
+        configuration: workspace_configuration(),
+    };
+    assert!(
+        session(&[Capability::WorkspaceConfigure], &[])
+            .dispatch(&update, &services(&host))
+            .is_err()
+    );
+    let delete = Request::WorkspaceDelete {
+        name: "other".into(),
+        generation: String::new(),
+    };
+    assert!(
+        session(&[Capability::WorkspaceControl], &[])
+            .dispatch(&delete, &services(&host))
+            .is_err()
+    );
     assert!(host.ledger.reached().is_empty());
 }
 

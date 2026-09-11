@@ -75,7 +75,7 @@ order; the JavaScript client's checks are never treated as a security boundary.
 - `host.list(...)` — `workspace_list`, requires `workspaces:read`.
 - `host.inspect(...)` — `workspace_inspect`, requires `workspaces:read`.
 - `host.create(...)` — `workspace_create`, requires `workspaces:control`.
-- `host.update(...)` — `workspace_update`, requires `workspaces:control`.
+- `host.update(...)` — `workspace_update`, requires `workspaces:configure`.
 - `host.patchEnvironment(...)` — `workspace_environment_patch`, requires `workspace-environment:write`.
 - `host.delete(...)` — `workspace_delete`, requires `workspaces:control`.
 - `host.start(...)` — `workspace_start`, requires `workspaces:control`.

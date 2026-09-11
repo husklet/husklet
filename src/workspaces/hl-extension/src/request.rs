@@ -552,8 +552,8 @@ impl Request {
     pub const fn capability(&self) -> Capability {
         match self {
             Self::WorkspaceInfo | Self::WorkspaceList | Self::WorkspaceInspect { .. } => Capability::WorkspaceRead,
+            Self::WorkspaceUpdate { .. } => Capability::WorkspaceConfigure,
             Self::WorkspaceCreate { .. }
-            | Self::WorkspaceUpdate { .. }
             | Self::WorkspaceDelete { .. }
             | Self::WorkspaceStart { .. }
             | Self::WorkspaceStop { .. }

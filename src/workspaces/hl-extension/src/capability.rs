@@ -14,7 +14,10 @@
 pub enum Capability {
     #[serde(rename = "workspaces:read")]
     WorkspaceRead,
-    /// Creating, changing, starting, stopping, or deleting workspaces.
+    /// Changing workspace configuration without granting lifecycle control.
+    #[serde(rename = "workspaces:configure")]
+    WorkspaceConfigure,
+    /// Creating, starting, stopping, or deleting workspaces.
     #[serde(rename = "workspaces:control")]
     WorkspaceControl,
     /// Observing keyboard, focus, and pointer activity across the workspace window.
@@ -143,6 +146,7 @@ impl Capability {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::WorkspaceRead => "workspaces:read",
+            Self::WorkspaceConfigure => "workspaces:configure",
             Self::WorkspaceControl => "workspaces:control",
             Self::WorkspaceEvents => "workspaces:events",
             Self::WorkspaceEnvironmentRead => "workspace-environment:read",
@@ -195,7 +199,8 @@ impl Capability {
     pub const fn mutates(self) -> bool {
         matches!(
             self,
-            Self::WorkspaceControl
+            Self::WorkspaceConfigure
+                | Self::WorkspaceControl
                 | Self::WorkspaceEnvironmentWrite
                 | Self::ContainerCreate
                 | Self::ContainerExecute
@@ -243,6 +248,7 @@ impl Capability {
     /// Every permission this domain declares.
     pub const ALL: &'static [Self] = &[
         Self::WorkspaceRead,
+        Self::WorkspaceConfigure,
         Self::WorkspaceControl,
         Self::WorkspaceEvents,
         Self::WorkspaceEnvironmentRead,

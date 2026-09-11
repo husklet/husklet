@@ -84,6 +84,7 @@ export interface ExtensionProviderCatalogue {
 }
 export type ExtensionCapability =
   | 'workspaces:read'
+  | 'workspaces:configure'
   | 'workspaces:control'
   | 'workspaces:events'
   | 'workspace-environment:read'

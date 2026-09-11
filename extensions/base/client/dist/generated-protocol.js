@@ -1,5 +1,5 @@
 // Generated from Rust hl-extension protocol/v1.json. Do not edit.
-// Protocol artifact fnv1a64:ab37b5f8d63ab58b
+// Protocol artifact fnv1a64:444c1aed426ff8ae
 export const PROTOCOL_SPECIFICATION_VERSION = 1;
 export const PROTOCOL_VERSION = 1;
 export const PROTOCOL_BOUNDS = Object.freeze({
@@ -21,6 +21,11 @@ export const PROTOCOL_CAPABILITIES = Object.freeze([
     "executes": false,
     "mutates": false,
     "wire": "workspaces:read"
+  },
+  {
+    "executes": false,
+    "mutates": true,
+    "wire": "workspaces:configure"
   },
   {
     "executes": true,
@@ -443,7 +448,7 @@ export const PROTOCOL_REQUEST_CAPABILITIES = Object.freeze({
   "workspace_list": "workspaces:read",
   "workspace_inspect": "workspaces:read",
   "workspace_create": "workspaces:control",
-  "workspace_update": "workspaces:control",
+  "workspace_update": "workspaces:configure",
   "workspace_environment_patch": "workspace-environment:write",
   "workspace_delete": "workspaces:control",
   "workspace_start": "workspaces:control",
@@ -631,6 +636,12 @@ const definitions = {
     "variants": [
       {
         "name": "workspaces:read",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
+        "name": "workspaces:configure",
         "payload": {
           "kind": "unit"
         }
