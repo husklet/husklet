@@ -143,21 +143,11 @@ impl FilesystemGrant {
     #[must_use]
     pub fn intersect(&self, consented: &Self) -> Self {
         Self {
-            read: self
-                .read
-                .iter()
-                .filter(|root| consented.read.contains(root))
-                .cloned()
-                .collect(),
-            write: self
-                .write
-                .iter()
-                .filter(|root| consented.write.contains(root))
-                .cloned()
-                .collect(),
-            create: intersection(&self.create, &consented.create),
-            delete: intersection(&self.delete, &consented.delete),
-            rename: intersection(&self.rename, &consented.rename),
+            read: filesystem_intersection(&self.read, &consented.read),
+            write: filesystem_intersection(&self.write, &consented.write),
+            create: filesystem_intersection(&self.create, &consented.create),
+            delete: filesystem_intersection(&self.delete, &consented.delete),
+            rename: filesystem_intersection(&self.rename, &consented.rename),
         }
     }
 
@@ -177,12 +167,34 @@ impl FilesystemGrant {
     }
 }
 
-fn intersection(requested: &[FilesystemSelector], consented: &[FilesystemSelector]) -> Vec<FilesystemSelector> {
-    requested
-        .iter()
-        .filter(|root| consented.contains(root))
-        .cloned()
-        .collect()
+fn filesystem_intersection(
+    requested: &[FilesystemSelector],
+    consented: &[FilesystemSelector],
+) -> Vec<FilesystemSelector> {
+    let mut intersection = Vec::new();
+    for request in requested {
+        for consent in consented {
+            let selected = match (request, consent) {
+                (FilesystemSelector::Exact { exact }, selected) if selected.permits(exact) => Some(request),
+                (selected, FilesystemSelector::Exact { exact }) if selected.permits(exact) => Some(consent),
+                (
+                    FilesystemSelector::Subtree { subtree: requested },
+                    FilesystemSelector::Subtree { subtree: consented },
+                ) if requested.within(consented) => Some(request),
+                (
+                    FilesystemSelector::Subtree { subtree: requested },
+                    FilesystemSelector::Subtree { subtree: consented },
+                ) if consented.within(requested) => Some(consent),
+                _ => None,
+            };
+            if let Some(selected) = selected {
+                if !intersection.contains(selected) {
+                    intersection.push(selected.clone());
+                }
+            }
+        }
+    }
+    intersection.into_iter().collect()
 }
 
 /// One exact container an extension asks to see, or an explicit workspace-wide selector.
@@ -233,12 +245,11 @@ impl ContainerGrant {
 
     #[must_use]
     pub fn intersect(&self, consented: &Self) -> Self {
-        let selectors = self
-            .selectors
-            .iter()
-            .filter(|selector| consented.selectors.contains(selector))
-            .cloned()
-            .collect();
+        let selectors = selector_intersection(
+            &self.selectors,
+            &consented.selectors,
+            &ContainerSelector::All { all: true },
+        );
         Self {
             selectors,
             create: self.create && consented.create,
@@ -457,12 +468,11 @@ impl VolumeGrant {
     #[must_use]
     pub fn intersect(&self, consented: &Self) -> Self {
         Self {
-            selectors: self
-                .selectors
-                .iter()
-                .filter(|selector| consented.selectors.contains(selector))
-                .cloned()
-                .collect(),
+            selectors: selector_intersection(
+                &self.selectors,
+                &consented.selectors,
+                &VolumeSelector::All { all: true },
+            ),
             create: self.create && consented.create,
         }
     }
@@ -505,12 +515,11 @@ impl NetworkGrant {
     #[must_use]
     pub fn intersect(&self, consented: &Self) -> Self {
         Self {
-            selectors: self
-                .selectors
-                .iter()
-                .filter(|selector| consented.selectors.contains(selector))
-                .cloned()
-                .collect(),
+            selectors: selector_intersection(
+                &self.selectors,
+                &consented.selectors,
+                &NetworkSelector::All { all: true },
+            ),
             create: self.create && consented.create,
         }
     }
@@ -556,6 +565,21 @@ impl NetworkGrant {
         }
         Ok(())
     }
+}
+
+fn selector_intersection<T: Clone + PartialEq>(requested: &[T], consented: &[T], all: &T) -> Vec<T> {
+    let selected = if requested.contains(all) {
+        consented
+    } else if consented.contains(all) {
+        requested
+    } else {
+        return requested
+            .iter()
+            .filter(|selector| consented.contains(selector))
+            .cloned()
+            .collect();
+    };
+    selected.to_vec()
 }
 
 /// Identity of an extension. Also the key its grant and state are stored under.
@@ -901,6 +925,7 @@ impl std::error::Error for Invalid {}
 mod tests {
     use super::{
         ContainerGrant, ContainerSelector, FilesystemGrant, FilesystemSelector, ImageGrant, ImageSelector, Manifest,
+        NetworkGrant, NetworkSelector, VolumeGrant, VolumeSelector,
     };
     use crate::{PROTOCOL, RelativePath};
 
@@ -967,6 +992,89 @@ mod tests {
                 read: vec![subtree("src")],
                 write: vec![exact("workspace.toml")],
                 ..FilesystemGrant::default()
+            }
+        );
+    }
+
+    #[test]
+    fn filesystem_consent_keeps_the_narrower_overlapping_scope() {
+        let exact = |path| FilesystemSelector::Exact {
+            exact: RelativePath::new(path).unwrap(),
+        };
+        let subtree = |path| FilesystemSelector::Subtree {
+            subtree: RelativePath::new(path).unwrap(),
+        };
+        let requested = FilesystemGrant {
+            read: vec![subtree("src")],
+            write: vec![exact("src/index.ts")],
+            ..FilesystemGrant::default()
+        };
+        let consented = FilesystemGrant {
+            read: vec![exact("src/index.ts")],
+            write: vec![subtree("src")],
+            ..FilesystemGrant::default()
+        };
+        assert_eq!(
+            requested.intersect(&consented),
+            FilesystemGrant {
+                read: vec![exact("src/index.ts")],
+                write: vec![exact("src/index.ts")],
+                ..FilesystemGrant::default()
+            }
+        );
+    }
+
+    #[test]
+    fn resource_wildcards_intersect_to_the_specific_scope() {
+        let container = ContainerSelector::Name {
+            name: "database".into(),
+        };
+        let network = NetworkSelector::Name {
+            name: "backend".into(),
+        };
+        let volume = VolumeSelector::Name {
+            name: "postgres-data".into(),
+        };
+        assert_eq!(
+            ContainerGrant {
+                selectors: vec![ContainerSelector::All { all: true }],
+                create: true,
+            }
+            .intersect(&ContainerGrant {
+                selectors: vec![container.clone()],
+                create: false,
+            }),
+            ContainerGrant {
+                selectors: vec![container],
+                create: false,
+            }
+        );
+        assert_eq!(
+            NetworkGrant {
+                selectors: vec![network.clone()],
+                create: true,
+            }
+            .intersect(&NetworkGrant {
+                selectors: vec![NetworkSelector::All { all: true }],
+                create: true,
+            }),
+            NetworkGrant {
+                selectors: vec![network],
+                create: true,
+            }
+        );
+        assert_eq!(
+            VolumeGrant {
+                selectors: vec![VolumeSelector::All { all: true }],
+                create: true,
+            }
+            .intersect(&VolumeGrant {
+                selectors: vec![volume.clone()],
+                create: true,
+            }),
+            VolumeGrant {
+                selectors: vec![volume],
+                create: true,
             }
         );
     }

@@ -740,6 +740,58 @@ mod tests {
     }
 
     #[test]
+    fn broad_requests_record_the_specific_resource_scope_a_person_consented() {
+        let mut installation = Installation::new();
+        let mut asked = manifest(&[
+            Capability::ContainerRead,
+            Capability::NetworkRead,
+            Capability::FilesystemRead,
+        ]);
+        asked.containers.selectors = vec![crate::ContainerSelector::All { all: true }];
+        asked.networks.selectors = vec![crate::NetworkSelector::All { all: true }];
+        asked.filesystem.read = vec![crate::FilesystemSelector::Subtree {
+            subtree: hl_rpc::RelativePath::new("src").unwrap(),
+        }];
+        let containers = crate::ContainerGrant {
+            selectors: vec![crate::ContainerSelector::Name {
+                name: "database".into(),
+            }],
+            create: false,
+        };
+        let networks = crate::NetworkGrant {
+            selectors: vec![crate::NetworkSelector::Name {
+                name: "backend".into(),
+            }],
+            create: false,
+        };
+        let filesystem = crate::FilesystemGrant {
+            read: vec![crate::FilesystemSelector::Exact {
+                exact: hl_rpc::RelativePath::new("src/index.ts").unwrap(),
+            }],
+            ..crate::FilesystemGrant::default()
+        };
+
+        let record = installation
+            .install_resource_scoped(
+                &asked,
+                "sha256:scoped",
+                &asked.capabilities,
+                &containers,
+                &crate::ImageGrant::default(),
+                &networks,
+                &crate::VolumeGrant::default(),
+                &filesystem,
+                &crate::WorkspaceEnvironmentGrant::default(),
+                1,
+            )
+            .unwrap();
+
+        assert_eq!(record.containers, containers);
+        assert_eq!(record.networks, networks);
+        assert_eq!(record.filesystem, filesystem);
+    }
+
+    #[test]
     fn volume_authority_records_only_the_manifest_and_consent_intersection() {
         let mut installation = Installation::new();
         let mut asked = manifest(&[Capability::VolumeRead, Capability::VolumeWrite]);
