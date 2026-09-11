@@ -3,7 +3,6 @@ import {
   Badge,
   Button,
   Card,
-  CardActions,
   CardContent,
   CardHeader,
   Column,
@@ -264,12 +263,37 @@ export function Executions({
             variant={selected === item.id ? 'filled' : 'outline'}
             width="fill"
           >
-            <CardHeader
-              label={item.command?.join(' ') || shortId(item.id)}
-              detail={`container ${shortId(item.container_id)}`}
-              align="start"
-              width="fill"
-            />
+            <Row gap={2} align="center" justify="start" wrap width="fill">
+              <CardHeader
+                label={item.command?.join(' ') || shortId(item.id)}
+                detail={`container ${shortId(item.container_id)}`}
+                align="start"
+                width="fill"
+                grow
+              />
+              <Row gap={1} align="center" wrap>
+                <Button
+                  label={selected === item.id ? 'Hide details' : 'Details'}
+                  size="small"
+                  variant="filled"
+                  tone="accent"
+                  enabled={!busy}
+                  onInvoke={() => (selected === item.id ? setSelected('') : void inspect(item.id))}
+                />
+                <Button
+                  label={busy === `logs:${item.id}` ? 'Loading logs…' : 'Load output'}
+                  size="small"
+                  enabled={!busy}
+                  onInvoke={() => void logs(item.id)}
+                />
+                <Button
+                  label={busy === `wait:${item.id}` ? 'Waiting…' : 'Wait up to 5s'}
+                  size="small"
+                  enabled={!busy && item.running}
+                  onInvoke={() => void wait(item.id)}
+                />
+              </Row>
+            </Row>
             <CardContent>
               <Badge
                 label={item.running ? 'running' : `exited ${item.exit_code}`}
@@ -284,28 +308,6 @@ export function Executions({
                 />
               ) : null}
             </CardContent>
-            <CardActions>
-              <Button
-                label={selected === item.id ? 'Hide details' : 'Details'}
-                size="small"
-                variant="filled"
-                tone="accent"
-                enabled={!busy}
-                onInvoke={() => (selected === item.id ? setSelected('') : void inspect(item.id))}
-              />
-              <Button
-                label={busy === `logs:${item.id}` ? 'Loading logs…' : 'Load output'}
-                size="small"
-                enabled={!busy}
-                onInvoke={() => void logs(item.id)}
-              />
-              <Button
-                label={busy === `wait:${item.id}` ? 'Waiting…' : 'Wait up to 5s'}
-                size="small"
-                enabled={!busy && item.running}
-                onInvoke={() => void wait(item.id)}
-              />
-            </CardActions>
             <CardContent>
               <Expander label="More actions" width="fill" align="start">
                 <Column gap={1}>

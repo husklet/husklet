@@ -497,6 +497,11 @@ mod unix {
                 );
                 assert!(
                     card.height() <= 128,
+                    "{width_name} collapsed execution record is too tall: {}px",
+                    card.height()
+                );
+                assert!(
+                    card.height() <= 128,
                     "{width_name} one-line image record is too tall: {}px",
                     card.height()
                 );
