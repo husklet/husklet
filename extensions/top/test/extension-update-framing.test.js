@@ -63,6 +63,7 @@ test('installed catalogue extension starts an update review over real Unix frami
                         reference,
                         publisher: 'Husklet',
                         source: 'husklet:first-party/storybook',
+                        publisher_verified: true,
                       },
                     ],
                     complete: true,
@@ -124,6 +125,12 @@ test('installed catalogue extension starts an update review over real Unix frami
         stage,
         `Replaces installed image sha256:${'a'.repeat(12)}…${'a'.repeat(8)}. Access below was reset and must be approved again.`,
       ),
+    );
+    assert.ok(labelled(stage, 'Verified publisher · Husklet'));
+    assert.ok(labelled(stage, 'Catalogue source · husklet:first-party/storybook'));
+    assert.equal(
+      labelled(stage, 'Direct OCI image · no catalogue publisher verification.'),
+      undefined,
     );
   } finally {
     stage?.render(null);

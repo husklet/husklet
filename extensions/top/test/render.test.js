@@ -2498,6 +2498,12 @@ for (const updating of [false, true]) {
     assert.ok(labelled(stage, 'scoped · 2.0.0'));
     assert.ok(labelled(stage, 'Source local/scoped:2'));
     assert.ok(labelled(stage, `Reviewed image ${compactDigest(candidate.image_digest)}`));
+    assert.ok(
+      labelled(
+        stage,
+        'Direct OCI image · no catalogue publisher verification. Confirm the source and reviewed image digest before granting access.',
+      ),
+    );
     if (updating) {
       assert.ok(
         labelled(

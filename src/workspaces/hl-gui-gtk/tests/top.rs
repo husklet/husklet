@@ -11,8 +11,8 @@ mod unix {
 
     use gtk::prelude::*;
     use hl_extension::port::{
-        ExtensionAcquisitionJob, ExtensionAcquisitionProgress, ExtensionAcquisitionStatus, ExtensionCandidate,
-        ExecutionSummary, ExtensionCatalogue, ExtensionCatalogueEntry, ImageDetails, NetworkEndpointInventory,
+        ExecutionSummary, ExtensionAcquisitionJob, ExtensionAcquisitionProgress, ExtensionAcquisitionStatus,
+        ExtensionCandidate, ExtensionCatalogue, ExtensionCatalogueEntry, ImageDetails, NetworkEndpointInventory,
         NetworkInventory, NetworkKind, NetworkSummary,
     };
     use hl_extension::{
@@ -1244,8 +1244,7 @@ mod unix {
             ))
             .expect("image Inspect invocation reaches Top");
             let deadline = Instant::now() + DEADLINE;
-            while Instant::now() < deadline
-                && !has_label(surface.widget().upcast_ref::<gtk::Widget>(), "Image summary")
+            while Instant::now() < deadline && !has_label(surface.widget().upcast_ref::<gtk::Widget>(), "Image summary")
             {
                 match receive_until(&mut wire, (Instant::now() + Duration::from_millis(80)).min(deadline)) {
                     Ok(frame) if frame.kind == hl_extension::Kind::Credit => {}
@@ -1540,6 +1539,19 @@ mod unix {
 
         let review_root = surface.widget().clone().upcast::<gtk::Widget>();
         assert!(has_label(&review_root, "No access selected · 8 requested"));
+        assert!(has_label(&review_root, "Publisher · Community"));
+        assert!(has_label(
+            &review_root,
+            "Catalogue source · community/developer-tool-01"
+        ));
+        assert!(has_label(
+            &review_root,
+            "This catalogue publisher is not verified. Confirm the source and reviewed image digest before granting access."
+        ));
+        assert!(!has_label(
+            &review_root,
+            "Direct OCI image · no catalogue publisher verification. Confirm the source and reviewed image digest before granting access."
+        ));
         assert!(has_label(&review_root, "Create, start, stop, and delete workspaces"));
         assert!(has_label(
             &review_root,

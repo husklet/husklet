@@ -1398,6 +1398,27 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                         tooltip={acquisition.candidate.image_digest}
                         wrap
                       />
+                      {catalogueExpectation ? (
+                        <Column gap={1}>
+                          <Badge {...catalogueTrust(catalogueExpectation)} />
+                          <Text
+                            label={`Catalogue source · ${catalogueExpectation.source}`}
+                            color="text-dim"
+                            wrap
+                          />
+                          {!catalogueExpectation.publisher_verified ? (
+                            <InlineMessage
+                              label="This catalogue publisher is not verified. Confirm the source and reviewed image digest before granting access."
+                              tone="warning"
+                            />
+                          ) : null}
+                        </Column>
+                      ) : (
+                        <InlineMessage
+                          label="Direct OCI image · no catalogue publisher verification. Confirm the source and reviewed image digest before granting access."
+                          tone="warning"
+                        />
+                      )}
                       {acquisition.candidate.installed_image_digest ? (
                         <InlineMessage
                           label={`Replaces installed image ${compactDigest(acquisition.candidate.installed_image_digest)}. Access below was reset and must be approved again.`}
