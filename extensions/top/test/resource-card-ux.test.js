@@ -91,7 +91,8 @@ test('volume authority refusal gives one recovery path and withholds removal', a
   );
   assert.equal(labelled(stage, 'Access required'), undefined);
   assert.equal(currentLabels(stage).includes('Remove'), false);
-  invoke(stage, 'Open Extensions');
+  assert.deepEqual(property(stage, 'Review access', 'Size'), { ControlSize: 'Small' });
+  invoke(stage, 'Review access');
   assert.equal(openedExtensions, 1);
 });
 
@@ -141,7 +142,8 @@ test('container authority refusal explains recovery and withholds detail operati
     1,
     'the refusal is explained once',
   );
-  invoke(stage, 'Open Extensions');
+  assert.deepEqual(property(stage, 'Review access', 'Size'), { ControlSize: 'Small' });
+  invoke(stage, 'Review access');
   assert.equal(openedExtensions, 1, 'the recovery action invokes application navigation');
   assert.equal(currentLabels(stage).includes('Retry details'), false);
   assert.equal(currentLabels(stage).includes('Load logs'), false);
@@ -210,6 +212,15 @@ function labelled(stage, label) {
     .flatMap((frame) => frame.patches)
     .filter((patch) => patch.SetProp?.prop === 'Label' && patch.SetProp.value?.Text === label)
     .at(-1);
+}
+
+function property(stage, label, prop) {
+  const patches = stage.frames.flatMap((frame) => frame.patches);
+  const id = patches
+    .filter((patch) => patch.SetProp?.prop === 'Label' && patch.SetProp.value?.Text === label)
+    .at(-1)?.SetProp.id;
+  return patches.filter((patch) => patch.SetProp?.id === id && patch.SetProp.prop === prop).at(-1)
+    ?.SetProp.value;
 }
 
 function textProperty(stage, value) {

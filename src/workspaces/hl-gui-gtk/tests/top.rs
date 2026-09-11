@@ -1395,7 +1395,7 @@ mod unix {
             .expect("Inspect invocation reaches Top");
             let deadline = Instant::now() + DEADLINE;
             while Instant::now() < deadline
-                && !has_label(surface.widget().upcast_ref::<gtk::Widget>(), "Open Extensions")
+                && !has_label(surface.widget().upcast_ref::<gtk::Widget>(), "Review access")
             {
                 match receive_until(&mut wire, (Instant::now() + Duration::from_millis(80)).min(deadline)) {
                     Ok(frame) if frame.kind == hl_extension::Kind::Credit => {}
@@ -1418,13 +1418,19 @@ mod unix {
             let recovery_root = surface.widget().clone().upcast::<gtk::Widget>();
             let recovery_window = gtk::Window::new();
             recovery_window.set_child(Some(&recovery_root));
-            let open = find_button(&recovery_root, "Open Extensions");
+            let open = find_button(&recovery_root, "Review access");
             for (width_name, width) in [("narrow", 600), ("wide", 1_200)] {
                 recovery_window.set_default_size(width, 820);
                 recovery_window.set_size_request(width, 820);
                 recovery_window.present();
                 settle_toolkit();
                 assert_contained(&recovery_root, &format!("volume-recovery/{width_name}"));
+                assert!(open.has_css_class("size-small"));
+                assert!(
+                    open.height() <= 32,
+                    "{width_name} access recovery action exceeded 32px: {}",
+                    open.height()
+                );
                 capture(&recovery_window, &format!("volume-recovery-{width_name}"), width, 820);
             }
             assert!(open.grab_focus(), "volume recovery action is keyboard reachable");
@@ -1436,13 +1442,13 @@ mod unix {
                 .drain()
                 .into_iter()
                 .find(|event| matches!(event, hl_gui::Event::Invoke { .. }))
-                .expect("Open Extensions emits an invocation");
+                .expect("Review access emits an invocation");
             wire.send(&Frame::new(
                 ChannelId::new(106),
                 hl_extension::Kind::Event,
-                codec::interaction(&interaction, Some("")).expect("Open Extensions invocation encodes"),
+                codec::interaction(&interaction, Some("")).expect("Review access invocation encodes"),
             ))
-            .expect("Open Extensions invocation reaches Top");
+            .expect("Review access invocation reaches Top");
             let deadline = Instant::now() + DEADLINE;
             while Instant::now() < deadline
                 && !has_label(surface.widget().upcast_ref::<gtk::Widget>(), "Installed extensions")

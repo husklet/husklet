@@ -5376,7 +5376,7 @@ test('network inventory failures use typed causes and one honest recovery action
     ),
   );
   assert.equal(labelled(denied, 'Retry networks'), undefined);
-  invoke(denied, 'Open Extensions');
+  invoke(denied, 'Review access');
   assert.equal(opened, 1);
 });
 
@@ -7541,7 +7541,7 @@ test('a successful attachment retains its receipt when membership reinspection i
   await settled();
   await settled();
   assert.ok(labelled(stage, 'Connected container-1 to private'));
-  assert.ok(labelled(stage, 'Open Extensions'));
+  assert.ok(labelled(stage, 'Review access'));
   assert.equal(labelled(stage, 'Connected containers · 1'), undefined);
 });
 

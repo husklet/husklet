@@ -15,7 +15,13 @@ export function AuthorityRecovery({
   return (
     <>
       <InlineMessage label={label} tone="warning" />
-      <Button label="Open Extensions" variant="filled" tone="accent" onInvoke={onOpenExtensions} />
+      <Button
+        label="Review access"
+        size="small"
+        variant="filled"
+        tone="accent"
+        onInvoke={onOpenExtensions}
+      />
     </>
   );
 }

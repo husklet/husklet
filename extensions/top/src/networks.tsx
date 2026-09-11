@@ -584,7 +584,7 @@ function NetworkInventoryFailure({
         <Button
           label={
             denied
-              ? 'Open Extensions'
+              ? 'Review access'
               : retrying
                 ? 'Retrying networks…'
                 : changed
@@ -593,6 +593,7 @@ function NetworkInventoryFailure({
           }
           variant={denied ? 'filled' : 'outline'}
           tone="accent"
+          size="small"
           enabled={!retrying}
           onInvoke={denied ? onOpenExtensions : onRetry}
         />

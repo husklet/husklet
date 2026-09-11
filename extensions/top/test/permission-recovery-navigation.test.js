@@ -35,7 +35,7 @@ test('container permission recovery navigates Top to Extensions', async () => {
 
   invoke(stage, 'Details');
   await settledTwice();
-  invoke(stage, 'Open Extensions');
+  invoke(stage, 'Review access');
   await settledTwice();
 
   assert.equal(taggedProperty(stage, 'Extensions', 'NavigationMenuItem', 'Selected')?.Flag, true);
@@ -73,7 +73,7 @@ test('network permission recovery navigates Top to Extensions', async () => {
 
   invoke(stage, 'Manage connections');
   await settledTwice();
-  invoke(stage, 'Open Extensions');
+  invoke(stage, 'Review access');
   await settledTwice();
 
   assert.equal(taggedProperty(stage, 'Extensions', 'NavigationMenuItem', 'Selected')?.Flag, true);
