@@ -6983,6 +6983,166 @@ test('real Unix writeAndWait subscribes and reads before bytes, then returns adv
   }
 });
 
+test('real Unix quiet terminal wait does not mistake local echo for an agent response', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-terminal-quiet-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const calls = [];
+  const connections = new Set();
+  const slot = 'agent-pane';
+  let revision = 7;
+  let subscriptions = 0;
+  let writes = 0;
+  let outputTimer;
+  const screen = () => ({
+    slot,
+    generation: 4,
+    revision,
+    columns: 80,
+    rows: 24,
+    lines:
+      revision === 7
+        ? ['$ ']
+        : revision === 8
+          ? ['$ explain this']
+          : ['$ explain this', 'The command response arrived.'],
+    cursor_column: 0,
+    cursor_row: revision === 9 ? 2 : 1,
+    truncated: false,
+  });
+  const changed = (socket) =>
+    socket.write(
+      encode({
+        channel: 100,
+        kind: KIND.event,
+        payload: {
+          snapshot: 'pane_changes',
+          of: { slot, kind: 'terminal', generation: 4, revision, coalesced: 0 },
+        },
+      }),
+    );
+  const server = net.createServer((socket) => {
+    connections.add(socket);
+    socket.on('close', () => connections.delete(socket));
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.channel !== 2) continue;
+        calls.push(frame.payload.call);
+        if (frame.payload.call === 'event_subscribe') {
+          subscriptions += 1;
+          socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+          if (subscriptions === 2) {
+            outputTimer = setTimeout(() => {
+              revision = 9;
+              changed(socket);
+            }, 5);
+          }
+        } else if (frame.payload.call === 'event_unsubscribe') {
+          socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+        } else if (frame.payload.call === 'terminal_read_pane') {
+          socket.write(
+            encode({ channel: 2, kind: KIND.response, payload: { reply: 'text', with: screen() } }),
+          );
+        } else if (frame.payload.call === 'pane_list') {
+          socket.write(
+            encode({
+              channel: 2,
+              kind: KIND.response,
+              payload: {
+                reply: 'panes',
+                with: {
+                  panes: [
+                    {
+                      slot,
+                      generation: 4,
+                      revision,
+                      kind: 'terminal',
+                      provider: null,
+                      tab: null,
+                      title: 'Agent',
+                      focused: true,
+                    },
+                  ],
+                  truncated: false,
+                },
+              },
+            }),
+          );
+        } else if (frame.payload.call === 'terminal_write_pane') {
+          writes += 1;
+          assert.deepEqual(frame.payload.with, {
+            slot,
+            generation: 4,
+            revision: writes === 1 ? 7 : 9,
+            contents: [
+              ...new TextEncoder().encode(writes === 1 ? 'explain this\n' : 'still running\n'),
+            ],
+          });
+          if (writes === 1) {
+            revision = 8;
+            changed(socket);
+          }
+          socket.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+        }
+      }
+    });
+    socket.write(
+      encode({
+        channel: CONTROL,
+        kind: KIND.open,
+        payload: {
+          protocol: 1,
+          peer: 'terminal-quiet-agent',
+          granted: ['panes:observe', 'terminals:output', 'terminals:input'],
+        },
+      }),
+    );
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    const terminal = workspace(session).terminal;
+    const before = screen();
+    await assert.rejects(
+      terminal.writeObservedAndWaitForQuietText(before, 'explain this\n', { quietMs: 0 }),
+      /quiet window/,
+    );
+    assert.deepEqual(calls, [], 'invalid settling policy must send no request');
+    const result = await terminal.writeObservedAndWaitForQuietText(before, 'explain this\n', {
+      lines: 40,
+      quietMs: 20,
+      timeoutMs: 1_000,
+    });
+    assert.equal(result.changed, true);
+    assert.equal(result.settled, true);
+    assert.equal(result.after.snapshot.revision, 9);
+    assert.match(result.after.text, /command response arrived/);
+    assert.ok(
+      calls.filter((call) => call === 'terminal_read_pane').length >= 4,
+      'the helper reads beyond the first echoed revision',
+    );
+    const cancellation = new AbortController();
+    const cancelled = terminal.writeObservedAndWaitForQuietText(
+      result.after.snapshot,
+      'still running\n',
+      {
+        quietMs: 20,
+        timeoutMs: 1_000,
+        signal: cancellation.signal,
+      },
+    );
+    setTimeout(() => cancellation.abort('agent stopped'), 5);
+    await assert.rejects(cancelled, (error) => error?.name === 'AbortError');
+    assert.equal((await terminal.read(slot)).revision, 9, 'the ordered session remains usable');
+    await session.close();
+  } finally {
+    clearTimeout(outputTimer);
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('real Unix writeAndWait refuses to attribute a replacement pane screen to sent input', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-write-replacement-'));
   const socketPath = path.join(directory, 'host.sock');

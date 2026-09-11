@@ -2666,6 +2666,38 @@ export function workspace(session, { signal } = {}) {
         }
         return writeAndWait(before.slot, before.generation, before.revision, input, options, true);
     };
+    api.terminal.writeObservedAndWaitForQuietText = async (before, input, { lines, quietMs = 150, timeoutMs = 30_000, signal } = {}) => {
+        if (!Number.isSafeInteger(quietMs) || quietMs < 1 || quietMs > 30_000) {
+            throw new RangeError('terminal quiet window must be between 1 and 30000ms');
+        }
+        if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
+            throw new RangeError('terminal quiet wait timeout must be between 1 and 30000ms');
+        }
+        const deadline = Date.now() + timeoutMs;
+        const first = await api.terminal.writeObservedAndWaitForText(before, input, {
+            lines,
+            timeoutMs,
+            signal,
+        });
+        if (!first.changed)
+            return { ...first, settled: false };
+        let after = first.after;
+        for (;;) {
+            const remaining = deadline - Date.now();
+            if (remaining < 1)
+                return { ...first, after, settled: false };
+            const window = Math.min(quietMs, remaining);
+            const next = await api.terminal.waitForText(after.snapshot.slot, after.snapshot, {
+                lines,
+                timeoutMs: window,
+                signal,
+            });
+            if (!next.changed) {
+                return { ...first, after, settled: window === quietMs };
+            }
+            after = next.readable;
+        }
+    };
     api.terminal.spawnAndWait = async (slot, generation, revision, command, { lines, timeoutMs = 30_000 } = {}) => {
         if (typeof slot !== 'string' || slot.length === 0)
             throw new TypeError('terminal spawn wait requires a nonempty slot');

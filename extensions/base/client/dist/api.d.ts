@@ -1390,6 +1390,27 @@ export interface WorkspaceApi {
             changed: false;
             before: PaneText;
         }>;
+        /**
+         * Write against an observed terminal, then keep following its projected text until no newer
+         * screen revision arrives for `quietMs`. The total wait is bounded by `timeoutMs`; a changed
+         * but continuously active pane is returned with `settled: false` rather than mistaken for a
+         * complete command response.
+         */
+        writeObservedAndWaitForQuietText(before: PaneText, input: string | Iterable<number>, options?: {
+            lines?: number;
+            quietMs?: number;
+            timeoutMs?: number;
+            signal?: AbortSignal;
+        }): Promise<{
+            changed: true;
+            settled: boolean;
+            before: PaneText;
+            after: ReadablePane;
+        } | {
+            changed: false;
+            settled: false;
+            before: PaneText;
+        }>;
         resizeGrid(slot: string, columns: number, rows: number): Promise<void>;
         resizeGridObserved(slot: string, generation: number, revision: number, columns: number, rows: number): Promise<void>;
         /** Arm and read before CAS resize, then verify the exact terminal grid on a later screen revision. */
