@@ -2236,18 +2236,26 @@ export function workspace(session, { signal } = {}) {
                 if (aggregate > 65536)
                     throw new RangeError('filesystem range batch exceeds 65536 requested bytes');
                 const values = expect(await session.call('filesystem_read_ranges', { ranges: exact }), 'file_ranges');
+                const files = new Map();
                 if (values.length !== exact.length ||
-                    values.some((value, index) => value.path !== exact[index].path ||
-                        !value.identity ||
-                        new TextEncoder().encode(value.identity).byteLength > 256 ||
-                        (exact[index].observed !== null && value.identity !== exact[index].observed) ||
-                        value.offset !== exact[index].offset ||
-                        value.contents.length > exact[index].limit ||
-                        value.eof !==
-                            (value.offset >= value.total ||
-                                value.contents.length >= value.total - value.offset) ||
-                        value.truncated === value.eof ||
-                        (!value.eof && value.contents.length === 0)))
+                    values.some((value, index) => {
+                        const prior = files.get(value.path);
+                        const inconsistentFile = prior !== undefined &&
+                            (prior.identity !== value.identity || prior.total !== value.total);
+                        files.set(value.path, { identity: value.identity, total: value.total });
+                        return (value.path !== exact[index].path ||
+                            !value.identity ||
+                            new TextEncoder().encode(value.identity).byteLength > 256 ||
+                            (exact[index].observed !== null && value.identity !== exact[index].observed) ||
+                            value.offset !== exact[index].offset ||
+                            value.contents.length > exact[index].limit ||
+                            value.eof !==
+                                (value.offset >= value.total ||
+                                    value.contents.length >= value.total - value.offset) ||
+                            value.truncated === value.eof ||
+                            (!value.eof && value.contents.length === 0) ||
+                            inconsistentFile);
+                    }))
                     throw new TypeError('host returned an inconsistent filesystem range batch');
                 return values;
             },

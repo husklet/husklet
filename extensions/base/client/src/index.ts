@@ -2885,10 +2885,16 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
           await session.call('filesystem_read_ranges', { ranges: exact }),
           'file_ranges',
         );
+        const files = new Map();
         if (
           values.length !== exact.length ||
-          values.some(
-            (value, index) =>
+          values.some((value, index) => {
+            const prior = files.get(value.path);
+            const inconsistentFile =
+              prior !== undefined &&
+              (prior.identity !== value.identity || prior.total !== value.total);
+            files.set(value.path, { identity: value.identity, total: value.total });
+            return (
               value.path !== exact[index].path ||
               !value.identity ||
               new TextEncoder().encode(value.identity).byteLength > 256 ||
@@ -2899,8 +2905,10 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
                 (value.offset >= value.total ||
                   value.contents.length >= value.total - value.offset) ||
               value.truncated === value.eof ||
-              (!value.eof && value.contents.length === 0),
-          )
+              (!value.eof && value.contents.length === 0) ||
+              inconsistentFile
+            );
+          })
         )
           throw new TypeError('host returned an inconsistent filesystem range batch');
         return values;

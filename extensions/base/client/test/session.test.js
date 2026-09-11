@@ -442,6 +442,10 @@ test('real Unix range batch preserves ordered paths and one bounded frame', asyn
   const socketPath = path.join(directory, 'host.sock');
   const calls = [];
   const connections = new Set();
+  const fragmented = (socket, frame) => {
+    socket.write(frame.subarray(0, 5));
+    setImmediate(() => socket.write(frame.subarray(5)));
+  };
   const server = net.createServer((socket) => {
     connections.add(socket);
     socket.on('close', () => connections.delete(socket));
@@ -463,16 +467,20 @@ test('real Unix range batch preserves ordered paths and one bounded frame', asyn
           );
           continue;
         }
-        const ranges = frame.payload.with.ranges.map((range) => ({
+        const samePath =
+          frame.payload.with.ranges.length === 2 &&
+          frame.payload.with.ranges[0].path === frame.payload.with.ranges[1].path;
+        const ranges = frame.payload.with.ranges.map((range, index) => ({
           path: range.path,
-          identity: `id:${range.path}`,
+          identity: samePath && index === 1 ? `changed:${range.path}` : `id:${range.path}`,
           offset: range.offset,
-          total: 1,
+          total: samePath ? 2 : 1,
           contents: [range.path.charCodeAt(0)],
-          eof: true,
-          truncated: false,
+          eof: samePath ? index === 1 : true,
+          truncated: samePath ? index === 0 : false,
         }));
-        socket.write(
+        fragmented(
+          socket,
           encode({
             channel: frame.channel,
             kind: KIND.response,
@@ -481,8 +489,7 @@ test('real Unix range batch preserves ordered paths and one bounded frame', asyn
         );
       }
     });
-    socket.write(
-      encode({
+    const greeting = encode({
         channel: CONTROL,
         kind: KIND.open,
         payload: {
@@ -490,8 +497,9 @@ test('real Unix range batch preserves ordered paths and one bounded frame', asyn
           peer: 'range-batch',
           granted: ['filesystem:read'],
         },
-      }),
-    );
+      });
+    socket.write(greeting.subarray(0, 3));
+    setImmediate(() => socket.write(greeting.subarray(3)));
   });
   await new Promise((resolve) => server.listen(socketPath, resolve));
   try {
@@ -521,8 +529,15 @@ test('real Unix range batch preserves ordered paths and one bounded frame', asyn
       /inconsistent filesystem range batch/,
     );
     assert.equal(calls[1].with.ranges[0].observed, 'review-snapshot-v1');
+    await assert.rejects(
+      workspace(session).files.readRanges([
+        { path: 'src/a.rs', offset: 0, limit: 1 },
+        { path: 'src/a.rs', offset: 1, limit: 1 },
+      ]),
+      /inconsistent filesystem range batch/,
+    );
     assert.equal((await workspace(session).files.stat('src/a.rs')).identity, 'id:src/a.rs');
-    assert.equal(calls[2].call, 'filesystem_stat');
+    assert.equal(calls[3].call, 'filesystem_stat');
     await session.close();
   } finally {
     for (const connection of connections) connection.destroy();
