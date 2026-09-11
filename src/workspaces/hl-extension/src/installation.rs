@@ -321,10 +321,38 @@ impl Installation {
             return Err(Objection::Presence(manifest.name.clone()));
         }
         let granted = manifest.capabilities.intersect(consented);
-        let containers = manifest.containers.intersect(consented_containers);
+        let mut containers = manifest.containers.intersect(consented_containers);
         let images = manifest.images.intersect(consented_images);
-        let networks = manifest.networks.intersect(consented_networks);
-        let volumes = manifest.volumes.intersect(consented_volumes);
+        let mut networks = manifest.networks.intersect(consented_networks);
+        let mut volumes = manifest.volumes.intersect(consented_volumes);
+        if ![
+            Capability::ContainerRead,
+            Capability::ContainerCreate,
+            Capability::ContainerExecute,
+            Capability::ContainerLifecycle,
+            Capability::ContainerRemove,
+            Capability::ContainerAttach,
+        ]
+        .into_iter()
+        .any(|capability| granted.holds(capability))
+        {
+            containers.selectors.clear();
+        }
+        if !granted.holds(Capability::ContainerCreate) {
+            containers.create = false;
+        }
+        if !granted.holds(Capability::NetworkRead) && !granted.holds(Capability::NetworkWrite) {
+            networks.selectors.clear();
+        }
+        if !granted.holds(Capability::NetworkWrite) {
+            networks.create = false;
+        }
+        if !granted.holds(Capability::VolumeRead) && !granted.holds(Capability::VolumeWrite) {
+            volumes.selectors.clear();
+        }
+        if !granted.holds(Capability::VolumeWrite) {
+            volumes.create = false;
+        }
         let filesystem = manifest.filesystem.intersect(consented_filesystem);
         let workspace_environment = manifest.workspace_environment.intersect(consented_environment);
         // The name is vacant, checked above, so this always inserts.
@@ -756,9 +784,7 @@ mod tests {
             create: false,
         };
         let networks = crate::NetworkGrant {
-            selectors: vec![crate::NetworkSelector::Name {
-                name: "backend".into(),
-            }],
+            selectors: vec![crate::NetworkSelector::Name { name: "backend".into() }],
             create: false,
         };
         let filesystem = crate::FilesystemGrant {
@@ -786,6 +812,50 @@ mod tests {
         assert_eq!(record.containers, containers);
         assert_eq!(record.networks, networks);
         assert_eq!(record.filesystem, filesystem);
+    }
+
+    #[test]
+    fn resource_selectors_without_an_operation_are_not_persisted_as_granted() {
+        let mut installation = Installation::new();
+        let mut asked = manifest(&[
+            Capability::ContainerRead,
+            Capability::ContainerCreate,
+            Capability::NetworkRead,
+            Capability::NetworkWrite,
+            Capability::VolumeRead,
+            Capability::VolumeWrite,
+        ]);
+        asked.containers = crate::ContainerGrant {
+            selectors: vec![crate::ContainerSelector::All { all: true }],
+            create: true,
+        };
+        asked.networks = crate::NetworkGrant {
+            selectors: vec![crate::NetworkSelector::All { all: true }],
+            create: true,
+        };
+        asked.volumes = crate::VolumeGrant {
+            selectors: vec![crate::VolumeSelector::All { all: true }],
+            create: true,
+        };
+
+        let record = installation
+            .install_resource_scoped(
+                &asked,
+                "sha256:inert",
+                &Grant::default(),
+                &asked.containers,
+                &crate::ImageGrant::default(),
+                &asked.networks,
+                &asked.volumes,
+                &crate::FilesystemGrant::default(),
+                &crate::WorkspaceEnvironmentGrant::default(),
+                1,
+            )
+            .unwrap();
+
+        assert_eq!(record.containers, crate::ContainerGrant::default());
+        assert_eq!(record.networks, crate::NetworkGrant::default());
+        assert_eq!(record.volumes, crate::VolumeGrant::default());
     }
 
     #[test]
