@@ -290,6 +290,21 @@ export class PaneUnavailableError extends Error {
   }
 }
 
+/** Filesystem history rotated before an incremental consumer could resume its cursor. */
+export class FilesystemJournalGapError extends Error {
+  readonly requested;
+  readonly replacement;
+
+  constructor(requested, replacement) {
+    super(
+      `filesystem journal ${requested.journal} has no history after revision ${requested.revision}`,
+    );
+    this.name = 'FilesystemJournalGapError';
+    this.requested = Object.freeze({ ...requested });
+    this.replacement = Object.freeze({ ...replacement });
+  }
+}
+
 /** Reference-counted host subscriptions, keyed by session and snapshot topic. */
 const subscriptions = new WeakMap();
 const SNAPSHOT_TOPICS = Object.freeze([
@@ -2329,11 +2344,13 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
         cursor,
         pageSize = 256,
         pollMs = 250,
+        gapPolicy = 'yield',
         signal,
       }: {
         cursor: { journal: string; revision: number };
         pageSize?: number;
         pollMs?: number;
+        gapPolicy?: 'yield' | 'throw';
         signal?: AbortSignal;
       }) {
         let { journal, revision: after } = cursor;
@@ -2342,11 +2359,20 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
           throw new TypeError('filesystem change cursor must be a nonnegative safe integer');
         if (!Number.isSafeInteger(pollMs) || pollMs < 1)
           throw new TypeError('filesystem change poll interval must be a positive integer');
+        if (gapPolicy !== 'yield' && gapPolicy !== 'throw')
+          throw new TypeError("filesystem gapPolicy must be 'yield' or 'throw'");
         for (;;) {
           requireFilesystemActive(signal);
+          const requestedJournal = journal;
           const requestedAfter = after;
           const page = await api.files.changes({ journal, revision: after }, pageSize);
           requireFilesystemActive(signal);
+          if (page.truncated && gapPolicy === 'throw') {
+            throw new FilesystemJournalGapError(
+              { journal: requestedJournal, revision: requestedAfter },
+              { journal: page.journal, revision: page.current },
+            );
+          }
           journal = page.journal;
           after = page.next;
           const more = page.more;

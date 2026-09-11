@@ -53,6 +53,12 @@ export declare class PaneUnavailableError extends Error {
     readonly reason: any;
     constructor(slot: any, reason: any);
 }
+/** Filesystem history rotated before an incremental consumer could resume its cursor. */
+export declare class FilesystemJournalGapError extends Error {
+    readonly requested: any;
+    readonly replacement: any;
+    constructor(requested: any, replacement: any);
+}
 export declare function connect(options?: ConnectOptions): Promise<ClientSession>;
 /**
  * Opens a surface and paints a dependency-free first frame.

@@ -737,6 +737,11 @@ export declare class PaneUnavailableError extends Error {
     readonly slot: string;
     readonly reason: 'absent' | 'inventory-truncated';
 }
+/** Filesystem history rotated before an incremental consumer could resume its cursor. */
+export declare class FilesystemJournalGapError extends Error {
+    readonly requested: Readonly<FileCursor>;
+    readonly replacement: Readonly<FileCursor>;
+}
 export interface ConnectOptions {
     path?: string;
     /** Bounds pending calls, heartbeats, and queued event callback deliveries. */
@@ -1594,6 +1599,8 @@ export interface WorkspaceApi {
             cursor: FileCursor;
             pageSize?: number;
             pollMs?: number;
+            /** Yield the recovery page, or reject with both cursors before yielding it. */
+            gapPolicy?: 'yield' | 'throw';
             signal?: AbortSignal;
         }): AsyncGenerator<FileChangePage, void, void>;
         /** Cursor-safe polling watcher. `done` rejects immediately on listener or transport failure. */

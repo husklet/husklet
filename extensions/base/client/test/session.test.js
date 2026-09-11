@@ -11,6 +11,7 @@ import {
   ExecutionOperationError,
   ExecutionOutputGapError,
   ExecutionOutputProtocolError,
+  FilesystemJournalGapError,
   JsonLineParseError,
   PaneUnavailableError,
   Session,
@@ -1660,6 +1661,101 @@ test('real Unix beginWalk captures the reconciliation cursor before recursive en
         with: { observed: FILE_JOURNAL, after: 41, limit: 32 },
       },
     ]);
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('real Unix change iterator reports a typed journal rotation and remains reusable', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-journal-gap-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const replacementJournal = 'fedcba9876543210fedcba9876543210';
+  const calls = [];
+  const connections = new Set();
+  const server = net.createServer((socket) => {
+    connections.add(socket);
+    socket.on('close', () => connections.delete(socket));
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.kind !== KIND.request) continue;
+        calls.push(frame.payload);
+        const payload =
+          frame.payload.call === 'filesystem_changes'
+            ? {
+                reply: 'file_changes',
+                with: {
+                  journal: replacementJournal,
+                  changes: [],
+                  next: 88,
+                  current: 88,
+                  more: false,
+                  truncated: true,
+                },
+              }
+            : {
+                reply: 'workspace',
+                with: { name: 'index', image: 'toolbox', architecture: 'amd64' },
+              };
+        socket.write(encode({ channel: frame.channel, kind: KIND.response, payload }));
+      }
+    });
+    socket.write(
+      encode({
+        channel: CONTROL,
+        kind: KIND.open,
+        payload: {
+          protocol: 1,
+          peer: 'restartable-indexer',
+          granted: ['filesystem:read', 'workspaces:read'],
+        },
+      }),
+    );
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    const files = workspace(session).files;
+    const invalid = files.changePages({
+      cursor: { journal: FILE_JOURNAL, revision: 40 },
+      gapPolicy: 'ignore',
+    });
+    await assert.rejects(invalid.next(), /gapPolicy.*yield.*throw/);
+    const cancelled = new AbortController();
+    cancelled.abort('indexer stopped');
+    const aborted = files.changePages({
+      cursor: { journal: FILE_JOURNAL, revision: 40 },
+      gapPolicy: 'throw',
+      signal: cancelled.signal,
+    });
+    await assert.rejects(aborted.next(), (error) => error?.name === 'AbortError');
+    assert.deepEqual(calls, [], 'invalid and cancelled iterators must not poll the journal');
+
+    const pages = files.changePages({
+      cursor: { journal: FILE_JOURNAL, revision: 40 },
+      pageSize: 32,
+      gapPolicy: 'throw',
+    });
+    await assert.rejects(
+      pages.next(),
+      (error) =>
+        error instanceof FilesystemJournalGapError &&
+        error.requested.journal === FILE_JOURNAL &&
+        error.requested.revision === 40 &&
+        error.replacement.journal === replacementJournal &&
+        error.replacement.revision === 88,
+    );
+    assert.deepEqual(calls, [
+      {
+        call: 'filesystem_changes',
+        with: { observed: FILE_JOURNAL, after: 40, limit: 32 },
+      },
+    ]);
+    assert.equal((await workspace(session).info()).name, 'index');
+    assert.deepEqual(calls.map(({ call }) => call), ['filesystem_changes', 'workspace_info']);
     await session.close();
   } finally {
     for (const connection of connections) connection.destroy();
