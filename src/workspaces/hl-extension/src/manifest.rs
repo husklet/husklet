@@ -755,9 +755,7 @@ impl Manifest {
     /// record no authority and leave the extension disabled.
     #[must_use]
     pub fn required_update_consent(&self) -> Grant {
-        Grant::new(
-            (self.interface.is_some() || !self.pane_providers.is_empty()).then_some(Capability::Interface),
-        )
+        Grant::new((self.interface.is_some() || !self.pane_providers.is_empty()).then_some(Capability::Interface))
     }
 
     /// Reads a manifest from the document an image carries.
@@ -837,7 +835,10 @@ impl Manifest {
         if manifest.images.prune_all_unused && !manifest.capabilities.holds(Capability::ImagePrune) {
             return Err(Invalid::Undeclared(Capability::ImagePrune));
         }
-        if (!manifest.containers.selectors.is_empty() || manifest.containers.create)
+        if manifest.containers.create && !manifest.capabilities.holds(Capability::ContainerCreate) {
+            return Err(Invalid::Undeclared(Capability::ContainerCreate));
+        }
+        if !manifest.containers.selectors.is_empty()
             && !manifest.capabilities.holds(Capability::ContainerRead)
             && !manifest.capabilities.holds(Capability::ContainerCreate)
             && !manifest.capabilities.holds(Capability::ContainerExecute)
@@ -848,14 +849,20 @@ impl Manifest {
             return Err(Invalid::Undeclared(Capability::ContainerRead));
         }
         manifest.networks.validate()?;
-        if (!manifest.networks.selectors.is_empty() || manifest.networks.create)
+        if manifest.networks.create && !manifest.capabilities.holds(Capability::NetworkWrite) {
+            return Err(Invalid::Undeclared(Capability::NetworkWrite));
+        }
+        if !manifest.networks.selectors.is_empty()
             && !manifest.capabilities.holds(Capability::NetworkRead)
             && !manifest.capabilities.holds(Capability::NetworkWrite)
         {
             return Err(Invalid::Undeclared(Capability::NetworkRead));
         }
         manifest.volumes.validate()?;
-        if (!manifest.volumes.selectors.is_empty() || manifest.volumes.create)
+        if manifest.volumes.create && !manifest.capabilities.holds(Capability::VolumeWrite) {
+            return Err(Invalid::Undeclared(Capability::VolumeWrite));
+        }
+        if !manifest.volumes.selectors.is_empty()
             && !manifest.capabilities.holds(Capability::VolumeRead)
             && !manifest.capabilities.holds(Capability::VolumeWrite)
         {
@@ -957,16 +964,34 @@ mod tests {
 
     #[test]
     fn wildcard_and_creation_are_both_explicit() {
-        let manifest = Manifest::parse(
-            &document("[containers]\nselectors = [{ all = true }]\ncreate = true\n"),
-            PROTOCOL,
-        )
-        .unwrap();
+        let text = document("[containers]\nselectors = [{ all = true }]\ncreate = true\n").replace(
+            "capabilities = [\"containers:read\"]",
+            "capabilities = [\"containers:read\", \"containers:create\"]",
+        );
+        let manifest = Manifest::parse(&text, PROTOCOL).unwrap();
         assert_eq!(
             manifest.containers.selectors,
             vec![ContainerSelector::All { all: true }]
         );
         assert!(manifest.containers.create);
+    }
+
+    #[test]
+    fn resource_creation_requires_its_exact_mutating_capability() {
+        for (capability, scope) in [
+            ("containers:read", "[containers]\ncreate = true\n"),
+            ("networks:read", "[networks]\ncreate = true\n"),
+            ("volumes:read", "[volumes]\ncreate = true\n"),
+        ] {
+            let text = document(scope).replace(
+                "capabilities = [\"containers:read\"]",
+                &format!("capabilities = [\"{capability}\"]"),
+            );
+            assert!(
+                Manifest::parse(&text, PROTOCOL).is_err(),
+                "accepted {scope} with {capability}"
+            );
+        }
     }
 
     #[test]
@@ -1042,9 +1067,7 @@ mod tests {
         let container = ContainerSelector::Name {
             name: "database".into(),
         };
-        let network = NetworkSelector::Name {
-            name: "backend".into(),
-        };
+        let network = NetworkSelector::Name { name: "backend".into() };
         let volume = VolumeSelector::Name {
             name: "postgres-data".into(),
         };

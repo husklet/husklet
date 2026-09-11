@@ -1486,6 +1486,15 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                                       remove: [],
                                       prune_all_unused: false,
                                     });
+                                    setGrantedContainers((current) => ({
+                                      ...current,
+                                      create: false,
+                                    }));
+                                    setGrantedNetworks((current) => ({
+                                      ...current,
+                                      create: false,
+                                    }));
+                                    setGrantedVolumes((current) => ({ ...current, create: false }));
                                     setGrantedFilesystem(emptyFilesystemGrant());
                                     setGrantedWorkspaceEnvironment({ read: [], write: [] });
                                   }}
@@ -1540,7 +1549,18 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                                     }));
                                   if (!enabled && capability === 'containers:create') {
                                     setGrantedImages((current) => ({ ...current, use: [] }));
+                                    setGrantedContainers((current) => ({
+                                      ...current,
+                                      create: false,
+                                    }));
                                   }
+                                  if (!enabled && capability === 'networks:write')
+                                    setGrantedNetworks((current) => ({
+                                      ...current,
+                                      create: false,
+                                    }));
+                                  if (!enabled && capability === 'volumes:write')
+                                    setGrantedVolumes((current) => ({ ...current, create: false }));
                                 }}
                               />
                             </FormControlLabel>
@@ -1590,12 +1610,20 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                             <FormControlLabel label="Create new containers" gap={2}>
                               <Switch
                                 checked={grantedContainers.create}
-                                onToggle={(event: Change) =>
+                                onToggle={(event: Change) => {
+                                  const enabled = Boolean(event.value);
+                                  setGranted((current) =>
+                                    withCapability(
+                                      current,
+                                      'containers:create',
+                                      enabled || grantedImages.use.length > 0,
+                                    ),
+                                  );
                                   setGrantedContainers((current) => ({
                                     ...current,
-                                    create: Boolean(event.value),
-                                  }))
-                                }
+                                    create: enabled,
+                                  }));
+                                }}
                               />
                             </FormControlLabel>
                           )}
@@ -1640,7 +1668,10 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                                             ),
                                       };
                                       const capability = imageCapability(verb);
-                                      const enabled = next[verb].length > 0;
+                                      const enabled =
+                                        next[verb].length > 0 ||
+                                        (capability === 'containers:create' &&
+                                          grantedContainers.create);
                                       setGranted((current) =>
                                         withCapability(current, capability, enabled),
                                       );
@@ -1716,12 +1747,16 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                             <FormControlLabel label="Create new networks" gap={2}>
                               <Switch
                                 checked={grantedNetworks.create}
-                                onToggle={(event: Change) =>
+                                onToggle={(event: Change) => {
+                                  const enabled = Boolean(event.value);
+                                  setGranted((current) =>
+                                    withCapability(current, 'networks:write', enabled),
+                                  );
                                   setGrantedNetworks((current) => ({
                                     ...current,
-                                    create: Boolean(event.value),
-                                  }))
-                                }
+                                    create: enabled,
+                                  }));
+                                }}
                               />
                             </FormControlLabel>
                           )}
@@ -1767,12 +1802,13 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                             <FormControlLabel label="Create new volumes" gap={2}>
                               <Switch
                                 checked={grantedVolumes.create}
-                                onToggle={(event: Change) =>
-                                  setGrantedVolumes((current) => ({
-                                    ...current,
-                                    create: Boolean(event.value),
-                                  }))
-                                }
+                                onToggle={(event: Change) => {
+                                  const enabled = Boolean(event.value);
+                                  setGranted((current) =>
+                                    withCapability(current, 'volumes:write', enabled),
+                                  );
+                                  setGrantedVolumes((current) => ({ ...current, create: enabled }));
+                                }}
                               />
                             </FormControlLabel>
                           )}

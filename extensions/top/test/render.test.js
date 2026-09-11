@@ -2453,7 +2453,7 @@ for (const updating of [false, true]) {
       name: 'scoped',
       version: '2.0.0',
       image_digest: `sha256:${'a'.repeat(64)}`,
-      requested: ['filesystem:read', 'filesystem:write'],
+      requested: ['containers:create', 'filesystem:read', 'filesystem:write'],
       requested_containers: {
         selectors: [{ name: 'database' }, { id: 'c'.repeat(64) }, { all: true }],
         create: true,
@@ -2545,30 +2545,30 @@ for (const updating of [false, true]) {
       assert.ok(labelled(stage, label), label);
     assert.ok(labelled(stage, 'Requested access'));
     assert.ok(
-      labelled(stage, 'Product · 2  ·  Containers · 4  ·  Files · 6'),
+      labelled(stage, 'Product · 3  ·  Containers · 4  ·  Files · 6'),
       'requested authority is summarized as quiet copy instead of a row of badges',
     );
-    assert.ok(labelled(stage, 'No access selected · 12 requested'));
-    assert.ok(labelled(stage, 'Exact grants · 0/12 selected'));
-    expand(stage, 'Exact grants · 0/12 selected');
+    assert.ok(labelled(stage, 'No access selected · 13 requested'));
+    assert.ok(labelled(stage, 'Exact grants · 0/13 selected'));
+    expand(stage, 'Exact grants · 0/13 selected');
     assert.ok(labelled(stage, 'Container access · 0/4'));
     assert.ok(labelled(stage, '0/6 workspace paths allowed'));
-    assert.deepEqual(latestSwitchValues(stage), Array(12).fill(false));
+    assert.deepEqual(latestSwitchValues(stage), Array(13).fill(false));
 
-    toggleSwitch(stage, 7, true);
-    assert.deepEqual(latestSwitchValues(stage).slice(0, 2), [true, false]);
-    assert.ok(labelled(stage, 'Review decision · 2/12 selected'));
-    toggleSwitch(stage, 0, false);
-    assert.deepEqual(latestSwitchValues(stage), Array(12).fill(false));
-    assert.ok(labelled(stage, 'No access selected · 12 requested'));
+    toggleSwitch(stage, 8, true);
+    assert.deepEqual(latestSwitchValues(stage).slice(0, 3), [false, true, false]);
+    assert.ok(labelled(stage, 'Review decision · 2/13 selected'));
+    toggleSwitch(stage, 1, false);
+    assert.deepEqual(latestSwitchValues(stage), Array(13).fill(false));
+    assert.ok(labelled(stage, 'No access selected · 13 requested'));
 
-    toggleSwitch(stage, 2, true);
-    toggleSwitch(stage, 5, true);
-    toggleSwitch(stage, 7, true);
-    toggleSwitch(stage, 9, true);
-    toggleSwitch(stage, 11, true);
+    toggleSwitch(stage, 3, true);
+    toggleSwitch(stage, 6, true);
+    toggleSwitch(stage, 8, true);
+    toggleSwitch(stage, 10, true);
+    toggleSwitch(stage, 12, true);
     assert.ok(labelled(stage, '3/6 workspace paths allowed'));
-    assert.ok(labelled(stage, 'Review decision · 7/12 selected'));
+    assert.ok(labelled(stage, 'Review decision · 8/13 selected'));
     assert.ok(
       ancestorTags(stage, 'View contents file · README.md').filter((tag) => tag === 'Scroll')
         .length === 1,
@@ -2587,7 +2587,11 @@ for (const updating of [false, true]) {
 
     assert.equal(calls.length, 1);
     assert.deepEqual(calls[0].slice(0, 2), ['scoped-review', 4]);
-    assert.deepEqual(calls[0][2].capabilities, ['filesystem:read', 'filesystem:write']);
+    assert.deepEqual(calls[0][2].capabilities, [
+      'containers:create',
+      'filesystem:read',
+      'filesystem:write',
+    ]);
     assert.deepEqual(calls[0][2].containers, {
       selectors: [{ name: 'database' }],
       create: true,

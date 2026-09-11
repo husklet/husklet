@@ -18,8 +18,8 @@ mod unix {
     use hl_extension::{
         Capability, ChannelId, ExtensionName, ExtensionPreferences, ExtensionSummary, FilesystemGrant,
         FilesystemSelector, Frame, Grant, Hello, ImageGrant, ImageSelector, PROTOCOL, PaneProvider, PreferenceValue,
-        RelativePath, Reply, Request, Snapshot, Welcome, Wire, WorkspaceConfiguration, WorkspaceEnvironmentGrant,
-        WorkspaceEnvironmentSelector, WorkspaceInfo, WorkspaceTerminal, codec,
+        RelativePath, Reply, Request, Snapshot, VolumeGrant, Welcome, Wire, WorkspaceConfiguration,
+        WorkspaceEnvironmentGrant, WorkspaceEnvironmentSelector, WorkspaceInfo, WorkspaceTerminal, codec,
     };
     use hl_gui::{Renderer as _, SourceMutation, Theme, Tree};
     use hl_gui_gtk::Surface;
@@ -1513,6 +1513,7 @@ mod unix {
                                 Capability::Interface,
                                 Capability::WorkspaceControl,
                                 Capability::WorkspaceEnvironmentRead,
+                                Capability::VolumeWrite,
                             ]),
                             required: Grant::new([Capability::Interface]),
                             requested_images: ImageGrant {
@@ -1523,7 +1524,10 @@ mod unix {
                             },
                             requested_containers: Default::default(),
                             requested_networks: Default::default(),
-                            requested_volumes: Default::default(),
+                            requested_volumes: VolumeGrant {
+                                selectors: Vec::new(),
+                                create: true,
+                            },
                             requested_filesystem: FilesystemGrant {
                                 read: vec![FilesystemSelector::Exact {
                                     exact: RelativePath::new("README.md").expect("valid exact path"),
@@ -1550,7 +1554,7 @@ mod unix {
         drain_extension_renders(wire, tree, surface);
 
         let review_root = surface.widget().clone().upcast::<gtk::Widget>();
-        assert!(has_label(&review_root, "No access selected · 8 requested"));
+        assert!(has_label(&review_root, "No access selected · 10 requested"));
         assert!(has_label(&review_root, "Publisher · Community"));
         assert!(has_label(
             &review_root,
@@ -1590,7 +1594,7 @@ mod unix {
             wire,
             tree,
             surface,
-            "Review decision · 1/8 selected",
+            "Review decision · 1/10 selected",
             |request| match request {
                 Request::EventUnsubscribe { .. } => Reply::Done,
                 other => panic!("unexpected extension consent call: {other:?}"),
@@ -1598,6 +1602,34 @@ mod unix {
             || None,
         );
         let review_root = surface.widget().clone().upcast::<gtk::Widget>();
+        let volume_create = find_label(&review_root, "Create new volumes")
+            .mnemonic_widget()
+            .and_then(|widget| widget.downcast::<gtk::Switch>().ok())
+            .expect("volume-create label names its native switch");
+        let _ = surface.reports().drain();
+        let _: bool = volume_create.emit_by_name("state-set", &[&true]);
+        volume_create.set_active(true);
+        settle_toolkit();
+        send_report(surface, wire, 102, |event| {
+            matches!(event, hl_gui::Event::Toggle { .. })
+        });
+        apply_extension_update_until(
+            wire,
+            tree,
+            surface,
+            "Review decision · 3/10 selected",
+            |request| match request {
+                Request::EventUnsubscribe { .. } => Reply::Done,
+                other => panic!("unexpected volume-create consent call: {other:?}"),
+            },
+            || None,
+        );
+        let review_root = surface.widget().clone().upcast::<gtk::Widget>();
+        let volume_capability = find_label(&review_root, "Create and remove volumes")
+            .mnemonic_widget()
+            .and_then(|widget| widget.downcast::<gtk::Switch>().ok())
+            .expect("volume-create selects its exact capability");
+        assert!(volume_capability.is_active());
         let exact_image = find_label(&review_root, "Remove image · registry.example/test-runner:3")
             .mnemonic_widget()
             .and_then(|widget| widget.downcast::<gtk::Switch>().ok())
@@ -1613,7 +1645,7 @@ mod unix {
             wire,
             tree,
             surface,
-            "Review decision · 3/8 selected",
+            "Review decision · 5/10 selected",
             |request| match request {
                 Request::EventUnsubscribe { .. } => Reply::Done,
                 other => panic!("unexpected exact-image consent call: {other:?}"),
@@ -1636,7 +1668,7 @@ mod unix {
             wire,
             tree,
             surface,
-            "Review decision · 1/8 selected",
+            "Review decision · 3/10 selected",
             |request| match request {
                 Request::EventUnsubscribe { .. } => Reply::Done,
                 other => panic!("unexpected exact-image clearing call: {other:?}"),
@@ -1663,7 +1695,7 @@ mod unix {
             wire,
             tree,
             surface,
-            "Review decision · 3/8 selected",
+            "Review decision · 5/10 selected",
             |request| match request {
                 Request::EventUnsubscribe { .. } => Reply::Done,
                 other => panic!("unexpected exact-image reselection call: {other:?}"),
@@ -1686,7 +1718,7 @@ mod unix {
             wire,
             tree,
             surface,
-            "Review decision · 5/8 selected",
+            "Review decision · 7/10 selected",
             |request| match request {
                 Request::EventUnsubscribe { .. } => Reply::Done,
                 other => panic!("unexpected exact-file consent call: {other:?}"),
@@ -1709,7 +1741,7 @@ mod unix {
             wire,
             tree,
             surface,
-            "Review decision · 3/8 selected",
+            "Review decision · 5/10 selected",
             |request| match request {
                 Request::EventUnsubscribe { .. } => Reply::Done,
                 other => panic!("unexpected exact-file clearing call: {other:?}"),
@@ -1736,7 +1768,7 @@ mod unix {
             wire,
             tree,
             surface,
-            "Review decision · 5/8 selected",
+            "Review decision · 7/10 selected",
             |request| match request {
                 Request::EventUnsubscribe { .. } => Reply::Done,
                 other => panic!("unexpected exact-file reselection call: {other:?}"),
@@ -1759,7 +1791,7 @@ mod unix {
             wire,
             tree,
             surface,
-            "Review decision · 7/8 selected",
+            "Review decision · 9/10 selected",
             |request| match request {
                 Request::EventUnsubscribe { .. } => Reply::Done,
                 other => panic!("unexpected environment consent call: {other:?}"),
@@ -1802,6 +1834,7 @@ mod unix {
                                 Capability::Interface,
                                 Capability::WorkspaceControl,
                                 Capability::WorkspaceEnvironmentRead,
+                                Capability::VolumeWrite,
                             ]),
                             required: Grant::new([Capability::Interface]),
                             requested_images: ImageGrant {
@@ -1812,7 +1845,10 @@ mod unix {
                             },
                             requested_containers: Default::default(),
                             requested_networks: Default::default(),
-                            requested_volumes: Default::default(),
+                            requested_volumes: VolumeGrant {
+                                selectors: Vec::new(),
+                                create: true,
+                            },
                             requested_filesystem: FilesystemGrant {
                                 read: vec![FilesystemSelector::Exact {
                                     exact: RelativePath::new("README.md").expect("valid exact path"),
@@ -1839,6 +1875,7 @@ mod unix {
                     filesystem,
                     workspace_environment,
                     images,
+                    volumes,
                     ..
                 } => {
                     assert_eq!(job, "gtk-update");
@@ -1851,7 +1888,15 @@ mod unix {
                             Capability::ImageRemove,
                             Capability::Interface,
                             Capability::WorkspaceEnvironmentRead,
+                            Capability::VolumeWrite,
                         ])
+                    );
+                    assert_eq!(
+                        volumes,
+                        VolumeGrant {
+                            selectors: Vec::new(),
+                            create: true
+                        }
                     );
                     assert_eq!(
                         images,
