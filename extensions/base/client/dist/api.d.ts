@@ -762,6 +762,11 @@ export declare class TerminalOperationError extends Error {
     }>;
     readonly cause: unknown;
 }
+/** A terminal text request cannot be represented by the host's bounded pane tail. */
+export declare class TerminalReadLimitError extends RangeError {
+    readonly requested: number;
+    readonly maximum: number;
+}
 /** A pane advanced or was replaced between discovery and its bounded text projection. */
 export declare class PaneChangedError extends Error {
     readonly slot: string;

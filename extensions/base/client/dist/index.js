@@ -172,6 +172,12 @@ function exactExecutionPollInterval(pollIntervalMs) {
     }
     return pollIntervalMs;
 }
+function exactTerminalReadLines(lines) {
+    if (lines !== undefined && (!Number.isSafeInteger(lines) || lines < 1 || lines > 2000)) {
+        throw new TerminalReadLimitError(lines);
+    }
+    return lines;
+}
 function outputPoll(ms, signal) {
     requireOutputActive(signal);
     return new Promise((resolve, reject) => {
@@ -215,6 +221,17 @@ export class TerminalOperationError extends Error {
         this.operation = operation;
         this.result = Object.freeze({ ...result });
         this.cause = cause;
+    }
+}
+/** A terminal text request cannot be represented by the host's bounded pane tail. */
+export class TerminalReadLimitError extends RangeError {
+    requested;
+    maximum;
+    constructor(requested, maximum = 2000) {
+        super(`terminal text lines must be an integer between 1 and ${maximum}`);
+        this.name = 'TerminalReadLimitError';
+        this.requested = requested;
+        this.maximum = maximum;
     }
 }
 /** A pane advanced or was replaced between discovery and its bounded text projection. */
@@ -1764,10 +1781,14 @@ export function workspace(session, { signal } = {}) {
                     command: [...command],
                 });
             },
-            read: async (slot, lines) => exactPane(expect(await session.call('terminal_read_pane', { slot, lines }), 'text'), slot, 'terminal text'),
+            read: async (slot, lines) => exactPane(expect(await session.call('terminal_read_pane', {
+                slot,
+                lines: exactTerminalReadLines(lines),
+            }), 'text'), slot, 'terminal text'),
             semantics: async (slot) => exactPane(expect(await session.call('pane_semantic_read', { slot }), 'semantics'), slot, 'pane semantics'),
             /** Converts either a terminal or a native UI pane into bounded agent-readable text. */
             toText: async (slot, { lines } = {}) => {
+                lines = exactTerminalReadLines(lines);
                 const inventory = exactPaneInventory(expect(await session.call('pane_list'), 'panes'));
                 const pane = inventory.panes.find((candidate) => candidate.slot === slot);
                 if (!pane) {
@@ -1787,6 +1808,7 @@ export function workspace(session, { signal } = {}) {
                 return { kind: 'ui', snapshot, ...semanticText(snapshot) };
             },
             readAll: async ({ lines } = {}) => {
+                lines = exactTerminalReadLines(lines);
                 const inventory = exactPaneInventory(expect(await session.call('pane_list'), 'panes'));
                 const panes = [];
                 for (const pane of inventory.panes) {
