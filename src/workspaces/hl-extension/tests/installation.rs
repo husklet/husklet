@@ -116,7 +116,7 @@ fn an_update_asking_for_more_preserves_the_old_record_until_commit() {
 }
 
 #[test]
-fn an_update_asking_for_less_narrows_without_prompting() {
+fn update_consent_replaces_old_authority_instead_of_silently_inheriting_it() {
     let mut installation = installed(
         &[Capability::ContainerRead, Capability::ContainerLifecycle],
         &[Capability::ContainerRead, Capability::ContainerLifecycle],
@@ -132,7 +132,8 @@ fn an_update_asking_for_less_narrows_without_prompting() {
         .commit_update(prepared, &Grant::default(), 2_000, |_, _| Ok::<_, ()>(()))
         .expect("updated");
     let record = installation.record(&name()).expect("recorded");
-    assert_eq!(record.granted, Grant::new([Capability::ContainerRead]));
+    assert_eq!(record.granted, Grant::default());
+    assert!(!record.granted.holds(Capability::ContainerRead));
     assert!(!record.granted.holds(Capability::ContainerLifecycle));
 }
 
