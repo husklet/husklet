@@ -61,7 +61,7 @@ test('DataTable teaches bounded behavior and recovery before the advanced stress
     .filter((patch) => patch.SetProp?.prop === 'Label')
     .map((patch) => patch.SetProp.value?.Text);
   for (const label of [
-    'DataTable',
+    'Data Table',
     'Overview',
     'Behavior',
     'States and recovery',

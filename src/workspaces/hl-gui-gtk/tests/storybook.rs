@@ -242,6 +242,21 @@ mod unix {
         realized_window.set_child(Some(&root));
         realized_window.present();
         settle_toolkit();
+        if story == "DataTable" {
+            let titles = descendants::<gtk::Label>(&root)
+                .into_iter()
+                .filter(|label| {
+                    label.has_css_class("hl-heading")
+                        && matches!(label.text().as_str(), "Data Table" | "DataTable")
+                })
+                .map(|label| label.text().to_string())
+                .collect::<Vec<_>>();
+            assert_eq!(
+                titles,
+                ["Data Table"],
+                "DataTable documentation must have one authoritative page title"
+            );
+        }
         if narrow_story {
             assert!(realized_window.width() <= 600, "{story} narrow capture remained wide");
             assert_contained(&root, story);

@@ -231,7 +231,7 @@ export function LargeDataTableStory({ source }: { source: LargeRecordSource }) {
   };
   return (
     <ComponentDocument
-      name="DataTable"
+      name="Data Table"
       summary="DataTable presents large structured collections with native selection, sorting, editing, and bounded row windows."
     >
       <DocumentationSection title="Overview">

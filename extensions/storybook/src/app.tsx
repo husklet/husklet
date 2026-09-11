@@ -372,11 +372,14 @@ export function Preview({
     const interaction = { sequence: ++sequence.current, trigger, detail: interactionDetail(event) };
     setInteractions((current) => [...current, interaction].slice(-INTERACTION_HISTORY));
   });
+  if (name === 'DataTable' && largeSource) {
+    return <LargeDataTableStory source={largeSource} />;
+  }
   // The final branch below is reachable only for catalogue components; flow
   // stories are exhausted by the branches above and intentionally have no defaults.
   const instance = opened as StoryDefaults;
   const flow = FLOW_STORIES.includes(name);
-  if (!flow && !(name === 'DataTable' && largeSource)) {
+  if (!flow) {
     return (
       <CatalogueDocument
         name={name}
@@ -450,8 +453,6 @@ export function Preview({
           <StackTraceStory />
         ) : name === NAVIGATION_STORY ? (
           <NavigationDialogsStory />
-        ) : name === 'DataTable' && largeSource ? (
-          <LargeDataTableStory source={largeSource} />
         ) : (
           nativeComponent(
             name,
