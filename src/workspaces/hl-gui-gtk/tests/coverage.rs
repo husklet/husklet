@@ -809,7 +809,10 @@ fn offers(prop: Prop) -> Vec<PropValue> {
             PropValue::text("14:30"),
             PropValue::text("#336699"),
         ],
-        Prop::Icon => vec![PropValue::text(EMBLEM)],
+        // InlineMessage intentionally starts with EMBLEM as its neutral,
+        // non-colour status cue. Probe a distinct authored icon too, otherwise
+        // the totality test mistakes an honoured default for a silent no-op.
+        Prop::Icon => vec![PropValue::text(EMBLEM), PropValue::text("dialog-warning-symbolic")],
         Prop::Uri => vec![PropValue::text(REFERENCE)],
         Prop::Enabled | Prop::Visible => vec![PropValue::Flag(false)],
         Prop::Selected | Prop::Checked | Prop::Indeterminate => vec![PropValue::Flag(true)],
