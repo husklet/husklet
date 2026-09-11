@@ -434,8 +434,16 @@ mod unix {
                 let entry = find_entry_placeholder(&root, "Network name");
                 let create = find_button(&root, "Create");
                 let refresh = find_tooltip_button(&root, "Refresh networks");
+                let manage = find_button(&root, "Manage connections");
                 assert_eq!(refresh.icon_name().as_deref(), Some("view-refresh-symbolic"));
                 assert_eq!(refresh.accessible_role(), gtk::AccessibleRole::Button);
+                assert!(manage.has_css_class("size-small"));
+                assert!(
+                    manage.allocation().height() <= 40,
+                    "{width_name} network management action is too tall: {}px",
+                    manage.allocation().height()
+                );
+                assert!(manage.grab_focus());
                 let widgets = [
                     entry.clone().upcast::<gtk::Widget>(),
                     create.clone().upcast(),
@@ -1046,6 +1054,9 @@ mod unix {
             }
             assert!(has_label(&expanded_root, "Connected containers · 0"));
             assert!(has_label(&expanded_root, "Refresh connections"));
+            let refresh_connections = find_button(&expanded_root, "Refresh connections");
+            assert!(refresh_connections.has_css_class("size-small"));
+            assert!(refresh_connections.allocation().height() <= 40);
             assert!(!find_expander(&expanded_root, "Danger zone").is_expanded());
             assert_label_order(
                 &expanded_root,

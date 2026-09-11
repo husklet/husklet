@@ -5194,6 +5194,11 @@ test('volume and network panels render bounded real inventories and controls', (
     'the primary connection-management action appears in the summary band',
   );
   assert.equal(ancestorTags(networkStage, 'Manage connections').includes('CardActions'), false);
+  assert.deepEqual(
+    taggedProperty(networkStage, 'Manage connections', 'Button', 'Size'),
+    { ControlSize: 'Small' },
+    'connection management remains a compact secondary action beside network identity',
+  );
   const destructive = (frame, label) => {
     const id = frame.patches.find(
       (patch) =>

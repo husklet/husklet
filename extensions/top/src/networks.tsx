@@ -401,6 +401,7 @@ export function Networks({
                                   : 'Manage connections'
                           }
                           variant="outline"
+                          size="small"
                           enabled={inspection.state !== 'loading'}
                           onInvoke={() => inspect(network)}
                         />
