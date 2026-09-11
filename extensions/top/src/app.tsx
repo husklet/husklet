@@ -53,6 +53,7 @@ export { Workspace } from './workspace.js';
 export {
   Extensions,
   acquisitionFailure,
+  acquisitionTechnicalDetail,
   acquisitionLabel,
   filterCatalogueEntries,
   filterInstalledExtensions,

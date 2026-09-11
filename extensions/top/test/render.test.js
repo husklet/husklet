@@ -24,6 +24,7 @@ import {
   parseMounts,
   parsePorts,
   acquisitionFailure,
+  acquisitionTechnicalDetail,
   acquisitionLabel,
   filterCatalogueEntries,
   filterInstalledExtensions,
@@ -2011,6 +2012,13 @@ test('extension inspection keeps invalid and failed references recoverable with 
   );
   assert.ok(labelled(stage, 'Retry inspection'));
   assert.ok(labelled(stage, 'Back to catalogue'));
+  assert.ok(labelled(stage, 'Technical details'));
+  assert.ok(
+    labelled(
+      stage,
+      'registry operation failed: {"errors":[{"code":"DENIED","message":"requested access to the resource is denied"}]}',
+    ),
+  );
   assert.equal(labelled(stage, 'Dismiss'), undefined);
   assert.equal(
     stage.frames
@@ -2078,6 +2086,8 @@ test('extension acquisition phases and failures remain actionable without raw en
     acquisitionFailure("the image's manifest archive is unreadable"),
     /^Extension manifest could not be validated:/,
   );
+  assert.equal(acquisitionTechnicalDetail('first\\nsecond'), 'first\nsecond');
+  assert.match(acquisitionTechnicalDetail('x'.repeat(5_000)), /technical detail truncated$/);
 });
 
 test('a stale cancellation refreshes the authoritative phase and remains cancellable', async () => {

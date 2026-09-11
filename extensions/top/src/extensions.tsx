@@ -1710,6 +1710,14 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                             tone="danger"
                             width={COPY_WIDTH}
                           />
+                          <Expander label="Technical details" expanded={false} width="fill">
+                            <Text
+                              label={acquisitionTechnicalDetail(
+                                acquisition.error ?? 'The image could not be inspected.',
+                              )}
+                              wrap
+                            />
+                          </Expander>
                           <Row gap={1} wrap>
                             <Button
                               label="Retry inspection"
@@ -2167,6 +2175,12 @@ export function acquisitionFailure(detail: string): string {
     );
   }
   return normalized.slice(0, 300);
+}
+
+export function acquisitionTechnicalDetail(detail: string): string {
+  const normalized = detail.replaceAll('\\n', '\n').trim();
+  if (normalized.length <= 4_096) return normalized;
+  return `${normalized.slice(0, 4_096)}\n… technical detail truncated`;
 }
 
 function lifecycleResult(action: LifecycleAction): string {
