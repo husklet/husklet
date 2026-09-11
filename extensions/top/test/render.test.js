@@ -789,7 +789,7 @@ test('Top owns workspace settings and extension management in the same tab', asy
     'extension cards fill their responsive column instead of overriding width with start alignment',
   );
   assert.deepEqual(ancestorProperty(stage, 'Component playground', 'Card', 'Width'), {
-    Length: { Chars: 38 },
+    Bounds: { minimum: { Chars: 38 }, maximum: 'Fill' },
   });
   assert.deepEqual(
     taggedProperty(stage, 'Refresh installed extensions', 'IconButton', 'Icon'),
