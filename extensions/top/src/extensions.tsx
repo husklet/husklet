@@ -1191,11 +1191,6 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                                   wrap
                                 />
                               ) : null}
-                              <Text
-                                label={`Published by ${entry.publisher}`}
-                                color="text-dim"
-                                wrap
-                              />
                               <Expander label="Trust & compatibility" expanded={false}>
                                 <Column gap={1}>
                                   <Text
