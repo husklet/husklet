@@ -14,14 +14,14 @@ type Acquire = dyn Fn(&WorkspaceConfig, &str, &mpsc::Sender<Acquisition>, &Cance
 
 /// Opaque identity of one bounded acquisition job.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub(crate) struct AcquisitionJob(u64);
+pub(crate) struct AcquisitionJob(uuid::Uuid);
 
 impl AcquisitionJob {
     pub(crate) fn parse(value: &str) -> Result<Self, HostError> {
         let id = value
-            .parse::<u64>()
+            .parse::<uuid::Uuid>()
             .map_err(|_| HostError::Conflict("invalid extension acquisition job".into()))?;
-        (id != 0)
+        (!id.is_nil())
             .then_some(Self(id))
             .ok_or_else(|| HostError::Conflict("invalid extension acquisition job".into()))
     }
@@ -32,7 +32,7 @@ impl AcquisitionJob {
 
     #[cfg(test)]
     pub(crate) const fn test(value: u64) -> Self {
-        Self(value)
+        Self(uuid::Uuid::from_u128(value as u128))
     }
 }
 
@@ -110,7 +110,6 @@ struct Job {
 }
 
 struct Registry {
-    next: u64,
     jobs: BTreeMap<AcquisitionJob, Job>,
 }
 
@@ -155,10 +154,7 @@ impl ExtensionAcquisitions {
     ) -> Self {
         Self {
             workspace: workspace.clone(),
-            registry: Arc::new(Mutex::new(Registry {
-                next: 1,
-                jobs: BTreeMap::new(),
-            })),
+            registry: Arc::new(Mutex::new(Registry { jobs: BTreeMap::new() })),
             acquire: Arc::new(acquire),
             events,
             commits: Arc::new(Mutex::new(())),
@@ -197,8 +193,15 @@ impl ExtensionAcquisitions {
                 };
                 registry.jobs.remove(&removable);
             }
-            let id = AcquisitionJob(registry.next);
-            registry.next = registry.next.saturating_add(1);
+            // A job handle can outlive its socket connection. Give every host
+            // incarnation a fresh opaque identity so a stale handle cannot
+            // address or cancel an unrelated acquisition after a restart.
+            let id = loop {
+                let candidate = AcquisitionJob(uuid::Uuid::new_v4());
+                if !registry.jobs.contains_key(&candidate) {
+                    break candidate;
+                }
+            };
             registry.jobs.insert(
                 id,
                 Job {
@@ -641,6 +644,49 @@ mod tests {
         let cancelled_revision = service.status(job).unwrap().revision;
         assert!(service.cancel(job, cancelled_revision).is_err());
         assert_eq!(service.status(job).unwrap().revision, cancelled_revision);
+    }
+
+    #[test]
+    fn stale_job_handles_cannot_cross_a_host_restart() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = workspace(root.path());
+        let first = ExtensionAcquisitions::with_acquirer(&workspace, |_, reference, progress, _| {
+            let _ = progress.send(Acquisition::Ready(Candidate {
+                reference: reference.into(),
+                digest: "sha256:first".into(),
+                manifest: manifest("1.0.0", &[]),
+            }));
+        });
+        let stale = first.start("registry/sample:first").unwrap();
+        let stale_wire = stale.wire();
+        drop(first);
+
+        let second = ExtensionAcquisitions::with_acquirer(&workspace, |_, reference, progress, _| {
+            let _ = progress.send(Acquisition::Ready(Candidate {
+                reference: reference.into(),
+                digest: "sha256:second".into(),
+                manifest: manifest("2.0.0", &[]),
+            }));
+        });
+        let current = second.start("registry/sample:second").unwrap();
+        let current_ready = ready(&second, current);
+
+        assert_ne!(
+            stale_wire,
+            current.wire(),
+            "host incarnations must not reuse job handles"
+        );
+        let stale = AcquisitionJob::parse(&stale_wire).unwrap();
+        assert!(matches!(second.status(stale), Err(HostError::Absent(_))));
+        assert!(matches!(
+            second.cancel(stale, current_ready.revision),
+            Err(HostError::Absent(_))
+        ));
+        assert_eq!(
+            second.status(current).unwrap(),
+            current_ready,
+            "a stale cancellation must not alter the new host's acquisition"
+        );
     }
 
     #[test]
