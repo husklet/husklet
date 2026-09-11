@@ -1053,13 +1053,12 @@ mod unix {
             capture_story(&realized_window, "Checkbox API wide");
             realized_window.set_size_request(600, 800);
             realized_window.set_default_size(600, 800);
-            allocate(&root, 600, 800);
-            settle_toolkit();
+            settle_window_width(&realized_window, 600);
             assert_contained(&root, "Checkbox API narrow");
             capture_story(&realized_window, "Checkbox API narrow");
             realized_window.set_size_request(1_200, 800);
             realized_window.set_default_size(1_200, 800);
-            allocate(&root, 1_200, 800);
+            settle_window_width(&realized_window, 1_200);
             adjustment.set_value(0.0);
             settle_toolkit();
         }
@@ -2201,12 +2200,24 @@ mod unix {
                 assert!(choice.grab_focus(), "Select accepts keyboard focus");
             }
             "Heading" => {
-                find::<gtk::Expander>(root, |expander| {
+                let document = descendants::<gtk::ScrolledWindow>(root)
+                    .into_iter()
+                    .max_by(|left, right| {
+                        left.vadjustment()
+                            .upper()
+                            .total_cmp(&right.vadjustment().upper())
+                    })
+                    .expect("Heading document owns a scrolling viewport");
+                let adjustment = document.vadjustment();
+                adjustment.set_value(adjustment.upper() - adjustment.page_size());
+                settle_toolkit();
+                let playground = find::<gtk::Expander>(root, |expander| {
                     descendants::<gtk::Label>(expander.upcast_ref())
                         .iter()
                         .any(|label| label.text() == "Playground")
-                })
-                .set_expanded(true);
+                });
+                playground.set_expanded(true);
+                assert!(playground.grab_focus(), "Heading Playground accepts focus");
                 settle_toolkit();
                 let choice = find::<gtk::ToggleButton>(root, |button| {
                     button.accessible_role() == gtk::AccessibleRole::ComboBox
@@ -2221,10 +2232,16 @@ mod unix {
                 );
                 choice.emit_clicked();
                 settle_toolkit();
-                find::<gtk::Button>(choice.upcast_ref(), |button| {
+                let option = find::<gtk::Button>(choice.upcast_ref(), |button| {
                     button_caption(button).as_deref() == Some("display")
-                })
-                .emit_clicked();
+                });
+                let deadline = Instant::now() + Duration::from_millis(500);
+                while !option.is_mapped() && Instant::now() < deadline {
+                    settle_toolkit();
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                assert!(option.is_mapped(), "Heading option must finish opening before interaction");
+                option.emit_clicked();
                 settle_toolkit();
             }
             "Expander" => {
@@ -2699,6 +2716,7 @@ mod unix {
         for _ in 0..50 {
             settle_toolkit();
             if window.width() == expected {
+                window.set_size_request(-1, -1);
                 return;
             }
             std::thread::sleep(Duration::from_millis(2));
