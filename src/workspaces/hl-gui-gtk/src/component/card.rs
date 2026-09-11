@@ -12,14 +12,14 @@ use super::{axis, slot};
 /// Width a page body is limited to before it stops growing, in pixels. Long
 /// lines are unreadable, so a container stops widening rather than filling a
 /// maximised window.
-const BODY_PIXELS: i32 = 880;
+const BODY_PIXELS: i32 = 984;
 
 /// A page body whose preferred width is a ceiling rather than a minimum.
 ///
 /// `set_size_request` cannot express this: a fixed request prevents GTK
 /// from shrinking the body in a narrow pane. Reporting no horizontal minimum
-/// and an 880px natural width gives the parent the intended contract instead:
-/// use every available pixel up to 880, then centre the body.
+/// and a bounded natural width gives the parent the intended contract instead:
+/// use every available pixel up to that ceiling, then centre the body.
 #[derive(Default)]
 struct Body {
     column: OnceCell<gtk::Box>,

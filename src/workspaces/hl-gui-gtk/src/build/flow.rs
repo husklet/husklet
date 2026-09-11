@@ -154,6 +154,18 @@ impl Weave {
             && !children.is_empty()
             && children.iter().all(|child| child.has_css_class("hl-card"));
         let packs_cards = !vertical && children.iter().any(|child| child.has_css_class("hl-card"));
+        let common_card_floor = (!vertical
+            && !children.is_empty()
+            && children
+                .iter()
+                .all(|child| child.has_css_class("hl-card") && child.hexpands()))
+        .then(|| {
+            children
+                .iter()
+                .map(|child| size(child, vertical, room, packs_cards).0)
+                .max()
+                .unwrap_or(0)
+        });
         let mut lines = vec![Line::default()];
         for child in children {
             let (mut main, mut cross) = size(&child, vertical, room, packs_cards);
@@ -163,6 +175,9 @@ impl Weave {
                 // height-for-width result from its authored packing floor.
                 main = room;
                 cross = child.measure(gtk::Orientation::Vertical, room).1;
+            } else if let Some(floor) = common_card_floor {
+                main = floor;
+                cross = child.measure(gtk::Orientation::Vertical, floor).1;
             }
             let line = lines.last_mut().expect("a line is always open");
             let advance = if line.children.is_empty() { main } else { main + spacing };
@@ -196,6 +211,17 @@ impl Weave {
         let spare = room.saturating_sub(line.main);
         let share = if expanding == 0 { 0 } else { spare / expanding };
         let mut remainder = if expanding == 0 { 0 } else { spare % expanding };
+        let equal_cards = !vertical
+            && !line.children.is_empty()
+            && line
+                .children
+                .iter()
+                .all(|(child, _, _)| child.has_css_class("hl-card") && child.hexpands());
+        let card_room = room.saturating_sub(
+            spacing.saturating_mul(i32::try_from(line.children.len().saturating_sub(1)).unwrap_or(i32::MAX)),
+        );
+        let card_share = card_room / i32::try_from(line.children.len()).unwrap_or(1).max(1);
+        let mut card_remainder = card_room % i32::try_from(line.children.len()).unwrap_or(1).max(1);
         let mut main = if reverse { room } else { 0 };
         for (child, extent, child_cross) in &line.children {
             let expands = if vertical {
@@ -210,7 +236,13 @@ impl Weave {
             } else {
                 0
             };
-            let extent = extent + bonus;
+            let extent = if equal_cards {
+                let extent = card_share + i32::from(card_remainder > 0);
+                card_remainder = card_remainder.saturating_sub(1);
+                extent
+            } else {
+                extent + bonus
+            };
             if reverse {
                 main -= extent;
             }
@@ -406,6 +438,37 @@ mod tests {
             .windows(2)
             .all(|pair| pair[0].allocation().y() == pair[1].allocation().y()));
         assert_eq!(cards.iter().map(gtk::Widget::width).sum::<i32>() + 8, 884);
+    }
+
+    #[test]
+    fn expanding_card_rows_use_equal_columns_despite_unequal_content_floors() {
+        if !crate::test_support::on_the_toolkit_thread(equal_card_columns_scenario) {
+            eprintln!("skipped: no display connection");
+            return;
+        }
+    }
+
+    fn equal_card_columns_scenario() {
+        let container = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        let flow = Flow::new(gtk::Orientation::Horizontal);
+        flow.set_spacing(4);
+        container.set_layout_manager(Some(flow));
+        for width in [260, 300, 280] {
+            let card = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            card.add_css_class("hl-card");
+            card.set_size_request(width, 40);
+            card.set_hexpand(true);
+            container.append(&card);
+        }
+
+        measured_allocate(container.upcast_ref(), 908, 40);
+        assert_eq!(
+            children(container.upcast_ref())
+                .iter()
+                .map(gtk::Widget::width)
+                .collect::<Vec<_>>(),
+            [300, 300, 300]
+        );
     }
 
     #[test]

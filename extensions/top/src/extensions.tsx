@@ -1907,12 +1907,12 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                         <Card
                           key={`${extension.name}:${extension.image_digest}`}
                           grow
-                          width={{ chars: 30 }}
+                          width={{ chars: 36 }}
                           height="content"
                           variant="outline"
                         >
                           <CardContent gap={1}>
-                            <Row gap={1} width="fill" align="center" justify="start">
+                            <Row gap={1} width="fill" align="center" justify="start" wrap>
                               <Column gap={0} grow>
                                 <Text label={extension.name} tooltip={extension.image_digest} />
                                 <Text
