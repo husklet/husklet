@@ -117,6 +117,7 @@ fn base(css: &mut String, theme: &Theme) {
          .hl-surface {{ background: {surface}; }}\n\
          * {{ outline-color: {accent}; }}\n\
          .hl-code, .monospace {{ font-family: {mono}; }}\n\
+         .hl-code {{ background: {surface}; color: {text}; border: 1px solid {line}; border-radius: {radius}px; padding: 8px 10px; }}\n\
          .hl-card {{ background: {surface}; border: 1px solid {line}; border-radius: {radius}px; box-shadow: 0 1px 2px rgba(0,0,0,.22), inset 0 1px rgba(255,255,255,.035); }}\n\
          .hl-toolbar, .hl-headerbar {{ background: {raised}; border-bottom: 1px solid {line}; }}\n\
          .hl-sidebar {{ background: {surface}; border-right: 1px solid {line}; }}",
@@ -399,6 +400,9 @@ mod tests {
     #[test]
     fn product_components_have_compact_distinct_chrome() {
         let css = super::sheet(&Theme::dark());
+        assert!(css.contains(
+            ".hl-code { background: #171a20; color: #f0f2f5; border: 1px solid #323843; border-radius: 8px; padding: 8px 10px;"
+        ));
         assert!(css.contains("button:focus-visible { outline: 2px"));
         assert!(css.contains(".hl-navigationmenuitem { background: transparent"));
         assert!(css.contains(

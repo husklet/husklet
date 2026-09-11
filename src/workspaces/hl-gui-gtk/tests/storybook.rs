@@ -1097,6 +1097,15 @@ mod unix {
                 .into_iter()
                 .next()
                 .expect("Button documentation owns desktop navigation");
+            let example = find::<gtk::Label>(&root, |label| {
+                label.has_css_class("hl-code") && label.text().starts_with("<Button")
+            });
+            let (_, text_height) = example.layout().pixel_size();
+            let (_, natural_height, _, _) = example.measure(gtk::Orientation::Vertical, example.width());
+            assert!(
+                natural_height >= text_height + 16,
+                "source example omitted its compact 8px vertical inset: text={text_height}, natural={natural_height}"
+            );
             let navigation = paned
                 .start_child()
                 .expect("wide Button documentation retains its rail");
