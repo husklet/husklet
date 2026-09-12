@@ -375,6 +375,10 @@ impl<S: Storage> Roster<S> {
     /// Returns `Refusal::Policy` when nothing is recorded under `name`, and
     /// `Refusal::Record` when the record cannot be written.
     pub fn enable(&mut self, name: &ExtensionName) -> Result<(), Refusal> {
+        self.enable_loaded(name)
+    }
+
+    fn enable_loaded(&mut self, name: &ExtensionName) -> Result<(), Refusal> {
         let previous = self.installation.clone();
         let record = self.installation.enable(name)?.clone();
         if let Err(fault) = self.records.save(&record) {
@@ -385,8 +389,10 @@ impl<S: Storage> Roster<S> {
     }
 
     pub fn enable_if_digest(&mut self, name: &ExtensionName, image_digest: &str) -> Result<(), Refusal> {
+        let _transition = registration_lock();
+        self.reload()?;
         self.require_digest(name, image_digest)?;
-        self.enable(name)
+        self.enable_loaded(name)
     }
 
     /// Marks an extension as one whose sidecar should stay down. The grant
@@ -396,6 +402,10 @@ impl<S: Storage> Roster<S> {
     /// Returns `Refusal::Policy` when nothing is recorded under `name`, and
     /// `Refusal::Record` when the record cannot be written.
     pub fn disable(&mut self, name: &ExtensionName) -> Result<(), Refusal> {
+        self.disable_loaded(name)
+    }
+
+    fn disable_loaded(&mut self, name: &ExtensionName) -> Result<(), Refusal> {
         let previous = self.installation.clone();
         let previous_record = previous.record(name).cloned();
         let record = self.installation.disable(name)?.clone();
@@ -417,8 +427,10 @@ impl<S: Storage> Roster<S> {
     }
 
     pub fn disable_if_digest(&mut self, name: &ExtensionName, image_digest: &str) -> Result<(), Refusal> {
+        let _transition = registration_lock();
+        self.reload()?;
         self.require_digest(name, image_digest)?;
-        self.disable(name)
+        self.disable_loaded(name)
     }
 
     fn require_digest(&self, name: &ExtensionName, image_digest: &str) -> Result<(), Refusal> {
@@ -431,8 +443,10 @@ impl<S: Storage> Roster<S> {
     }
 
     pub fn retry_if_digest(&mut self, name: &ExtensionName, image_digest: &str) -> Result<(), Refusal> {
+        let _transition = registration_lock();
+        self.reload()?;
         self.require_digest(name, image_digest)?;
-        self.retry(name)
+        self.retry_loaded(name)
     }
 
     /// Clears a fault and puts the extension back on duty.
@@ -441,6 +455,10 @@ impl<S: Storage> Roster<S> {
     /// Returns `Refusal::Policy` when nothing is recorded under `name`, and
     /// `Refusal::Record` when the record cannot be written.
     pub fn retry(&mut self, name: &ExtensionName) -> Result<(), Refusal> {
+        self.retry_loaded(name)
+    }
+
+    fn retry_loaded(&mut self, name: &ExtensionName) -> Result<(), Refusal> {
         let previous = self.installation.clone();
         let record = self.installation.retry(name)?.clone();
         if let Err(fault) = self.records.save(&record).and_then(|()| self.records.clear_fault(name)) {
@@ -908,6 +926,30 @@ mod tests {
         let persisted = opened(temporary.path()).entries();
         assert_eq!(persisted.len(), 1);
         assert_eq!(persisted[0].image_digest, "sha256:new");
+    }
+
+    #[test]
+    fn stale_roster_cannot_enable_and_restore_a_replaced_grant() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let old = manifest("sample", &[Capability::Interface]);
+        let mut installer = opened(temporary.path());
+        installer
+            .register(&old, "sha256:old", &old.capabilities, 7)
+            .expect("old install");
+        let mut stale = opened(temporary.path());
+
+        installer.remove_if_digest(&old.name, "sha256:old").expect("old removal");
+        let replacement = manifest("sample", &[Capability::ContainerRead]);
+        installer
+            .register(&replacement, "sha256:new", &replacement.capabilities, 8)
+            .expect("replacement install");
+
+        assert!(stale.enable_if_digest(&old.name, "sha256:old").is_err());
+        let persisted = opened(temporary.path()).entries();
+        assert_eq!(persisted.len(), 1);
+        assert_eq!(persisted[0].image_digest, "sha256:new");
+        assert_eq!(persisted[0].granted, replacement.capabilities);
+        assert_eq!(persisted[0].stage, Stage::Standby);
     }
 
     #[test]
