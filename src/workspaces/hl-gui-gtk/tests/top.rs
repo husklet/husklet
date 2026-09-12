@@ -1201,6 +1201,9 @@ mod unix {
             if fixture == "error" && name == "workspace" {
                 assert_overview_recovery(&root, width, width_name);
             }
+            if fixture == "populated" && name == "settings" {
+                assert_settings_group_layout(&root, width, width_name);
+            }
             capture_stable(&window, &format!("{capture_fixture}-{name}-{width_name}"), width, 800);
             if fixture == "error" && name == "workspace" {
                 let disclosure = find_expander(&root, "Technical details");
@@ -3573,6 +3576,80 @@ mod unix {
             "{case} recovery pushed the first resource card to {}px",
             card_bounds.y()
         );
+    }
+
+    fn assert_settings_group_layout(root: &gtk::Widget, width: i32, case: &str) {
+        let resources = find_expander(root, "Resources & connectivity · CPU 4 · Memory 4096 MB");
+        let terminal = find_expander(
+            root,
+            "Terminal appearance · Font host default · Size default · Cursor default",
+        );
+        let environment = find_expander(root, "Environment variables · 1 variable");
+        let mounts = find_expander(root, "Filesystem mounts · 0 mounts");
+        for group in [&resources, &terminal, &environment, &mounts] {
+            assert_eq!(group.accessible_role(), gtk::AccessibleRole::Button);
+            assert!(
+                group.is_focusable(),
+                "{case} settings summary must remain keyboard reachable"
+            );
+        }
+        let bounds = |widget: &gtk::Expander| {
+            widget
+                .compute_bounds(root)
+                .unwrap_or_else(|| panic!("{case} settings group belongs to the Top root"))
+        };
+        let resources = bounds(&resources);
+        let terminal = bounds(&terminal);
+        let environment = bounds(&environment);
+        let mounts = bounds(&mounts);
+        if width == 600 {
+            for (upper, lower) in [
+                (&resources, &terminal),
+                (&terminal, &environment),
+                (&environment, &mounts),
+            ] {
+                assert!(
+                    upper.y() + upper.height() <= lower.y(),
+                    "{case} settings groups must remain one ordered column at compact width"
+                );
+            }
+            assert!(
+                [
+                    resources.width(),
+                    terminal.width(),
+                    environment.width(),
+                    mounts.width()
+                ]
+                .into_iter()
+                .all(|group| group >= 480.0),
+                "{case} compact settings summaries must retain the usable page width"
+            );
+        } else {
+            assert_eq!(
+                resources.y(),
+                terminal.y(),
+                "{case} first independent settings pair must share a row"
+            );
+            assert_eq!(
+                environment.y(),
+                mounts.y(),
+                "{case} second independent settings pair must share a row"
+            );
+            assert!(
+                terminal.x() > resources.x(),
+                "{case} terminal group must occupy the second desktop column"
+            );
+            assert!(
+                mounts.x() > environment.x(),
+                "{case} mounts group must occupy the second desktop column"
+            );
+            assert!(
+                [resources.width(), terminal.width(), environment.width(), mounts.width()]
+                    .into_iter()
+                    .all(|group| group >= 390.0),
+                "{case} desktop settings columns must remain useful rather than collapsing to their labels"
+            );
+        }
     }
 
     fn assert_overview_grid(root: &gtk::Widget, width: i32, content_start: i32, case: &str) {

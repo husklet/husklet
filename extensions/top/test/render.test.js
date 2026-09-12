@@ -774,6 +774,26 @@ test('Top owns workspace settings and extension management in the same tab', asy
   assert.ok(labelled(stage, 'Terminal appearance'));
   assert.ok(labelled(stage, 'Environment variables'));
   assert.ok(labelled(stage, 'Filesystem mounts'));
+  assert.deepEqual(taggedProperty(stage, 'Runtime', 'Accordion', 'Width'), {
+    Length: 'Fill',
+  });
+  assert.deepEqual(taggedProperty(stage, 'Resources & connectivity', 'Accordion', 'Width'), {
+    Bounds: {
+      minimum: { Chars: 44 },
+      maximum: { Chars: 52 },
+    },
+  });
+  assert.deepEqual(taggedProperty(stage, 'Terminal appearance', 'Accordion', 'Width'), {
+    Bounds: {
+      minimum: { Chars: 44 },
+      maximum: { Chars: 52 },
+    },
+  });
+  assert.deepEqual(
+    ancestorProperty(stage, 'Resources & connectivity', 'Row', 'Wrap'),
+    { Flag: true },
+    'independent setting groups share a responsive wrapping desktop row',
+  );
   assert.ok(
     labelled(stage, 'Runtime · Image alpine:3.20 · Shell /bin/sh'),
     'accordion summaries form one natural, explicitly separated phrase',
@@ -823,6 +843,15 @@ test('Top owns workspace settings and extension management in the same tab', asy
   assert.deepEqual(latestProperty(stage, lifetime, 'Value'), { Text: 'live' });
   expand(stage, 'Terminal appearance');
   await settled();
+  assert.deepEqual(taggedProperty(stage, 'Terminal appearance', 'Accordion', 'Width'), {
+    Length: 'Fill',
+  });
+  assert.deepEqual(taggedProperty(stage, 'Runtime', 'Accordion', 'Width'), {
+    Bounds: {
+      minimum: { Chars: 44 },
+      maximum: { Chars: 52 },
+    },
+  });
   assert.deepEqual(ancestorTags(stage, 'Cursor shape').slice(0, 1), ['FormControl']);
   const cursorShape = formControlField(stage, 'Cursor shape', 'Select');
   assert.deepEqual(latestProperty(stage, cursorShape, 'Value'), { Text: '' });
