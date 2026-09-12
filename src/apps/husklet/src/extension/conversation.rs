@@ -3006,6 +3006,57 @@ mod tests {
     }
 
     #[test]
+    fn observed_exact_file_write_atomically_returns_the_published_identity_over_the_socket() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let root = temporary.path().join("workspace");
+        std::fs::create_dir_all(&root).expect("workspace");
+        std::fs::write(root.join("settings.json"), b"old").expect("initial file");
+        let exact = RelativePath::new("settings.json").expect("path");
+        let files = WorkspaceDirectory::new(&root).expect("workspace directory");
+        let observed = files
+            .stat(&exact)
+            .expect("file identity")
+            .identity
+            .expect("stable identity");
+        drop(files);
+        let ledger = Arc::new(Ledger::default());
+        let (theirs, served) = exact_write_host(Arc::clone(&ledger), root.clone(), exact.clone());
+        let mut wire = Wire::new(theirs);
+        shake(&mut wire, PROTOCOL);
+
+        let answer = ask(
+            &mut wire,
+            &Request::FilesystemWriteObserved {
+                path: exact.clone(),
+                observed: observed.clone(),
+                contents: b"new".to_vec(),
+            },
+        );
+        let Reply::Identity(published) = codec::read_reply(&answer).expect("identity reply") else {
+            panic!("unexpected reply")
+        };
+        assert_ne!(published, observed);
+        assert_eq!(std::fs::read(root.join("settings.json")).expect("published file"), b"new");
+        let files = WorkspaceDirectory::new(&root).expect("reopened workspace directory");
+        assert_eq!(
+            files.stat(&exact).expect("published stat").identity.as_deref(),
+            Some(published.as_str())
+        );
+        assert!(
+            std::fs::read_dir(&root).expect("workspace listing").all(|entry| !entry
+                .expect("entry")
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".husklet-write-")),
+            "socket completion leaves no staged or displaced entry"
+        );
+        assert!(ledger.reached().is_empty(), "the real filesystem adapter handled the request");
+
+        drop(wire);
+        assert_eq!(served.join().expect("joined"), Ok(()));
+    }
+
+    #[test]
     fn read_only_workspace_inspection_never_frames_environment_secrets() {
         let ledger = Arc::new(Ledger::default());
         let (theirs, served) = workspace_read_host(Arc::clone(&ledger));

@@ -744,54 +744,9 @@ impl WorkspaceFiles for WorkspaceDirectory {
         if !opened.is_file() {
             return Err(HostError::Conflict(format!("{path} is not a regular file")));
         }
-        for _ in 0..128 {
-            let quarantine = CString::new(format!(
-                ".husklet-write-old-{}-{}",
-                std::process::id(),
-                TEMPORARY.fetch_add(1, Ordering::Relaxed)
-            ))
-            .expect("fixed prefix has no NUL");
-            let captured = PinnedEntry {
-                directory: entry.directory.try_clone().map_err(|error| absence(path, &error))?,
-                metadata: entry.directory.metadata().map_err(|error| absence(path, &error))?,
-                name: quarantine,
-            };
-            match rename_noreplace(&entry, &captured) {
-                Ok(()) => {
-                    let status = rustix::fs::statat(
-                        &captured.directory,
-                        &captured.name,
-                        rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
-                    )
-                    .map_err(io::Error::from)
-                    .map_err(|error| absence(path, &error))?;
-                    if (status.st_dev, status.st_ino) != (opened.dev(), opened.ino()) {
-                        rename_noreplace(&captured, &entry).map_err(|error| absence(path, &error))?;
-                        return Err(HostError::Conflict(format!(
-                            "{path} no longer matches the observed identity"
-                        )));
-                    }
-                    let identity = match atomic_create(&entry, contents) {
-                        Ok(identity) => identity,
-                        Err(error) => {
-                            rename_noreplace(&captured, &entry).map_err(|rollback| {
-                                HostError::Failed(format!(
-                                    "{path}: publication failed ({error}) and rollback failed ({rollback})"
-                                ))
-                            })?;
-                            return Err(absence(path, &error));
-                        }
-                    };
-                    remove_entry(&captured)
-                        .and_then(|()| entry.directory.sync_all())
-                        .map_err(|error| absence(path, &error))?;
-                    return Ok(identity);
-                }
-                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
-                Err(error) => return Err(absence(path, &error)),
-            }
-        }
-        Err(HostError::Failed("could not reserve a unique write quarantine".into()))
+        atomic_replace_observed(&entry, &opened, contents, |_, _| Ok(()))
+            .map_err(|error| absence(path, &error))?
+            .ok_or_else(|| HostError::Conflict(format!("{path} no longer matches the observed identity")))
     }
 
     fn create_observed(&self, path: &RelativePath, contents: &[u8]) -> Result<String, HostError> {
@@ -1022,6 +977,78 @@ impl Drop for Temporary {
 
 fn atomic_create(target: &PinnedEntry, contents: &[u8]) -> io::Result<String> {
     atomic_create_with(target, contents, || Ok(()))
+}
+
+/// Exchanges the staged file with the live name in one namespace operation.
+/// `None` means another writer replaced the observed inode; the exchange was
+/// reversed before returning, so the foreign value remains untouched.
+fn atomic_replace_observed(
+    target: &PinnedEntry,
+    observed: &std::fs::Metadata,
+    contents: &[u8],
+    after_exchange: impl FnOnce(&File, &CStr) -> io::Result<()>,
+) -> io::Result<Option<String>> {
+    let mut published = None;
+    let mut conflict = false;
+    atomic_write_at(target, contents, |directory, temporary, file| {
+        rustix::fs::renameat_with(
+            directory,
+            temporary,
+            directory,
+            &target.name,
+            rustix::fs::RenameFlags::EXCHANGE,
+        )
+        .map_err(io::Error::from)?;
+        let inspected = (|| {
+            after_exchange(directory, temporary)?;
+            let displaced = rustix::fs::statat(
+                directory,
+                temporary,
+                rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+            )
+            .map_err(io::Error::from)?;
+            if (displaced.st_dev, displaced.st_ino) != (observed.dev(), observed.ino()) {
+                return Ok(None);
+            }
+            let identity = file_identity(&file.metadata()?);
+            directory.sync_all()?;
+            Ok(Some(identity))
+        })();
+        let Some(identity) = inspected.map_err(|error| match rollback_exchange(directory, temporary, &target.name) {
+            Ok(()) => error,
+            Err(rollback) => io::Error::other(format!(
+                "publication failed ({error}) and rollback failed ({rollback})"
+            )),
+        })?
+        else {
+            rustix::fs::renameat_with(
+                directory,
+                temporary,
+                directory,
+                &target.name,
+                rustix::fs::RenameFlags::EXCHANGE,
+            )
+            .map_err(io::Error::from)?;
+            directory.sync_all()?;
+            conflict = true;
+            return Ok(false);
+        };
+        published = Some(identity);
+        Ok(true)
+    })?;
+    Ok((!conflict).then_some(published).flatten())
+}
+
+fn rollback_exchange(directory: &File, temporary: &CStr, target: &CStr) -> io::Result<()> {
+    rustix::fs::renameat_with(
+        directory,
+        temporary,
+        directory,
+        target,
+        rustix::fs::RenameFlags::EXCHANGE,
+    )
+    .map_err(io::Error::from)?;
+    directory.sync_all()
 }
 
 fn atomic_create_with(
@@ -1270,7 +1297,7 @@ fn described_at(parent: &RelativePath, directory: &File, entry: &rustix::fs::Dir
 
 #[cfg(test)]
 mod tests {
-    use super::WorkspaceDirectory;
+    use super::{WorkspaceDirectory, atomic_replace_observed, open_entry_identity};
     use hl_extension::port::{HostError, WorkspaceFiles};
     use hl_extension::{FilesystemSelector, RelativePath};
     use std::sync::atomic::Ordering;
@@ -1608,6 +1635,71 @@ mod tests {
                 .to_string_lossy()
                 .starts_with(".husklet-write-old-")
         }));
+    }
+
+    #[test]
+    fn observed_write_exchange_never_removes_the_live_name() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let root = temporary.path().join("workspace");
+        let files = WorkspaceDirectory::new(&root).expect("root");
+        let target = path("settings.json");
+        let first = files.create_observed(&target, b"old").expect("create");
+        let entry = files.pinned(&target).expect("pinned target");
+        let observed = open_entry_identity(&target, &entry, &first).expect("observed target");
+
+        let second = atomic_replace_observed(&entry, &observed, b"new", |directory, displaced| {
+            let live = rustix::fs::openat(
+                directory,
+                &entry.name,
+                rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::NOFOLLOW,
+                rustix::fs::Mode::empty(),
+            )?;
+            let old = rustix::fs::openat(
+                directory,
+                displaced,
+                rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::NOFOLLOW,
+                rustix::fs::Mode::empty(),
+            )?;
+            let mut live = std::fs::File::from(live);
+            let mut old = std::fs::File::from(old);
+            let mut live_bytes = Vec::new();
+            let mut old_bytes = Vec::new();
+            std::io::Read::read_to_end(&mut live, &mut live_bytes)?;
+            std::io::Read::read_to_end(&mut old, &mut old_bytes)?;
+            assert_eq!(live_bytes, b"new", "the authorized name is continuously present");
+            assert_eq!(old_bytes, b"old", "the observed inode is retained until validation");
+            Ok(())
+        })
+        .expect("atomic exchange")
+        .expect("matching identity publishes");
+
+        assert_ne!(second, first);
+        assert_eq!(std::fs::read(root.join("settings.json")).expect("live file"), b"new");
+    }
+
+    #[test]
+    fn observed_write_exchange_restores_a_raced_replacement_without_overwriting_it() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let root = temporary.path().join("workspace");
+        let files = WorkspaceDirectory::new(&root).expect("root");
+        let target = path("settings.json");
+        let first = files.create_observed(&target, b"observed").expect("create");
+        let entry = files.pinned(&target).expect("pinned target");
+        let observed = open_entry_identity(&target, &entry, &first).expect("observed target");
+        std::fs::rename(root.join("settings.json"), root.join("observed-away")).expect("move observed inode");
+        std::fs::write(root.join("settings.json"), b"foreign").expect("raced replacement");
+
+        let result = atomic_replace_observed(&entry, &observed, b"ours", |_, _| Ok(())).expect("exchange rollback");
+        assert_eq!(result, None, "the raced inode cannot satisfy the observation");
+        assert_eq!(
+            std::fs::read(root.join("settings.json")).expect("foreign value"),
+            b"foreign",
+            "rollback preserves the raced replacement"
+        );
+        assert_eq!(
+            std::fs::read(root.join("observed-away")).expect("observed value"),
+            b"observed"
+        );
     }
 
     #[test]
