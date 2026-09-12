@@ -64,7 +64,18 @@ async function scenario(
       encode({
         channel: CONTROL,
         kind: KIND.open,
-        payload: { protocol: 1, extension: 'product-scenario', granted },
+        payload: {
+          protocol: 1,
+          extension: 'product-scenario',
+          granted,
+          filesystem: {
+            read: granted.includes('filesystem:read') ? [{ subtree: 'src' }] : [],
+            write: granted.includes('filesystem:write') ? [{ subtree: 'src' }] : [],
+            create: [],
+            delete: [],
+            rename: [],
+          },
+        },
       }),
     );
   });

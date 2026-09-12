@@ -3,7 +3,7 @@ export { PROTOCOL_SPECIFICATION_VERSION, PROTOCOL_VERSION, PROTOCOL_BOUNDS, PROT
 import { semanticText, semanticXml } from './semantic.js';
 export { semanticText, semanticXml };
 import { ExtensionError, Session } from './session.js';
-import { PROTOCOL_REPLIES, PROTOCOL_REQUEST_CAPABILITIES, PROTOCOL_TOPICS, } from './generated-protocol.js';
+import { encodeRequest, PROTOCOL_REPLIES, PROTOCOL_REQUEST_CAPABILITIES, PROTOCOL_TOPICS, } from './generated-protocol.js';
 /** A post-creation execution failure whose immutable identity remains recoverable. */
 export class ExecutionOperationError extends Error {
     executionId;
@@ -495,6 +495,16 @@ function exactFilesystemJournal(journal) {
         throw new TypeError('filesystem journal identity must be 32 hexadecimal characters');
     }
     return journal;
+}
+function filesystemParts(path) {
+    return path.split(/[/\\]/).filter((part) => part !== '' && part !== '.');
+}
+function filesystemSelectorPermits(selector, path) {
+    if ('exact' in selector)
+        return selector.exact === path;
+    const root = filesystemParts(selector.subtree);
+    const candidate = filesystemParts(path);
+    return candidate.length >= root.length && root.every((part, index) => candidate[index] === part);
 }
 function compareUtf8(left, right) {
     const encoder = new TextEncoder();
@@ -2010,6 +2020,17 @@ export function workspace(session, { signal } = {}) {
             },
         },
         files: {
+            pathGrant: (operation, path) => {
+                if (!['read', 'write', 'create', 'delete', 'rename'].includes(operation))
+                    throw new TypeError('filesystem grant operation must be read, write, create, delete, or rename');
+                encodeRequest('filesystem_stat', { path });
+                const selectors = session.grantedFilesystem[operation];
+                if (selectors.some((selector) => 'exact' in selector && selector.exact === path))
+                    return 'exact';
+                return selectors.some((selector) => 'subtree' in selector && filesystemSelectorPermits(selector, path))
+                    ? 'subtree'
+                    : null;
+            },
             inventory: async () => {
                 const inventory = expect(await session.call('filesystem_inventory'), 'file_inventory');
                 exactFilesystemJournal(inventory.journal);
@@ -4563,6 +4584,7 @@ export const protocolCoverage = Object.freeze({
             'switchOccupantObserved',
         ],
         files: [
+            'pathGrant',
             'inventory',
             'beginWalk',
             'changes',

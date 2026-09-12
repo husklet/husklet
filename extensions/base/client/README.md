@@ -253,6 +253,10 @@ still checks every request authoritatively, including changes in authority after
 the handshake. `session.grantedFilesystem` (also available on `workspace(session)`)
 is the immutable effective read/write/create/delete/rename selector set for this
 extension only, so a narrowly scoped extension can explain its reach without probing.
+`workspace(session).files.pathGrant(operation, path)` applies the same component-aware
+matching as the host and reports whether the path is covered exactly, by a subtree, or
+not at all. This is a planning snapshot; every operation is still re-authorized by the
+host so revocation, symlink replacement, and identity races fail there.
 The same caller-only view is available as `grantedContainers`, `grantedImages`,
 `grantedNetworks`, and `grantedVolumes`; selector arrays and their entries are deeply immutable.
 `grantedWorkspaceEnvironment` likewise exposes the exact readable and writable variable selectors.

@@ -209,7 +209,7 @@ wrong caller.
 
 | Extension shape | Current fit | Relevant API and remaining constraint |
 | --- | --- | --- |
-| Code/embedding index | Strong | A bounded, completeness-bearing filesystem inventory is emitted only when declared-root state changes; ranged reads retain exact identities for incremental indexing, and private bounded state stores its checkpoint. |
+| Code/embedding index | Strong | \`files.pathGrant\` distinguishes exact-file roots from recursive subtree roots with host-compatible component matching before any probe; bounded completeness-bearing inventory, identity-preserving ranged reads, and private bounded state support incremental checkpoints. The grant result is a planning snapshot and every operation remains host-authorized. |
 | LLM terminal agent | Strong | Pane inventory, bounded screen text, raw input, command spawn, semantic XML/actions, revisions, and change subscriptions support an observe/act loop without an MCP-specific API. |
 | PostgreSQL GUI | Strong | Exact container/network grants, process/execution APIs, bounded stdin/output, explicit EOF, cancellation, host-resolved credential references, published-port discovery, and virtualized rendered tables cover administration without placing passwords in argv. Credentials have host-private file isolation, not OS-keychain encryption; host port forwarding remains absent. |
 | Container/process inspector | Strong | Container inventories, immutable IDs and generations, exact resource selectors exposed through caller-only \`grantedContainers\`, \`grantedImages\`, \`grantedNetworks\`, and \`grantedVolumes\`, process snapshots, executions, logs, lifecycle controls, and observed wait helpers are present. |

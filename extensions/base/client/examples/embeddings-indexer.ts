@@ -53,6 +53,15 @@ process.once('SIGTERM', () => controller.abort('SIGTERM'));
 const session = await connect({ path: configuration.path, pendingLimit: 8, timeout: 30_000 });
 try {
   const host = workspace(session);
+  const roots = configuration.roots.map((path) => {
+    const grant = host.files.pathGrant('read', path);
+    if (grant === null) {
+      throw new Error(
+        `configured root ${JSON.stringify(path)} is outside the filesystem:read grant`,
+      );
+    }
+    return { path, grant };
+  });
   let checkpoint = (await host.state.readJson(checkpointCodec)).value;
   const wanted = (entry: FileEntry) =>
     !entry.directory && suffixes.some((suffix) => entry.path.endsWith(suffix));
@@ -100,8 +109,7 @@ try {
         }
         digest = result.stdout.trim();
       } finally {
-        if (executionId)
-          await host.containers.removeExecution(executionId).catch(() => {});
+        if (executionId) await host.containers.removeExecution(executionId).catch(() => {});
       }
     } else {
       digest = Array.from(
@@ -129,11 +137,19 @@ try {
   const inventory = await host.files.inventory();
   if (!inventory.complete) throw new Error('filesystem inventory is incomplete');
   const scanned: Record<string, DocumentState> = {};
-  for (const root of configuration.roots) {
-    for await (const entry of host.files.walk(root, { signal: controller.signal })) {
+  for (const root of roots) {
+    if (root.grant === 'exact') {
+      const entry = await host.files.stat(root.path);
       if (wanted(entry)) {
         const document = await index(entry, false);
         if (document) scanned[entry.path] = document;
+      }
+    } else {
+      for await (const entry of host.files.walk(root.path, { signal: controller.signal })) {
+        if (wanted(entry)) {
+          const document = await index(entry, false);
+          if (document) scanned[entry.path] = document;
+        }
       }
     }
   }

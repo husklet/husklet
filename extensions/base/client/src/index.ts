@@ -49,6 +49,7 @@ import type {
   WireReply,
 } from './api.js';
 import {
+  encodeRequest,
   PROTOCOL_REPLIES,
   PROTOCOL_REQUEST_CAPABILITIES,
   PROTOCOL_TOPICS,
@@ -658,6 +659,20 @@ function exactFilesystemJournal(journal: string) {
     throw new TypeError('filesystem journal identity must be 32 hexadecimal characters');
   }
   return journal;
+}
+
+function filesystemParts(path: string) {
+  return path.split(/[/\\]/).filter((part) => part !== '' && part !== '.');
+}
+
+function filesystemSelectorPermits(
+  selector: { exact: string } | { subtree: string },
+  path: string,
+) {
+  if ('exact' in selector) return selector.exact === path;
+  const root = filesystemParts(selector.subtree);
+  const candidate = filesystemParts(path);
+  return candidate.length >= root.length && root.every((part, index) => candidate[index] === part);
 }
 
 function compareUtf8(left: string, right: string) {
@@ -2611,6 +2626,21 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
       },
     },
     files: {
+      pathGrant: (operation, path) => {
+        if (!['read', 'write', 'create', 'delete', 'rename'].includes(operation))
+          throw new TypeError(
+            'filesystem grant operation must be read, write, create, delete, or rename',
+          );
+        encodeRequest('filesystem_stat', { path });
+        const selectors = session.grantedFilesystem[operation];
+        if (selectors.some((selector) => 'exact' in selector && selector.exact === path))
+          return 'exact';
+        return selectors.some(
+          (selector) => 'subtree' in selector && filesystemSelectorPermits(selector, path),
+        )
+          ? 'subtree'
+          : null;
+      },
       inventory: async () => {
         const inventory = expect(await session.call('filesystem_inventory'), 'file_inventory');
         exactFilesystemJournal(inventory.journal);
@@ -5516,6 +5546,7 @@ export const protocolCoverage = Object.freeze({
       'switchOccupantObserved',
     ],
     files: [
+      'pathGrant',
       'inventory',
       'beginWalk',
       'changes',

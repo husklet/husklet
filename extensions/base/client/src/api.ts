@@ -118,6 +118,7 @@ export interface FilesystemGrant {
 export type ReadonlyFilesystemGrant = {
   readonly [Operation in keyof FilesystemGrant]: readonly Readonly<FilesystemSelector>[];
 };
+export type FilesystemGrantOperation = keyof FilesystemGrant;
 export type ReadonlyContainerGrant = Readonly<Omit<ContainerGrant, 'selectors'>> & {
   readonly selectors: readonly Readonly<ContainerSelector>[];
 };
@@ -1688,6 +1689,11 @@ export interface WorkspaceApi {
     >;
   };
   files: {
+    /**
+     * Tests the immutable handshake scope with Rust-compatible exact/subtree matching.
+     * This is planning information; the host still authoritatively checks every operation.
+     */
+    pathGrant(operation: FilesystemGrantOperation, path: string): 'exact' | 'subtree' | null;
     /** Returns the current bounded inventory for the exact consented read roots. */
     inventory(): Promise<FileInventory>;
     /**
