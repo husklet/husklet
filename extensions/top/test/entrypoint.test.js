@@ -558,9 +558,22 @@ test(
         (request) =>
           request.call === 'source_resize_at' && request.with.mutation.Length?.rows === 9,
       ).with.mutation.Length.source;
+      const beforeClose = requests.length;
+      peer.write(
+        encode({ channel: 41, kind: KIND.event, payload: invocation(requests, 'Hide details') }),
+      );
+      await until(() =>
+        requests
+          .slice(beforeClose)
+          .some(
+            (request) =>
+              request.call === 'interface_render_at' &&
+              request.with.frame.patches.some((patch) => patch.SetProp?.value?.Text === 'Inspect'),
+          ),
+      );
       const beforeRefresh = requests.length;
       peer.write(
-        encode({ channel: 41, kind: KIND.event, payload: invocation(requests, 'Inspect') }),
+        encode({ channel: 141, kind: KIND.event, payload: invocation(requests, 'Inspect') }),
       );
       await until(() =>
         requests
@@ -600,14 +613,14 @@ test(
             (request) =>
               request.call === 'source_resize_at' &&
               request.with.mutation.Length?.source === imageDetailSource &&
-              request.with.mutation.Length.version === 2 &&
+              request.with.mutation.Length.version === 3 &&
               request.with.mutation.Length.rows === 9,
           ),
       );
       const resize = requests.findLast((request) => request.call === 'source_resize_at');
       assert.deepEqual(resize.with.mutation.Length, {
         source: imageDetailSource,
-        version: 2,
+        version: 3,
         rows: 9,
       });
       const imageRenders = requests.filter(

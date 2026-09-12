@@ -16,10 +16,10 @@ mod unix {
         NetworkInventory, NetworkKind, NetworkSummary,
     };
     use hl_extension::{
-        codec, Capability, ChannelId, ExtensionName, ExtensionPreferences, ExtensionSummary, FilesystemGrant,
-        FilesystemSelector, Frame, Grant, Hello, ImageGrant, ImageSelector, PaneProvider, PreferenceValue,
+        Capability, ChannelId, ExtensionName, ExtensionPreferences, ExtensionSummary, FilesystemGrant,
+        FilesystemSelector, Frame, Grant, Hello, ImageGrant, ImageSelector, PROTOCOL, PaneProvider, PreferenceValue,
         RelativePath, Reply, Request, Snapshot, VolumeGrant, Welcome, Wire, WorkspaceConfiguration,
-        WorkspaceEnvironmentGrant, WorkspaceEnvironmentSelector, WorkspaceInfo, WorkspaceTerminal, PROTOCOL,
+        WorkspaceEnvironmentGrant, WorkspaceEnvironmentSelector, WorkspaceInfo, WorkspaceTerminal, codec,
     };
     use hl_gui::{Renderer as _, SourceMutation, Theme, Tree};
     use hl_gui_gtk::Surface;
@@ -38,8 +38,16 @@ mod unix {
     const DEADLINE: Duration = Duration::from_secs(5);
     const PATCH_LIMIT: usize = 1_500;
     const NAVIGATION_LABELS: &[&str] = &[
-        "Workspace", "Settings", "Extensions", "Containers", "Processes", "Executions", "Images", "Volumes",
-        "Networks", "Terminals",
+        "Workspace",
+        "Settings",
+        "Extensions",
+        "Containers",
+        "Processes",
+        "Executions",
+        "Images",
+        "Volumes",
+        "Networks",
+        "Terminals",
     ];
 
     struct TopChild(Child);
@@ -608,10 +616,7 @@ mod unix {
                     "{width_name} installed toolbar collapsed around its labels: {toolbar_bounds:?}"
                 );
                 assert!(
-                    (refresh_bounds.x() + refresh_bounds.width()
-                        - toolbar_bounds.x()
-                        - toolbar_bounds.width())
-                        .abs()
+                    (refresh_bounds.x() + refresh_bounds.width() - toolbar_bounds.x() - toolbar_bounds.width()).abs()
                         <= 1.0,
                     "{width_name} refresh is stranded beside the count instead of anchoring the toolbar: refresh={refresh_bounds:?}, toolbar={toolbar_bounds:?}"
                 );
@@ -656,7 +661,11 @@ mod unix {
                 );
                 let danger = find_expander(&network_card, "Danger zone");
                 assert!(danger.has_css_class("variant-outline"));
-                assert_eq!(danger.height(), 28, "{width_name} network danger disclosure stays compact");
+                assert_eq!(
+                    danger.height(),
+                    28,
+                    "{width_name} network danger disclosure stays compact"
+                );
                 assert_eq!(
                     danger.tooltip_text().as_deref(),
                     Some("Remove this network from the workspace")
@@ -788,10 +797,7 @@ mod unix {
                     root.measure(gtk::Orientation::Vertical, width);
                     root.allocate(width, 1_600, -1, None);
                     settle_frame();
-                    find_mapped_labelled(
-                        &card,
-                        "Removing this volume permanently deletes its stored data.",
-                    );
+                    find_mapped_labelled(&card, "Removing this volume permanently deletes its stored data.");
                     let remove = find_button(&card, "Remove");
                     assert!(remove.has_css_class("size-small"));
                     assert_eq!(remove.height(), 28, "expanded volume removal stays compact");
@@ -833,7 +839,11 @@ mod unix {
                 assert!(inspect.grab_focus(), "image Inspect action is keyboard reachable");
                 let danger = find_expander(&card, "Danger zone");
                 assert!(danger.has_css_class("variant-outline"));
-                assert_eq!(danger.height(), 28, "{width_name} image danger disclosure stays compact");
+                assert_eq!(
+                    danger.height(),
+                    28,
+                    "{width_name} image danger disclosure stays compact"
+                );
                 assert_eq!(
                     danger.tooltip_text().as_deref(),
                     Some("Remove this image from the workspace image store")
@@ -844,12 +854,8 @@ mod unix {
                     "{width_name} collapsed image record split danger into a {}px second band",
                     card.height()
                 );
-                let inspect_bounds = inspect
-                    .compute_bounds(&card)
-                    .expect("Inspect belongs to image card");
-                let danger_bounds = danger
-                    .compute_bounds(&card)
-                    .expect("Danger zone belongs to image card");
+                let inspect_bounds = inspect.compute_bounds(&card).expect("Inspect belongs to image card");
+                let danger_bounds = danger.compute_bounds(&card).expect("Danger zone belongs to image card");
                 assert!(
                     (inspect_bounds.y() - danger_bounds.y()).abs() <= 2.0,
                     "{width_name} image actions split across rows: inspect={inspect_bounds:?}, danger={danger_bounds:?}"
@@ -858,9 +864,7 @@ mod unix {
                     let size = find_label(&card, "7.8 MiB")
                         .compute_bounds(&card)
                         .expect("image size belongs to its card");
-                    let action = inspect
-                        .compute_bounds(&card)
-                        .expect("image action belongs to its card");
+                    let action = inspect.compute_bounds(&card).expect("image action belongs to its card");
                     assert!(
                         (size.y() - action.y()).abs() <= 8.0,
                         "wide image metadata and action split into separate bands: size={size:?} action={action:?}"
@@ -1158,7 +1162,10 @@ mod unix {
                 window.present();
                 root.allocate(600, 1_600, -1, None);
                 settle_frame();
-                assert!(!paned.is_visible(), "Top selects compact navigation below its breakpoint");
+                assert!(
+                    !paned.is_visible(),
+                    "Top selects compact navigation below its breakpoint"
+                );
                 assert!(
                     paned.end_child().is_none(),
                     "compact Top moves its one authoritative body out of the hidden desktop divider"
@@ -1168,7 +1175,10 @@ mod unix {
                 window.present();
                 root.allocate(1_200, 1_600, -1, None);
                 settle_frame();
-                assert!(paned.is_visible(), "Top restores desktop navigation above its breakpoint");
+                assert!(
+                    paned.is_visible(),
+                    "Top restores desktop navigation above its breakpoint"
+                );
                 assert_eq!(paned.start_child().as_ref(), Some(&navigation));
                 assert_eq!(paned.end_child().as_ref(), Some(&body));
                 assert_eq!(navigation.width(), 200, "a resized rail width survives compact mode");
@@ -1189,12 +1199,7 @@ mod unix {
             if fixture == "error" && name == "workspace" {
                 assert_overview_recovery(&root, width, width_name);
             }
-            capture_stable(
-                &window,
-                &format!("{capture_fixture}-{name}-{width_name}"),
-                width,
-                800,
-            );
+            capture_stable(&window, &format!("{capture_fixture}-{name}-{width_name}"), width, 800);
             if fixture == "error" && name == "workspace" {
                 let disclosure = find_expander(&root, "Technical details");
                 assert!(
@@ -1362,9 +1367,7 @@ mod unix {
                 let disable_bounds = disable
                     .compute_bounds(&card)
                     .expect("disable action belongs to its card");
-                let remove_bounds = remove
-                    .compute_bounds(&card)
-                    .expect("remove action belongs to its card");
+                let remove_bounds = remove.compute_bounds(&card).expect("remove action belongs to its card");
                 let state_bounds = state
                     .compute_bounds(&card)
                     .expect("installed state belongs to its card");
@@ -1480,10 +1483,7 @@ mod unix {
                         "{width_name} Discover {label} action control height"
                     );
                 }
-                let description = find_mapped_labelled(
-                    &review_card,
-                    "A bounded daily developer workflow for task 01.",
-                );
+                let description = find_mapped_labelled(&review_card, "A bounded daily developer workflow for task 01.");
                 let description_bounds = description
                     .compute_bounds(&review_card)
                     .expect("Discover description belongs to its card");
@@ -1491,8 +1491,7 @@ mod unix {
                     .compute_bounds(&review_card)
                     .expect("Discover action belongs to its card");
                 assert!(
-                    review_bounds_in_card.y()
-                        >= description_bounds.y() + description_bounds.height(),
+                    review_bounds_in_card.y() >= description_bounds.y() + description_bounds.height(),
                     "{width_name} Discover action remained embedded in identity/content: description={description_bounds:?} action={review_bounds_in_card:?}"
                 );
                 if width == 1_200 {
@@ -1534,7 +1533,8 @@ mod unix {
                         .compute_bounds(&discover_root)
                         .expect("third Discover card belongs to Top root");
                     assert_eq!(
-                        third_card_bounds.y(), review_card_bounds.y(),
+                        third_card_bounds.y(),
+                        review_card_bounds.y(),
                         "wide Discover wastes a second row although three compact catalogue cards fit: first={review_card_bounds:?} third={third_card_bounds:?}"
                     );
                     assert!(
@@ -1607,7 +1607,7 @@ mod unix {
                 .expect("Manage connections invocation reaches Top");
             let deadline = Instant::now() + DEADLINE;
             while Instant::now() < deadline
-                && !has_label(surface.widget().upcast_ref::<gtk::Widget>(), "Refresh connections")
+                && !has_label(surface.widget().upcast_ref::<gtk::Widget>(), "Hide connections")
             {
                 match receive_until(&mut wire, (Instant::now() + Duration::from_millis(80)).min(deadline)) {
                     Ok(frame) if frame.kind == hl_extension::Kind::Credit => {}
@@ -1680,10 +1680,11 @@ mod unix {
                 capture(&window, &format!("expanded-networks-{width_name}"), width, 800);
             }
             assert!(has_label(&expanded_root, "Connected containers · 0"));
-            assert!(has_label(&expanded_root, "Refresh connections"));
-            let refresh_connections = find_button(&expanded_root, "Refresh connections");
-            assert!(refresh_connections.has_css_class("size-small"));
-            assert!(refresh_connections.allocation().height() <= 40);
+            assert!(has_label(&expanded_root, "Hide connections"));
+            let hide_connections = find_button(&expanded_root, "Hide connections");
+            assert!(hide_connections.has_css_class("size-small"));
+            assert!(hide_connections.has_css_class("variant-filled"));
+            assert!(hide_connections.allocation().height() <= 40);
             assert!(!find_expander(&expanded_root, "Danger zone").is_expanded());
             assert_label_order(
                 &expanded_root,
@@ -1843,6 +1844,25 @@ mod unix {
             assert!(has_label(&success_root, &format!("Container ID · {container_id}")));
             assert!(has_label(&success_root, &format!("Network ID · {network_id}")));
             assert!(!has_placeholder(&success_root, "Aliases, comma-separated (optional)"));
+            invoke_and_apply_until_button(
+                &mut wire,
+                &mut tree,
+                &mut surface,
+                &success_root,
+                "Hide connections",
+                "Manage connections",
+                112,
+            );
+            let collapsed_root = surface.widget().clone().upcast::<gtk::Widget>();
+            window.set_child(Some(&collapsed_root));
+            window.set_default_size(600, 800);
+            window.set_size_request(600, 800);
+            window.present();
+            settle_toolkit();
+            assert!(!has_label(&collapsed_root, "Network details"));
+            assert!(!has_label(&collapsed_root, "Container attachment"));
+            assert_contained(&collapsed_root, "network-management-collapsed/narrow");
+            capture(&window, "network-management-collapsed-narrow", 600, 800);
         }
         if fixture == "populated" && name == "executions" {
             let _ = surface.reports().drain();
@@ -2013,6 +2033,26 @@ mod unix {
                 &image_root,
                 &format!("Immutable image ID · sha256:{}", "b".repeat(64))
             ));
+            technical.set_expanded(false);
+            assert!(find_button(&image_root, "Hide details").has_css_class("variant-filled"));
+            invoke_and_apply_until_button(
+                &mut wire,
+                &mut tree,
+                &mut surface,
+                &image_root,
+                "Hide details",
+                "Inspect",
+                113,
+            );
+            let collapsed_root = surface.widget().clone().upcast::<gtk::Widget>();
+            window.set_child(Some(&collapsed_root));
+            window.set_default_size(600, 800);
+            window.set_size_request(600, 800);
+            window.present();
+            settle_toolkit();
+            assert!(!has_label(&collapsed_root, "Image summary"));
+            assert_contained(&collapsed_root, "image-detail-collapsed/narrow");
+            capture(&window, "image-detail-collapsed-narrow", 600, 800);
         }
         if fixture == "populated" && name == "volumes" && !deny_volume_access {
             let _ = surface.reports().drain();
@@ -2080,6 +2120,25 @@ mod unix {
                 assert_contained(&detail_root, &format!("volume-detail/{width_name}"));
                 capture(&window, &format!("volume-detail-{width_name}"), width, 800);
             }
+            assert!(find_button(&detail_root, "Hide details").has_css_class("variant-filled"));
+            invoke_and_apply_until_button(
+                &mut wire,
+                &mut tree,
+                &mut surface,
+                &detail_root,
+                "Hide details",
+                "Inspect",
+                114,
+            );
+            let collapsed_root = surface.widget().clone().upcast::<gtk::Widget>();
+            window.set_child(Some(&collapsed_root));
+            window.set_default_size(600, 800);
+            window.set_size_request(600, 800);
+            window.present();
+            settle_toolkit();
+            assert!(!has_label(&collapsed_root, "Volume details"));
+            assert_contained(&collapsed_root, "volume-detail-collapsed/narrow");
+            capture(&window, "volume-detail-collapsed-narrow", 600, 800);
         }
         if fixture == "populated" && deny_volume_access {
             let _ = surface.reports().drain();
@@ -2386,13 +2445,8 @@ mod unix {
         );
         let progress_root = surface.widget().clone().upcast::<gtk::Widget>();
         capture_update_surface(window, &progress_root, "update-progress");
-        let progress = find_progress(&progress_root)
-            .expect("numeric acquisition progress reaches a GTK progress bar");
-        assert_eq!(
-            progress.fraction(),
-            0.5,
-            "the GTK bar preserves host progress"
-        );
+        let progress = find_progress(&progress_root).expect("numeric acquisition progress reaches a GTK progress bar");
+        assert_eq!(progress.fraction(), 0.5, "the GTK bar preserves host progress");
         let cancel = find_button(&progress_root, "Cancel inspection");
         assert!(cancel.has_css_class("size-small"));
         assert_eq!(cancel.height(), 28, "inspection cancellation stays compact");
@@ -3165,7 +3219,10 @@ mod unix {
             description: format!("A bounded daily developer workflow for task {index:02}."),
             version: "1.0.0".into(),
             reference: if index == 1 {
-                format!("ghcr.io/example/developer-tool-{index:02}:1.0.0@sha256:{}", "c".repeat(64))
+                format!(
+                    "ghcr.io/example/developer-tool-{index:02}:1.0.0@sha256:{}",
+                    "c".repeat(64)
+                )
             } else {
                 format!("ghcr.io/example/developer-tool-{index:02}:1.0.0")
             },
@@ -3927,6 +3984,12 @@ mod unix {
             let reply = match request {
                 Request::InterfaceRender { frame } | Request::InterfaceRenderAt { frame, .. } => {
                     tree.apply(&frame, surface).expect("form action frame applies");
+                    Reply::Done
+                }
+                Request::SourceResize { mutation } | Request::SourceResizeAt { mutation, .. } => {
+                    if let SourceMutation::Length { source, version, rows } = mutation {
+                        let _ = surface.resize(source, version, rows);
+                    }
                     Reply::Done
                 }
                 other => panic!("unexpected form action call: {other:?}"),

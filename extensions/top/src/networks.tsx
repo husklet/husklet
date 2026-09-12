@@ -143,6 +143,18 @@ export function Networks({
       }
     }
   };
+  const toggleInspection = (network: NetworkSummary) => {
+    const id = resourceReference(network);
+    if (inspection.id === id && inspection.state === 'ready') {
+      inspectionRevision.current += 1;
+      verificationNetwork.current = '';
+      setInspection(EMPTY_INSPECTION);
+      setDisconnectRequest(null);
+      setOperation({ state: 'idle', request: null, error: null });
+      return;
+    }
+    void inspect(network);
+  };
   React.useEffect(() => {
     if (inventoryRevision.current === resource.data) return;
     inventoryRevision.current = resource.data;
@@ -379,7 +391,7 @@ export function Networks({
                   ? `${membership.containers.length} shown · more omitted`
                   : `${membership.containers.length} connected`;
               return (
-                <Card key={id} width="fill" variant="outline">
+                <Card key={id} width="fill" variant={inspection.id === id ? 'filled' : 'outline'}>
                   <ResourceSummary
                     label={network.name}
                     detail={`${network.driver} · ${network.scope}`}
@@ -396,22 +408,35 @@ export function Networks({
                     }
                     actions={
                       inspectionNeedsAccess ? null : (
-                        <Button
-                          key={`manage-${id}`}
-                          label={
-                            inspection.id === id && inspection.state === 'loading'
-                              ? 'Managing connections…'
-                              : inspection.id === id && inspection.state === 'error'
-                                ? 'Retry managing connections'
-                                : inspection.id === id && inspection.state === 'ready'
-                                  ? 'Refresh connections'
-                                  : 'Manage connections'
-                          }
-                          variant="outline"
-                          size="small"
-                          enabled={inspection.state !== 'loading'}
-                          onInvoke={() => inspect(network)}
-                        />
+                        <>
+                          <Button
+                            key={`manage-${id}`}
+                            label={
+                              inspection.id !== id
+                                ? 'Manage connections'
+                                : inspection.state === 'loading'
+                                  ? 'Managing connections…'
+                                  : inspection.state === 'error'
+                                    ? 'Retry managing connections'
+                                    : 'Hide connections'
+                            }
+                            variant={inspection.id === id ? 'filled' : 'outline'}
+                            tone={inspection.id === id ? 'accent' : 'neutral'}
+                            size="small"
+                            enabled={inspection.state !== 'loading'}
+                            onInvoke={() => toggleInspection(network)}
+                          />
+                          {inspection.id === id && inspection.state === 'ready' ? (
+                            <IconButton
+                              label="Refresh connections"
+                              tooltip="Refresh network details"
+                              icon="view-refresh-symbolic"
+                              size="small"
+                              variant="ghost"
+                              onInvoke={() => void inspect(network)}
+                            />
+                          ) : null}
+                        </>
                       )
                     }
                     overflow={

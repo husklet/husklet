@@ -166,6 +166,99 @@ test('volume inventory keeps inspection and destructive disclosure in one compac
   assert.deepEqual(property(stage, 'Remove', 'Size'), { ControlSize: 'Small' });
 });
 
+test('resource inspection actions become explicit compact close actions', async () => {
+  const imageStage = host();
+  imageStage.render(
+    h(Images, {
+      api: {
+        images: {
+          inspect: async () => ({
+            id: 'sha256:image',
+            references: ['alpine:3.20'],
+            created: '2026-09-12T12:00:00Z',
+            size: 1024,
+            os: 'linux',
+            architecture: 'amd64',
+            entrypoint: [],
+            command: [],
+            working_directory: '/',
+            user: '',
+          }),
+        },
+      },
+      resource: resource([{ id: 'sha256:image', reference: 'alpine:3.20', size: 1024 }]),
+    }),
+  );
+  invoke(imageStage, 'Inspect');
+  await settled();
+  assert.ok(labelled(imageStage, 'Image summary'));
+  assert.deepEqual(property(imageStage, 'Hide details', 'Variant'), { Variant: 'Filled' });
+  assert.deepEqual(property(imageStage, 'Hide details', 'Size'), { ControlSize: 'Small' });
+  invoke(imageStage, 'Hide details');
+  await settled();
+  assert.equal(currentLabels(imageStage).includes('Image summary'), false);
+  assert.ok(currentLabels(imageStage).includes('Inspect'));
+
+  const volumeStage = host();
+  volumeStage.render(
+    h(Volumes, {
+      api: {
+        volumes: {
+          inspect: async (name) => ({ name, driver: 'local', generation: '7' }),
+        },
+      },
+      resource: resource([{ name: 'workspace-cache', driver: 'local', generation: '7' }]),
+      onOpenExtensions: () => {},
+    }),
+  );
+  invoke(volumeStage, 'Inspect');
+  await settled();
+  assert.ok(labelled(volumeStage, 'Volume details'));
+  assert.deepEqual(property(volumeStage, 'Hide details', 'Variant'), { Variant: 'Filled' });
+  invoke(volumeStage, 'Hide details');
+  await settled();
+  assert.equal(currentLabels(volumeStage).includes('Volume details'), false);
+  assert.ok(currentLabels(volumeStage).includes('Inspect'));
+
+  const networkStage = host();
+  networkStage.render(
+    h(Networks, {
+      api: {
+        networks: {
+          inspect: async (id) => ({
+            id,
+            name: 'development',
+            driver: 'bridge',
+            scope: 'local',
+            kind: 'custom',
+            endpoints: { containers: [], truncated: false },
+          }),
+        },
+      },
+      resource: resource([
+        {
+          id: 'a'.repeat(32),
+          name: 'development',
+          driver: 'bridge',
+          scope: 'local',
+          kind: 'custom',
+          endpoints: { containers: [], truncated: false },
+        },
+      ]),
+      containers: resource([]),
+      onOpenExtensions: () => {},
+    }),
+  );
+  invoke(networkStage, 'Manage connections');
+  await settled();
+  assert.ok(labelled(networkStage, 'Network details'));
+  assert.deepEqual(property(networkStage, 'Hide connections', 'Variant'), { Variant: 'Filled' });
+  invoke(networkStage, 'Hide connections');
+  await settled();
+  assert.equal(currentLabels(networkStage).includes('Network details'), false);
+  assert.ok(currentLabels(networkStage).includes('Manage connections'));
+});
+
 test('container authority refusal explains recovery and withholds detail operations', async () => {
   const denied = Object.assign(new Error('outside the consented resource scope'), {
     kind: 'denied',

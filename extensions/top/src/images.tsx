@@ -180,6 +180,16 @@ export function Images({
       if (revision === inspectionRevision.current) setBusy('');
     }
   };
+  const toggleInspection = async (item: ImageSummary) => {
+    if (inspection.id === item.id && inspection.state === 'ready') {
+      inspectionRevision.current += 1;
+      setDetail(null);
+      setInspection({ id: '', state: 'idle', count: 0, error: null });
+      await detailsSource.replace(null);
+      return;
+    }
+    await inspect(item);
+  };
   React.useEffect(() => {
     if (inventoryRevision.current === resource.data) return;
     inventoryRevision.current = resource.data;
@@ -316,14 +326,19 @@ export function Images({
               actions={
                 <Button
                   label={
-                    inspection.id === item.id && inspection.state === 'error'
-                      ? 'Retry inspect'
-                      : 'Inspect'
+                    inspection.id !== item.id
+                      ? 'Inspect'
+                      : inspection.state === 'loading'
+                        ? 'Reading…'
+                        : inspection.state === 'error'
+                          ? 'Retry inspect'
+                          : 'Hide details'
                   }
                   size="small"
-                  variant="outline"
-                  enabled={!busy}
-                  onInvoke={() => inspect(item)}
+                  variant={inspection.id === item.id ? 'filled' : 'outline'}
+                  tone={inspection.id === item.id ? 'accent' : 'neutral'}
+                  enabled={!busy && inspection.state !== 'loading'}
+                  onInvoke={() => void toggleInspection(item)}
                 />
               }
               overflow={

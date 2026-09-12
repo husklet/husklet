@@ -116,6 +116,15 @@ export function Volumes({
       }
     }
   };
+  const toggleInspection = async (volume: VolumeSummary) => {
+    if (inspection.name === volume.name && inspection.state === 'ready') {
+      inspectionRevision.current += 1;
+      setInspection(EMPTY_INSPECTION);
+      await detailsSource.replace(null);
+      return;
+    }
+    await inspect(volume);
+  };
   React.useEffect(() => {
     if (inventoryRevision.current === resource.data) return;
     inventoryRevision.current = resource.data;
@@ -211,13 +220,19 @@ export function Volumes({
                   inspectionNeedsAccess ? null : (
                     <Button
                       label={
-                        inspection.name === volume.name && inspection.state === 'error'
-                          ? 'Retry inspect'
-                          : 'Inspect'
+                        inspection.name !== volume.name
+                          ? 'Inspect'
+                          : inspection.state === 'loading'
+                            ? 'Reading…'
+                            : inspection.state === 'error'
+                              ? 'Retry inspect'
+                              : 'Hide details'
                       }
                       size="small"
-                      variant="outline"
-                      onInvoke={() => inspect(volume)}
+                      variant={inspection.name === volume.name ? 'filled' : 'outline'}
+                      tone={inspection.name === volume.name ? 'accent' : 'neutral'}
+                      enabled={inspection.state !== 'loading'}
+                      onInvoke={() => void toggleInspection(volume)}
                     />
                   )
                 }
