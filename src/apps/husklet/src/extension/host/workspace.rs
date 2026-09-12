@@ -478,6 +478,11 @@ fn image_from_inspection(
             inspection.os, inspection.architecture
         ));
     }
+    super::super::registration::protocol_compatibility(&inspection.config.labels).map_err(|reason| {
+        format!(
+            "recorded extension image {recorded_digest} is incompatible: {reason}; update or reinstall the extension"
+        )
+    })?;
     if extension == "top"
         && (inspection.config.entrypoint != ["/usr/local/bin/node"]
             || inspection.config.cmd != ["/app/dist/main.js"]
@@ -508,9 +513,36 @@ mod image_tests {
             architecture: architecture.to_owned(),
             config: ImageConfig {
                 entrypoint: vec!["/extension".to_owned()],
+                labels: [
+                    (
+                        hl_extension::Manifest::PROTOCOL_LABEL.to_owned(),
+                        hl_extension::PROTOCOL.to_string(),
+                    ),
+                    (
+                        hl_extension::Manifest::PROTOCOL_FINGERPRINT_LABEL.to_owned(),
+                        hl_extension::protocol_fingerprint().to_owned(),
+                    ),
+                ]
+                .into_iter()
+                .collect(),
                 ..ImageConfig::default()
             },
         }
+    }
+
+    #[test]
+    fn startup_refuses_a_recorded_image_from_an_older_same_numbered_protocol_build() {
+        let digest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let mut stale = inspection(digest, "linux", "amd64");
+        stale.config.labels.insert(
+            hl_extension::Manifest::PROTOCOL_FINGERPRINT_LABEL.to_owned(),
+            "0000000000000000".to_owned(),
+        );
+
+        let error = image_from_inspection("sample", digest, "amd64", &stale).expect_err("stale SDK image");
+        assert!(error.contains("fingerprint 0000000000000000"));
+        assert!(error.contains(hl_extension::protocol_fingerprint()));
+        assert!(error.contains("update or reinstall"));
     }
 
     #[test]

@@ -6,6 +6,7 @@
 ARG NODE_IMAGE=node:22-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5
 FROM ${NODE_IMAGE} AS package
 ARG HUSKLET_REACT_VERSION
+ARG HUSKLET_PROTOCOL_FINGERPRINT
 ARG NODE_VERSION=22.23.2
 ARG NPM_VERSION=10.9.8
 WORKDIR /source
@@ -31,6 +32,7 @@ RUN mkdir -p /out/client /out/react \
 FROM ${NODE_IMAGE}
 ARG NODE_IMAGE
 ARG HUSKLET_REACT_VERSION
+ARG HUSKLET_PROTOCOL_FINGERPRINT
 ARG NODE_VERSION=22.23.2
 ARG NPM_VERSION=10.9.8
 
@@ -72,7 +74,7 @@ RUN npm install --global --ignore-scripts --no-audit --no-fund \
     && chown node:node /var/lib/husklet-extension \
     && touch /run/husklet/extension.sock \
     && npm cache verify
-RUN node -e "if (require('@husklet/client/package.json').version !== '${HUSKLET_REACT_VERSION}') process.exit(1); if (require('@husklet/react/package.json').version !== '${HUSKLET_REACT_VERSION}') process.exit(1)"
+RUN node -e "if (require('@husklet/client/package.json').version !== '${HUSKLET_REACT_VERSION}') process.exit(1); if (require('@husklet/react/package.json').version !== '${HUSKLET_REACT_VERSION}') process.exit(1); if (!/^[0-9a-f]{16}$/.test('${HUSKLET_PROTOCOL_FINGERPRINT}')) process.exit(1)"
 
 WORKDIR /app
 ENV NODE_ENV=production
@@ -87,6 +89,7 @@ CMD ["node", "--input-type=module", "-e", "console.error('this image is a base; 
 # The manifest the host reads off the image. An extension replaces this label
 # with its own; the fields are those of hl_extension::manifest::Manifest.
 LABEL husklet.extension.protocol="1"
+LABEL husklet.extension.protocol.fingerprint="${HUSKLET_PROTOCOL_FINGERPRINT}"
 LABEL husklet.extension.node.version="${NODE_VERSION}"
 LABEL husklet.extension.npm.version="${NPM_VERSION}"
 LABEL org.opencontainers.image.base.name="${NODE_IMAGE}"

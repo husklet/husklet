@@ -1,6 +1,7 @@
 # A framework-neutral extension with no React or browser runtime.
 ARG NODE_IMAGE=node:22-alpine@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32
 FROM ${NODE_IMAGE}
+ARG HUSKLET_PROTOCOL_FINGERPRINT=dc237199f62cb1dc
 
 WORKDIR /app
 COPY --chown=node:node package.json ./
@@ -16,4 +17,5 @@ COPY --chown=node:node extension.toml /etc/husklet/extension.toml
 USER node
 CMD ["node", "/app/main.js"]
 LABEL husklet.extension.protocol="1"
+LABEL husklet.extension.protocol.fingerprint="${HUSKLET_PROTOCOL_FINGERPRINT}"
 LABEL husklet.extension.manifest="/etc/husklet/extension.toml"

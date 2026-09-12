@@ -71,6 +71,16 @@ pub use ui_event::{UiCollectionSelection, UiEvent, UiPointerPhase, UiSelectedRow
 /// JavaScript cannot distinguish consecutive integers beyond this boundary.
 pub const JSON_SAFE_INTEGER_MAX: u64 = 9_007_199_254_740_991;
 
+/// Fingerprint of the complete generated wire specification.
+///
+/// The protocol number describes the compatibility generation. This finer
+/// identity changes whenever any request, reply, bound, capability, event, or
+/// UI node in that generation changes.
+#[must_use]
+pub fn protocol_fingerprint() -> &'static str {
+    include_str!("../protocol/v1.fnv1a64").trim()
+}
+
 /// The host's opening frame, carrying only this extension's effective grant.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]

@@ -15,6 +15,7 @@ expect_literal() {
 }
 
 expect_literal extensions/base/Dockerfile 'ARG HUSKLET_REACT_VERSION'
+expect_literal extensions/base/Dockerfile 'ARG HUSKLET_PROTOCOL_FINGERPRINT'
 expect_literal extensions/base/Dockerfile 'LABEL org.opencontainers.image.source="https://github.com/husklet/husklet"'
 expect_literal .dockerignore 'node_modules'
 expect_literal .dockerignore '**/node_modules'
@@ -30,9 +31,12 @@ expect_literal extensions/base/Dockerfile '    && ln -s "$(npm root --global)/@h
 # shellcheck disable=SC2016 # These are literal Dockerfile variable references.
 expect_literal extensions/base/Dockerfile 'LABEL org.opencontainers.image.version="${HUSKLET_REACT_VERSION}"'
 expect_literal extensions/base/Dockerfile 'LABEL husklet.extension.node.version="${NODE_VERSION}"'
+expect_literal extensions/base/Dockerfile 'LABEL husklet.extension.protocol.fingerprint="${HUSKLET_PROTOCOL_FINGERPRINT}"'
 expect_literal extensions/base/Dockerfile 'LABEL husklet.extension.npm.version="${NPM_VERSION}"'
 expect_literal .github/scripts/smoke-extension-image.sh '[[ "$node_version" == 22.23.2 ]] || fail "$image does not carry the pinned Node version"'
 expect_literal .github/scripts/smoke-extension-image.sh '[[ "$npm_version" == 10.9.8 ]] || fail "$image does not carry the pinned npm version"'
+expect_literal .github/workflows/release.yml '              --build-arg "HUSKLET_PROTOCOL_FINGERPRINT=$protocol_fingerprint" \'
+expect_literal .github/workflows/release.yml '            HUSKLET_PROTOCOL_FINGERPRINT=${{ steps.version.outputs.protocol-fingerprint }}'
 expect_literal .github/scripts/smoke-extension-image.sh '      import { connect as clientConnect } from "@husklet/client";'
 expect_literal .github/scripts/smoke-extension-image.sh '  [[ "$(inspect '"'"'{{json .Config.Entrypoint}}'"'"')" == '"'"'["/usr/local/bin/node"]'"'"' ]] \'
 expect_literal .github/scripts/smoke-extension-image.sh '  [[ "$(inspect '"'"'{{json .Config.Cmd}}'"'"')" == '"'"'["/app/dist/main.js"]'"'"' ]] \'
@@ -55,6 +59,10 @@ node -e '
     }
   }
 ' "$root"
+
+fingerprint="$(tr -d '\n' < "$root/src/workspaces/hl-extension/protocol/v1.fnv1a64")"
+[[ "$fingerprint" =~ ^[0-9a-f]{16}$ ]] || fail "generated protocol fingerprint is not canonical"
+expect_literal extensions/base/client/examples/starter/Dockerfile "ARG HUSKLET_PROTOCOL_FINGERPRINT=$fingerprint"
 
 workflow="$root/.github/workflows/release.yml"
 expect_literal .github/workflows/release.yml '          export HL_TOP_IMAGE="$(.github/scripts/resolve-published-image.sh "$top_reference")"'

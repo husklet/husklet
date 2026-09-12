@@ -192,8 +192,9 @@ impl Candidate {
         cancellation.check()?;
         platform(&inspection, architecture)?;
         let _ = progress.send(Acquisition::ReadingManifest);
-        let path = manifest_path(&inspection.config.labels)?;
         let content = immutable_content(reference, &inspection.id)?;
+        protocol_compatibility(&inspection.config.labels)?;
+        let path = manifest_path(&inspection.config.labels)?;
         let archive = extract(&bridge, content, &path, cancellation)?;
         cancellation.check()?;
         let manifest = Manifest::parse(&document(&archive)?, PROTOCOL).map_err(|invalid| invalid.to_string())?;
@@ -250,6 +251,29 @@ impl Candidate {
         let event = result.map_or_else(Acquisition::Failed, Acquisition::Ready);
         let _ = progress.send(event);
     }
+}
+
+/// Proves that the image carries clients generated from this host's exact wire
+/// contract. A protocol integer alone does not distinguish incompatible builds
+/// made while the compatibility generation remains unchanged.
+pub(super) fn protocol_compatibility(labels: &BTreeMap<String, String>) -> Result<(), String> {
+    let expected_version = PROTOCOL.to_string();
+    let declared_version = labels.get(Manifest::PROTOCOL_LABEL).map(String::as_str);
+    if declared_version != Some(expected_version.as_str()) {
+        return Err(format!(
+            "the extension image declares protocol {}, but this host requires {PROTOCOL}",
+            declared_version.unwrap_or("<missing>")
+        ));
+    }
+    let expected = hl_extension::protocol_fingerprint();
+    let declared = labels.get(Manifest::PROTOCOL_FINGERPRINT_LABEL).map(String::as_str);
+    if declared != Some(expected) {
+        return Err(format!(
+            "the extension image was built for protocol fingerprint {}, but this host requires {expected}; rebuild it from the version-matched Husklet extension base image",
+            declared.unwrap_or("<missing>")
+        ));
+    }
+    Ok(())
 }
 
 /// Pins manifest extraction to the image identity that will be persisted.
@@ -430,7 +454,8 @@ pub fn document(archive: &[u8]) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        document, immutable_content, manifest_container_request, manifest_path, split, Acquisition, Candidate,
+        document, immutable_content, manifest_container_request, manifest_path, protocol_compatibility, split,
+        Acquisition, Candidate,
     };
     use hl_extension::Manifest;
     use std::collections::BTreeMap;
@@ -462,7 +487,8 @@ mod tests {
                 "User": "65532:65532",
                 "Labels": {
                     "husklet.extension.manifest": "/etc/husklet/extension.toml",
-                    "husklet.extension.protocol": "1"
+                    "husklet.extension.protocol": "1",
+                    "husklet.extension.protocol.fingerprint": hl_extension::protocol_fingerprint()
                 }
             },
             "rootfs": {"type": "layers", "diff_ids": [Digest::sha256(&layer).to_string()]}
@@ -500,6 +526,30 @@ mod tests {
     #[test]
     fn an_unlabelled_image_is_read_at_the_default_path() {
         assert_eq!(manifest_path(&BTreeMap::new()).unwrap(), Manifest::DEFAULT_PATH);
+    }
+
+    #[test]
+    fn image_compatibility_requires_the_exact_generated_protocol() {
+        let current = BTreeMap::from([
+            (Manifest::PROTOCOL_LABEL.to_owned(), hl_extension::PROTOCOL.to_string()),
+            (
+                Manifest::PROTOCOL_FINGERPRINT_LABEL.to_owned(),
+                hl_extension::protocol_fingerprint().to_owned(),
+            ),
+        ]);
+        protocol_compatibility(&current).expect("version-matched SDK");
+
+        for labels in [
+            BTreeMap::new(),
+            BTreeMap::from([(Manifest::PROTOCOL_LABEL.to_owned(), "1".to_owned())]),
+            BTreeMap::from([
+                (Manifest::PROTOCOL_LABEL.to_owned(), "1".to_owned()),
+                (Manifest::PROTOCOL_FINGERPRINT_LABEL.to_owned(), "stale".to_owned()),
+            ]),
+        ] {
+            let error = protocol_compatibility(&labels).expect_err("stale image");
+            assert!(error.contains("protocol") || error.contains("fingerprint"));
+        }
     }
 
     #[test]

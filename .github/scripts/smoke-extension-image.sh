@@ -6,6 +6,8 @@ version="${2:?version is required}"
 kind="${3:?base or extension name is required}"
 architecture="${4:?amd64 or arm64 is required}"
 platform="linux/$architecture"
+root="$(git rev-parse --show-toplevel)"
+expected_fingerprint="$(tr -d '\n' < "$root/src/workspaces/hl-extension/protocol/v1.fnv1a64")"
 
 fail() {
   echo "extension image smoke: $*" >&2
@@ -21,6 +23,8 @@ inspect() {
 [[ "$(inspect '{{.Config.User}}')" == node ]] || fail "$image does not run as node"
 [[ "$(inspect '{{index .Config.Labels "husklet.extension.protocol"}}')" == 1 ]] \
   || fail "$image does not declare protocol 1"
+[[ "$(inspect '{{index .Config.Labels "husklet.extension.protocol.fingerprint"}}')" == "$expected_fingerprint" ]] \
+  || fail "$image was not built from the current generated extension protocol"
 [[ "$(inspect '{{index .Config.Labels "org.opencontainers.image.version"}}')" == "$version" ]] \
   || fail "$image version label does not match $version"
 node_version="$(inspect '{{index .Config.Labels "husklet.extension.node.version"}}')"

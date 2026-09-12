@@ -216,6 +216,7 @@ jobs:
             exit 1
           }
           echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "protocol-fingerprint=$(tr -d '\n' < src/workspaces/hl-extension/protocol/v1.fnv1a64)" >> "$GITHUB_OUTPUT"
 
       - name: Verify image contracts and pre-publish smoke wiring
         run: .github/scripts/check-first-party-images.sh
@@ -243,6 +244,7 @@ jobs:
           RELEASE_VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
+          protocol_fingerprint="$(tr -d '\n' < src/workspaces/hl-extension/protocol/v1.fnv1a64)"
           for architecture in amd64 arm64; do
             image="husklet/extension-base-smoke:$architecture"
             docker buildx build \
@@ -250,6 +252,7 @@ jobs:
               --load \
               --tag "$image" \
               --build-arg "HUSKLET_REACT_VERSION=$RELEASE_VERSION" \
+              --build-arg "HUSKLET_PROTOCOL_FINGERPRINT=$protocol_fingerprint" \
               --file extensions/base/Dockerfile \
               .
             .github/scripts/smoke-extension-image.sh "$image" "$RELEASE_VERSION" base "$architecture"
@@ -265,7 +268,9 @@ jobs:
           tags: |
             ghcr.io/${{ github.repository }}/extension-base:${{ steps.version.outputs.version }}
             ghcr.io/${{ github.repository }}/extension-base:latest
-          build-args: HUSKLET_REACT_VERSION=${{ steps.version.outputs.version }}
+          build-args: |
+            HUSKLET_REACT_VERSION=${{ steps.version.outputs.version }}
+            HUSKLET_PROTOCOL_FINGERPRINT=${{ steps.version.outputs.protocol-fingerprint }}
           provenance: mode=max
           sbom: true
 

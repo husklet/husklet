@@ -744,6 +744,8 @@ impl Manifest {
     /// Image label carrying the protocol version alone, so an incompatible
     /// extension is refused without parsing the manifest at all.
     pub const PROTOCOL_LABEL: &'static str = "husklet.extension.protocol";
+    /// Image label binding its packaged client to the exact generated wire specification.
+    pub const PROTOCOL_FINGERPRINT_LABEL: &'static str = "husklet.extension.protocol.fingerprint";
     /// Largest manifest document accepted.
     pub const LIMIT: usize = 64 * 1024;
 
