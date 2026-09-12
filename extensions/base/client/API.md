@@ -179,6 +179,7 @@ order; the JavaScript client's checks are never treated as a security boundary.
 - `host.terminal.resizeGridAndWait(...)` — arms and reads the exact terminal screen cursor before a generation/revision-bound resize, then verifies the requested columns and rows on a later screen revision; requires `panes:observe`, `terminals:output`, and `terminals:layout-control`.
 - `host.terminal.ratioAndWait(...)` — arms pane observation before a generation/revision-bound ratio change, then verifies the advanced pane and resulting topology (allowing host pixel quantization); requires `panes:observe`, `terminals:read`, and `terminals:layout-control`.
 - `host.terminal.openTabAndWait(...)` — arms pane observation before opening the session-owned tab and verifies a pane under the exact returned tab identity; post-creation observation failures retain `{ tab, title }` in `TerminalOperationError`; requires `panes:observe`, `terminals:layout-control`, and `terminals:process-control`.
+- A supervised terminal command remains inspectable, readable, writable, waitable, and cancellable by its immutable returned identity after its originating pane is replaced or the extension reconnects. The pane snapshot fences creation only.
 
 ## Files
 

@@ -1509,6 +1509,7 @@ export interface WorkspaceApi {
       command: string[],
       options?: { workingDirectory?: string; stdin?: boolean },
     ): Promise<TerminalCommand>;
+    /** Resume by immutable command identity; originating-pane replacement does not revoke it. */
     commandInspect(command: TerminalCommand): Promise<TerminalCommand>;
     commandOutput(
       command: TerminalCommand,

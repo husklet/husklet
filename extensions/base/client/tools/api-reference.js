@@ -126,6 +126,11 @@ groups
     '- Preferences are workspace-local and host-namespaced to the authenticated extension. Keys are 1–64 restricted ASCII bytes, strings are at most 1024 UTF-8 bytes, numbers are JavaScript-safe integers, and each extension may hold at most 64 entries. Arrays, objects, null, and unbounded JSON are not accepted.',
   );
 groups
+  .get('Terminal and panes')
+  .push(
+    '- A supervised terminal command remains inspectable, readable, writable, waitable, and cancellable by its immutable returned identity after its originating pane is replaced or the extension reconnects. The pane snapshot fences creation only.',
+  );
+groups
   .get('Semantics')
   .push(
     '- `host.terminal.inspectAndAct(slot, proposal, options)` — arms observation, reads the bounded semantic tree, verifies an enabled advertised node action, invokes it at that exact revision, and returns bounded XML before/after; requires `panes:observe`, `panes:semantic-read`, and `panes:semantic-control`.',

@@ -782,7 +782,7 @@ fn supervised_terminal_command_has_owned_identity_output_input_and_completion_wi
 }
 
 #[test]
-fn stale_terminal_command_snapshot_reaches_neither_container_inspection_nor_execution() {
+fn pane_snapshot_fences_command_creation_but_not_its_durable_identity() {
     let host = Host::new();
     let result = session(&[Capability::TerminalProcessControl], &[]).dispatch(
         &Request::TerminalCommandStart {
@@ -807,10 +807,27 @@ fn stale_terminal_command_snapshot_reaches_neither_container_inspection_nor_exec
         },
         &services(&host),
     );
-    assert!(matches!(resumed, Err(Failure::Conflict { .. })));
+    assert!(matches!(resumed, Ok(Reply::TerminalCommand(_))));
     assert!(
-        host.ledger.reached().is_empty(),
-        "a replacement pane must fence a durable command before execution lookup"
+        host.ledger.reached() == vec!["executions.inspect"],
+        "a replacement pane must not orphan a durable command"
+    );
+    let output = session(&[Capability::TerminalOutput], &[]).dispatch(
+        &Request::TerminalCommandOutput {
+            id: "e".repeat(32),
+            slot: "s1".into(),
+            generation: 0,
+            revision: 1,
+            after: 0,
+            limit: 1,
+        },
+        &services(&host),
+    );
+    assert!(matches!(output, Ok(Reply::TerminalCommandOutput(_))));
+    assert_eq!(
+        host.ledger.reached(),
+        vec!["executions.inspect", "executions.output"],
+        "durable output must remain readable after pane replacement"
     );
 }
 

@@ -1691,15 +1691,9 @@ impl Session {
             _ => unreachable!(),
         };
         immutable_identity(id, &[32], "terminal command")?;
-        let observed = services.terminal.read(slot, 0)?;
-        if observed.generation != generation || observed.revision != revision {
-            return Err(Failure::Conflict {
-                detail: format!(
-                    "stale pane identity for {slot}: expected {generation}/{revision}, current {}/{}",
-                    observed.generation, observed.revision
-                ),
-            });
-        }
+        // The pane snapshot fences creation. Once started, the returned command ID is the durable
+        // authority: replacing or closing its originating pane must not make output, completion,
+        // input shutdown, or cancellation unreachable.
         match request {
             Request::TerminalCommandInspect { .. } => {
                 let execution = services.containers.execution(id)?;

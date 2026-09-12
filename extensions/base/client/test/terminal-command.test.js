@@ -120,3 +120,75 @@ test('supervised terminal command is authoritative over fragmented real Unix fra
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test('supervised command output survives reconnect and originating pane replacement', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-terminal-command-resume-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const requests = [];
+  const connections = new Set();
+  let accepted = 0;
+  const server = net.createServer((socket) => {
+    accepted += 1;
+    connections.add(socket);
+    socket.on('close', () => connections.delete(socket));
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.kind !== KIND.request) continue;
+        requests.push(frame.payload);
+        const payload =
+          frame.payload.call === 'terminal_command_start'
+            ? { reply: 'terminal_command', with: running }
+            : {
+                reply: 'terminal_command_output',
+                with: {
+                  id,
+                  ...pane,
+                  output: {
+                    entries: [
+                      { sequence: 8, timestamp_ms: 8, stream: 'stdout', bytes: [100, 111, 110, 101, 10] },
+                    ],
+                    next: 8,
+                    more: false,
+                    eof: true,
+                    gap: false,
+                  },
+                },
+              };
+        fragmented(socket, { channel: frame.channel, kind: KIND.response, payload });
+      }
+    });
+    fragmented(socket, {
+      channel: CONTROL,
+      kind: KIND.open,
+      payload: {
+        protocol: 1,
+        peer: `terminal-command-resume-${accepted}`,
+        granted: ['terminals:process-control', 'terminals:output'],
+      },
+    });
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const first = await connect({ path: socketPath });
+    const command = await workspace(first).terminal.commandStart(pane, running.command);
+    await first.close();
+
+    // The UI may now contain another occupant at term-1. The creation snapshot
+    // remains part of the command capability and is intentionally replayed.
+    const resumed = await connect({ path: socketPath });
+    const page = await workspace(resumed).terminal.commandOutput(command, { after: 7, limit: 1 });
+    assert.equal(page.output.next, 8);
+    assert.equal(new TextDecoder().decode(Uint8Array.from(page.output.entries[0].bytes)), 'done\n');
+    assert.deepEqual(requests[1], {
+      call: 'terminal_command_output',
+      with: { id, ...pane, after: 7, limit: 1 },
+    });
+    assert.equal(accepted, 2);
+    await resumed.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
