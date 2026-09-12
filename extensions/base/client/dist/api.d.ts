@@ -1132,7 +1132,9 @@ export interface WorkspaceApi {
         }): Promise<ExecutionOutputPage>;
         /**
          * Pulls bounded output pages with consumer-driven backpressure until EOF; continuation is captured before yield.
-         * Cancellation is checked between calls and never tears down the ordered session.
+         * Cancellation between calls preserves the session. Cancellation while a request is in flight
+         * closes that ordered connection because its eventual uncorrelated reply would be ambiguous;
+         * reconnect and resume from the last page the consumer acknowledged.
          */
         executionOutputPages(id: string, options?: {
             after?: number;

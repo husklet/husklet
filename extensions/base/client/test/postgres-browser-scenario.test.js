@@ -208,3 +208,80 @@ test('Postgres browser streams credential-backed rows over real Unix framing', a
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test('Postgres output cancellation interrupts a stalled Unix call and reconnects from the acknowledged cursor', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-postgres-cancel-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const executionId = 'e'.repeat(32);
+  const connections = new Set();
+  let accepted = 0;
+  let stalledRequests = 0;
+  let observeStalledRequest;
+  const stalledRequest = new Promise((resolve) => {
+    observeStalledRequest = resolve;
+  });
+  const server = net.createServer((socket) => {
+    const connection = ++accepted;
+    connections.add(socket);
+    socket.on('close', () => connections.delete(socket));
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.kind !== KIND.request) continue;
+        if (connection === 1 && frame.payload.call === 'execution_output') {
+          stalledRequests += 1;
+          observeStalledRequest();
+          continue;
+        }
+        const response = encode({
+          channel: frame.channel,
+          kind: KIND.response,
+          payload: {
+            reply: 'workspace',
+            with: { name: 'database', image: 'postgres:17', architecture: 'amd64' },
+          },
+        });
+        socket.write(response.subarray(0, 4));
+        socket.write(response.subarray(4));
+      }
+    });
+    const greeting = encode({
+      channel: CONTROL,
+      kind: KIND.open,
+      payload: {
+        protocol: 1,
+        peer: `postgres-cancel-${connection}`,
+        granted: ['containers:read', 'workspaces:read'],
+      },
+    });
+    socket.write(greeting.subarray(0, 2));
+    socket.write(greeting.subarray(2));
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath, timeout: 5_000 });
+    const abort = new AbortController();
+    const pages = workspace(session).containers.executionOutputPages(executionId, {
+      after: 17,
+      signal: abort.signal,
+    });
+    const pending = pages.next();
+    await stalledRequest;
+    abort.abort('query view closed');
+    await assert.rejects(
+      pending,
+      (error) => error?.name === 'AbortError' && error.cause === abort.signal.reason,
+    );
+    assert.equal(stalledRequests, 1);
+    await assert.rejects(workspace(session).info(), /closed|query view closed/);
+
+    const resumed = await connect({ path: socketPath });
+    assert.equal((await workspace(resumed).info()).name, 'database');
+    assert.equal(accepted, 2);
+    await resumed.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});

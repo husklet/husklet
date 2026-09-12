@@ -1257,10 +1257,14 @@ export function workspace(session, { signal } = {}) {
             executionOutputPages: async function* (id, { after = 0, limit = 16, pollIntervalMs = 50, signal, } = {}) {
                 exactExecutionPollInterval(pollIntervalMs);
                 const executionId = immutableIdentity(id, [32], 'execution');
+                const scoped = signal ? api.withSignal(signal) : api;
                 let cursor = after;
                 for (;;) {
                     requireOutputActive(signal);
-                    const page = await api.containers.executionOutput(executionId, { after: cursor, limit });
+                    const page = await scoped.containers.executionOutput(executionId, {
+                        after: cursor,
+                        limit,
+                    });
                     requireOutputActive(signal);
                     if (page.gap)
                         throw new ExecutionOutputGapError(executionId, cursor, page.next);
