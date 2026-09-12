@@ -24,6 +24,11 @@ export declare class ExecutionOutputGapError extends Error {
     readonly next: any;
     constructor(executionId: any, after: any, next: any);
 }
+/** Output reached EOF while the exact execution still reported itself running. */
+export declare class ExecutionOutputEndedEarlyError extends Error {
+    readonly executionId: any;
+    constructor(executionId: any);
+}
 /** The host returned an internally inconsistent output page, so iteration cannot continue safely. */
 export declare class ExecutionOutputProtocolError extends Error {
     readonly executionId: any;

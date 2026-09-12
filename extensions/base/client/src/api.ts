@@ -747,6 +747,10 @@ export declare class ExecutionOutputGapError extends Error {
   readonly after: number;
   readonly next: number;
 }
+/** Output reached EOF while the exact execution still reported itself running. */
+export declare class ExecutionOutputEndedEarlyError extends Error {
+  readonly executionId: string;
+}
 
 /** The host returned an inconsistent page that cannot be resumed without looping or duplication. */
 export declare class ExecutionOutputProtocolError extends Error {

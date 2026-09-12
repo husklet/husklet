@@ -44,6 +44,15 @@ export class ExecutionOutputGapError extends Error {
         this.next = next;
     }
 }
+/** Output reached EOF while the exact execution still reported itself running. */
+export class ExecutionOutputEndedEarlyError extends Error {
+    executionId;
+    constructor(executionId) {
+        super(`execution ${executionId} output reached EOF while the execution was still running`);
+        this.name = 'ExecutionOutputEndedEarlyError';
+        this.executionId = executionId;
+    }
+}
 /** The host returned an internally inconsistent output page, so iteration cannot continue safely. */
 export class ExecutionOutputProtocolError extends Error {
     executionId;
@@ -1548,6 +1557,8 @@ export function workspace(session, { signal } = {}) {
                     }
                     phase = 'inspect';
                     const execution = await api.containers.execution(executionId);
+                    if (execution.running)
+                        throw new ExecutionOutputEndedEarlyError(executionId);
                     return { executionId, execution };
                 }
                 catch (cause) {

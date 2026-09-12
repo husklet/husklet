@@ -3,7 +3,8 @@ import type { WorkspaceApi } from '@husklet/client';
 export type TestRunEvent =
   | { kind: 'started'; executionId: string }
   | { kind: 'stdout' | 'stderr'; text: string }
-  | { kind: 'finished'; executionId: string; exitCode: number | null };
+  | { kind: 'finished'; executionId: string; exitCode: number | null }
+  | { kind: 'failed'; executionId: string | null; message: string };
 
 /**
  * Watch a source tree and keep exactly one test execution current. Slow output consumers apply
@@ -20,24 +21,38 @@ export async function watchTests(
   },
 ) {
   const launch = async (signal: AbortSignal) => {
-    const result = await host.containers.execLines(
-      container.id,
-      container.generation,
-      {
-        command: options.command,
-        maxLineBytes: 256 * 1024,
-        pageLimit: 8,
-        signal,
-        onStarted: (executionId) => options.report({ kind: 'started', executionId }),
-        onStderr: (text) => options.report({ kind: 'stderr', text }),
-      },
-      (text) => options.report({ kind: 'stdout', text }),
-    );
-    await options.report({
-      kind: 'finished',
-      executionId: result.executionId,
-      exitCode: result.execution.exit_code,
-    });
+    let executionId: string | null = null;
+    try {
+      const result = await host.containers.execLines(
+        container.id,
+        container.generation,
+        {
+          command: options.command,
+          maxLineBytes: 256 * 1024,
+          pageLimit: 8,
+          signal,
+          onStarted: (started) => {
+            executionId = started;
+            return options.report({ kind: 'started', executionId: started });
+          },
+          onStderr: (text) => options.report({ kind: 'stderr', text }),
+        },
+        (text) => options.report({ kind: 'stdout', text }),
+      );
+      await options.report({
+        kind: 'finished',
+        executionId: result.executionId,
+        exitCode: result.execution.exit_code,
+      });
+    } catch (cause) {
+      if (!signal.aborted) {
+        await options.report({
+          kind: 'failed',
+          executionId,
+          message: cause instanceof Error ? cause.message : String(cause),
+        });
+      }
+    }
   };
 
   const initial = new AbortController();
