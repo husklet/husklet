@@ -10,7 +10,7 @@ import { KIND, Reader, encode } from '../../../extensions/base/react/dist/wire.j
 import { Extensions } from '../dist/app.js';
 import { host } from './host.js';
 
-test('installed catalogue extension starts an update review over real Unix framing', async () => {
+test('installed extension detects a republished same-version image over real Unix framing', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'husklet-extension-update-'));
   const socketPath = join(directory, 'host.sock');
   const oldDigest = `sha256:${'a'.repeat(64)}`;
@@ -43,7 +43,7 @@ test('installed catalogue extension starts an update review over real Unix frami
                   {
                     name: 'storybook',
                     image_digest: oldDigest,
-                    version: '1.0.0',
+                    version: '2.0.0',
                     enabled: true,
                     status: 'duty',
                     pane_providers: [],
@@ -104,8 +104,8 @@ test('installed catalogue extension starts an update review over real Unix frami
     session = await connect({ path: socketPath });
     stage = host();
     stage.render(h(Extensions, { api: workspace(session) }));
-    await until(() => labelled(stage, 'Review update'));
-    invoke(stage, 'Review update');
+    await until(() => labelled(stage, 'Check image'));
+    invokeByTooltip(stage, 'Check storybook image for changes');
     await until(() => labelled(stage, 'Update with selected access'));
     await until(() =>
       labelled(
@@ -148,10 +148,10 @@ function labelled(stage, label) {
     .at(-1);
 }
 
-function invoke(stage, label) {
+function invokeByTooltip(stage, tooltip) {
   const nodes = stage.frames
     .flatMap((frame) => frame.patches)
-    .filter((patch) => patch.SetProp?.prop === 'Label' && patch.SetProp.value?.Text === label)
+    .filter((patch) => patch.SetProp?.prop === 'Tooltip' && patch.SetProp.value?.Text === tooltip)
     .map((patch) => patch.SetProp.id)
     .reverse();
   assert.ok(

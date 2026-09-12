@@ -1845,6 +1845,70 @@ test('catalogue does not advertise an update at the installed version', async ()
   assert.equal(labelled(stage, 'Update available · Version 2.0.0'), undefined);
 });
 
+test('installed management can detect a republished image at the same release version', async () => {
+  const installedDigest = `sha256:${'a'.repeat(64)}`;
+  const candidateDigest = `sha256:${'b'.repeat(64)}`;
+  const reference = 'ghcr.io/husklet/husklet/extension-storybook:latest';
+  const references = [];
+  const stage = host();
+  stage.render(
+    h(Extensions, {
+      api: {
+        extensions: {
+          list: async () => [
+            {
+              name: 'storybook',
+              image_digest: installedDigest,
+              version: '2.0.0',
+              enabled: true,
+              status: 'duty',
+            },
+          ],
+          catalogue: firstPartyCatalogue,
+          startAcquisition: async (reference) => {
+            references.push(reference);
+            return { job: 'same-version-image-change' };
+          },
+          acquisition: async () => ({
+            job: 'same-version-image-change',
+            reference,
+            revision: 2,
+            state: 'ready',
+            progress: null,
+            candidate: {
+              name: 'storybook',
+              version: '2.0.0',
+              image_digest: candidateDigest,
+              installed_image_digest: installedDigest,
+              requested: [],
+              required: [],
+            },
+            error: null,
+          }),
+        },
+        watchExtensions: async () => () => {},
+      },
+    }),
+  );
+  await settled();
+  await settled();
+
+  assert.equal(labelled(stage, 'Review update'), undefined);
+  assert.deepEqual(taggedProperty(stage, 'Check image', 'IconButton', 'Size'), {
+    ControlSize: 'Small',
+  });
+  invokeByTooltip(stage, 'Check storybook image for changes');
+  await settled();
+  await settled();
+
+  assert.deepEqual(references, [reference]);
+  assert.ok(labelled(stage, 'Review storybook'));
+  assert.ok(
+    labelled(stage, `Image changes from ${compactDigest(installedDigest)}; access has been reset.`),
+  );
+  assert.ok(labelled(stage, 'Update with selected access'));
+});
+
 test('catalogue never advertises an older release as an update', async () => {
   const stage = host();
   stage.render(
@@ -8020,6 +8084,18 @@ function changeByTooltip(stage, tooltip, value) {
   assert.ok(
     stage.surface.dispatch({ trigger: 'Change', node, id: `${node}:Change`, value }),
     `${tooltip} changes`,
+  );
+}
+
+function invokeByTooltip(stage, tooltip) {
+  const node = stage.frames
+    .flatMap((frame) => frame.patches)
+    .filter((patch) => patch.SetProp?.prop === 'Tooltip' && patch.SetProp.value?.Text === tooltip)
+    .at(-1)?.SetProp.id;
+  assert.notEqual(node, undefined, `${tooltip} action is visible`);
+  assert.ok(
+    stage.surface.dispatch({ trigger: 'Invoke', node, id: `${node}:Invoke`, value: null }),
+    `${tooltip} invokes`,
   );
 }
 

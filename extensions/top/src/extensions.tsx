@@ -2062,13 +2062,18 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                 ) : (
                   <Row gap={1} width="fill" wrap>
                     {renderedInstalled.map((extension) => {
-                      const update = catalogue?.entries.find(
-                        (entry) =>
-                          entry.id === extension.name &&
-                          newerVersion(entry.version, extension.version),
+                      const catalogueEntry = catalogue?.entries.find(
+                        (entry) => entry.id === extension.name,
                       );
+                      const update =
+                        catalogueEntry && newerVersion(catalogueEntry.version, extension.version)
+                          ? catalogueEntry
+                          : undefined;
                       const updateCompatibility = update
                         ? catalogueCompatibility(update, workspaceArchitecture)
+                        : null;
+                      const currentCompatibility = catalogueEntry
+                        ? catalogueCompatibility(catalogueEntry, workspaceArchitecture)
                         : null;
                       const provider = extension.pane_providers?.[0];
                       return (
@@ -2137,6 +2142,17 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                                 />
                               ) : !update && provider ? (
                                 providerAction(extension, provider)
+                              ) : null}
+                              {!update && catalogueEntry ? (
+                                <IconButton
+                                  label="Check image"
+                                  tooltip={`Check ${extension.name} image for changes`}
+                                  icon="view-refresh-symbolic"
+                                  size="small"
+                                  variant="ghost"
+                                  enabled={!busy && currentCompatibility?.compatible !== false}
+                                  onInvoke={() => inspect(catalogueEntry.reference, catalogueEntry)}
+                                />
                               ) : null}
                             </Row>
                             <ExtensionFault extension={extension} />
