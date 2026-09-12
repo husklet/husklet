@@ -1594,6 +1594,101 @@ mod unix {
             matches!(event, hl_gui::Event::Invoke { .. })
         });
 
+        apply_extension_update_until(
+            wire,
+            tree,
+            surface,
+            "Couldn’t inspect extension",
+            |request| match request {
+                Request::ExtensionAcquisitionStart { reference: actual } => {
+                    assert_eq!(actual, reference);
+                    Reply::ExtensionAcquisitionJob(ExtensionAcquisitionJob {
+                        job: "gtk-update".into(),
+                    })
+                }
+                Request::ExtensionAcquisitionStatus { job } => {
+                    Reply::ExtensionAcquisition(ExtensionAcquisitionStatus {
+                        job,
+                        reference: reference.into(),
+                        revision: 1,
+                        state: "failed".into(),
+                        progress: None,
+                        candidate: None,
+                        error: Some("registry denied the image request".into()),
+                    })
+                }
+                other => panic!("unexpected failed extension review call: {other:?}"),
+            },
+            || None,
+        );
+        let failure_root = surface.widget().clone().upcast::<gtk::Widget>();
+        assert!(
+            has_label(&failure_root, reference),
+            "header retains the copyable image reference"
+        );
+        assert!(
+            !has_label(&failure_root, &format!("Image · {reference}")),
+            "failure body does not repeat the header identity"
+        );
+        let retry = find_button(&failure_root, "Retry inspection");
+        let technical = find_expander(&failure_root, "Technical details");
+        let ready_deadline = Instant::now() + DEADLINE;
+        while !retry.is_sensitive() && Instant::now() < ready_deadline {
+            match receive_until(
+                &mut *wire,
+                (Instant::now() + Duration::from_millis(80)).min(ready_deadline),
+            ) {
+                Ok(frame) if frame.kind == hl_extension::Kind::Credit => {}
+                Ok(frame) => {
+                    let reply = match codec::read_request(&frame).expect("failure recovery request decodes") {
+                        Request::InterfaceRender { frame } | Request::InterfaceRenderAt { frame, .. } => {
+                            tree.apply(&frame, surface).expect("failure recovery frame applies");
+                            Reply::Done
+                        }
+                        other => panic!("unexpected failure recovery request: {other:?}"),
+                    };
+                    wire.send(&codec::reply(&reply).expect("failure recovery reply encodes"))
+                        .expect("failure recovery reply sends");
+                    settle_toolkit();
+                }
+                Err(hl_extension::Transit::Pending) => {}
+                Err(error) => panic!("failure recovery render failed: {error:?}"),
+            }
+        }
+        assert!(
+            retry.is_sensitive(),
+            "Retry becomes actionable after failed inspection settles"
+        );
+        for (width_name, width) in [("wide", 1_200), ("narrow", 600)] {
+            window.set_default_size(width, 800);
+            window.set_size_request(width, 800);
+            window.set_child(Some(&failure_root));
+            window.present();
+            settle_toolkit();
+            assert_contained(&failure_root, &format!("extension-acquisition-failure/{width_name}"));
+            let retry_bounds = retry
+                .compute_bounds(&failure_root)
+                .expect("retry belongs to failure card");
+            let detail_bounds = technical
+                .compute_bounds(&failure_root)
+                .expect("details belong to failure card");
+            assert!(
+                retry_bounds.y() < detail_bounds.y(),
+                "{width_name} Retry must precede secondary details"
+            );
+            capture(
+                window,
+                &format!("extension-acquisition-failure-{width_name}"),
+                width,
+                800,
+            );
+        }
+        retry.emit_clicked();
+        settle_toolkit();
+        send_report(surface, wire, 101, |event| {
+            matches!(event, hl_gui::Event::Invoke { .. })
+        });
+
         let acquisition_subscribed = Cell::new(false);
         apply_extension_update_until(
             wire,

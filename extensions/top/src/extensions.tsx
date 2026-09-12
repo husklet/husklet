@@ -1891,12 +1891,6 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                     <CardContent gap={1}>
                       {acquisition.state === 'failed' ? (
                         <Column gap={1}>
-                          <Text
-                            label={`Image · ${acquisition.reference}`}
-                            color="text-dim"
-                            tooltip={acquisition.reference}
-                            wrap
-                          />
                           <InlineMessage
                             label={acquisitionFailure(
                               acquisition.error ?? 'The image could not be inspected.',
@@ -1904,14 +1898,6 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                             tone="danger"
                             width={COPY_WIDTH}
                           />
-                          <Expander label="Technical details" expanded={false} width="fill">
-                            <Text
-                              label={acquisitionTechnicalDetail(
-                                acquisition.error ?? 'The image could not be inspected.',
-                              )}
-                              wrap
-                            />
-                          </Expander>
                           <Row gap={1} wrap>
                             <Button
                               label="Retry inspection"
@@ -1927,6 +1913,14 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                               onInvoke={dismissReview}
                             />
                           </Row>
+                          <Expander label="Technical details" expanded={false} width="fill">
+                            <Text
+                              label={acquisitionTechnicalDetail(
+                                acquisition.error ?? 'The image could not be inspected.',
+                              )}
+                              wrap
+                            />
+                          </Expander>
                         </Column>
                       ) : acquisition.state === 'cancelled' ? (
                         <Column gap={1}>

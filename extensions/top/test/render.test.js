@@ -2160,7 +2160,10 @@ test('extension inspection keeps invalid and failed references recoverable with 
   await settled();
   await settled();
   assert.ok(labelled(stage, 'Couldn’t inspect extension'));
-  assert.ok(labelled(stage, 'Image · registry.example/reviewed:1'));
+  assert.deepEqual(taggedProperty(stage, 'Couldn’t inspect extension', 'CardHeader', 'Detail'), {
+    Text: 'registry.example/reviewed:1',
+  });
+  assert.equal(labelled(stage, 'Image · registry.example/reviewed:1'), undefined);
   assert.ok(
     labelled(
       stage,
@@ -2170,6 +2173,11 @@ test('extension inspection keeps invalid and failed references recoverable with 
   assert.ok(labelled(stage, 'Retry inspection'));
   assert.ok(labelled(stage, 'Back to catalogue'));
   assert.ok(labelled(stage, 'Technical details'));
+  assert.ok(
+    labelled(stage, 'Retry inspection').SetProp.id <
+      labelled(stage, 'Technical details').SetProp.id,
+    'the primary recovery action precedes secondary diagnostics',
+  );
   assert.ok(
     labelled(
       stage,
