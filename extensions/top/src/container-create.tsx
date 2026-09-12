@@ -676,16 +676,17 @@ export function ContainerCreate({
   const editable = !created && !blocked;
   return (
     <Column gap={1}>
-      <Row gap={1} justify="start">
-        <Button
-          label={label}
-          size="small"
-          variant="outline"
-          tooltip={expanded ? 'Container setup is open' : 'Configure a new container'}
-          onInvoke={() => setExpanded(true)}
-        />
-      </Row>
-      {expanded ? (
+      {!expanded ? (
+        <Row gap={1} justify="start">
+          <Button
+            label={label}
+            size="small"
+            variant="outline"
+            tooltip="Configure a new container"
+            onInvoke={() => setExpanded(true)}
+          />
+        </Row>
+      ) : (
         <Card variant="outline" width="fill">
           <CardHeader
             label="New container"
@@ -874,7 +875,7 @@ export function ContainerCreate({
             </CardContent>
           ) : null}
         </Card>
-      ) : null}
+      )}
     </Column>
   );
 }

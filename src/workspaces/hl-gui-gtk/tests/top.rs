@@ -418,9 +418,13 @@ mod unix {
                 assert_eq!(create.height(), 28, "{width_name} create action is not compact");
                 assert!(matches!(
                     create.tooltip_text().as_deref(),
-                    Some("Configure a new container" | "Container setup is open")
+                    Some("Configure a new container")
                 ));
                 assert!(create.grab_focus(), "create action is keyboard reachable");
+                assert!(
+                    refresh.grab_focus(),
+                    "a stable toolbar action accepts focus before the create trigger is replaced"
+                );
                 capture(&window, &format!("container-create-entry-{width_name}"), width, 800);
                 invoke_and_apply_until_button(
                     &mut wire,

@@ -5715,9 +5715,6 @@ test('container creation groups its compact form and uses a human label editor',
   });
   invoke(stage, 'Create first container');
   await settled();
-  assert.deepEqual(taggedProperty(stage, 'Create first container', 'Button', 'Tooltip'), {
-    Text: 'Container setup is open',
-  });
   for (const label of [
     'Required',
     'Process overrides',
