@@ -250,7 +250,7 @@ impl Conversation {
         Self::new_scoped_owned(
             stream,
             authority,
-            "test",
+            "00000000000000000000000000000000",
             hl_extension::ExecutionOwnership::default(),
             workspace,
             queue,
@@ -2650,6 +2650,46 @@ mod tests {
             ledger.reached(),
             vec!["executions.inspect", "containers.list", "executions.output"]
         );
+        drop(wire);
+        assert_eq!(served.join().expect("joined"), Ok(()));
+    }
+
+    #[test]
+    fn forged_terminal_input_is_refused_across_the_real_unix_socket_before_host_access() {
+        let ledger = Arc::new(Ledger::default());
+        let (ours, theirs) = UnixStream::pair().expect("socket pair");
+        let host_ledger = Arc::clone(&ledger);
+        let served = std::thread::spawn(move || {
+            let host = Host { ledger: host_ledger };
+            let authority = Authority::new(
+                ExtensionName::new("terminal-agent").expect("name"),
+                Grant::new([Capability::TerminalInput]),
+                Vec::new(),
+            );
+            let mut conversation = Conversation::new(ours, authority, "dev", Queue::new())?;
+            conversation.greet()?;
+            conversation.serve(&services(&host))
+        });
+        let mut wire = Wire::new(theirs);
+        shake(&mut wire, PROTOCOL);
+
+        let answer = ask(
+            &mut wire,
+            &Request::TerminalCommandWrite {
+                id: "e".repeat(32),
+                owner: "00000000000000000000000000000000".into(),
+                slot: "s1".into(),
+                generation: 0,
+                revision: 0,
+                contents: vec![0, 3, b'\n', 255],
+            },
+        );
+        assert!(matches!(
+            codec::read_failure(&answer),
+            Ok(Failure::Denied { ref detail, .. })
+                if detail == "execution control is limited to processes created by this extension incarnation"
+        ));
+        assert!(ledger.reached().is_empty(), "foreign input reached a host adapter");
         drop(wire);
         assert_eq!(served.join().expect("joined"), Ok(()));
     }

@@ -1103,6 +1103,7 @@ impl Session {
                         detail: "execution stdin chunks must contain between 1 and 65536 bytes".into(),
                     });
                 }
+                self.require_owned_execution(id)?;
                 let execution = self.resolve_execution(id, services.containers)?;
                 if !execution.running {
                     return Err(Failure::Conflict {
@@ -1115,6 +1116,7 @@ impl Session {
             }
             Request::ExecutionCloseInput { id } => {
                 immutable_identity(id, &[32], "execution")?;
+                self.require_owned_execution(id)?;
                 let execution = self.resolve_execution(id, services.containers)?;
                 if !execution.running {
                     return Err(Failure::Conflict {
@@ -1729,6 +1731,10 @@ impl Session {
                     detail: "host returned a terminal command owned by another container".into(),
                 });
             }
+            self.owned_executions
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .insert(id.clone());
             return Ok(Reply::TerminalCommand(terminal_command_summary(
                 execution,
                 &self.extension_identity,
@@ -1795,6 +1801,10 @@ impl Session {
                 detail: "terminal command belongs to another extension".into(),
             });
         }
+        // `owner` is resume metadata supplied by the caller, not proof that
+        // this installation created `id`. Bind every operation to the same
+        // incarnation-wide ledger used by detached container executions.
+        self.require_owned_execution(id)?;
         // The pane snapshot fences creation. Once started, the returned command ID is the durable
         // authority: replacing or closing its originating pane must not make output, completion,
         // input shutdown, or cancellation unreachable.

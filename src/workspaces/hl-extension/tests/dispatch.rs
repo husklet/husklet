@@ -660,6 +660,7 @@ fn pane_discovery_requires_observation_without_content_authority() {
 #[test]
 fn supervised_terminal_command_has_owned_identity_output_input_and_completion_without_container_grants() {
     let host = Host::new();
+    let ownership = hl_extension::ExecutionOwnership::default();
     let mut active = session(
         &[
             Capability::TerminalProcessControl,
@@ -667,7 +668,8 @@ fn supervised_terminal_command_has_owned_identity_output_input_and_completion_wi
             Capability::TerminalInput,
         ],
         &[],
-    );
+    )
+    .with_execution_ownership(ownership.clone());
     let started = active
         .dispatch(
             &Request::TerminalCommandStart {
@@ -777,6 +779,7 @@ fn supervised_terminal_command_has_owned_identity_output_input_and_completion_wi
     assert!(host.ledger.reached().is_empty(), "foreign ownership must be fenced before host lookup");
 
     let resumed = session(&[Capability::TerminalOutput], &[])
+        .with_execution_ownership(ownership.clone())
         .dispatch(
             &Request::TerminalCommandInspect {
                 id: started.id,
@@ -798,6 +801,7 @@ fn supervised_terminal_command_has_owned_identity_output_input_and_completion_wi
 
     host.ledger.clear();
     let cancelled = session(&[Capability::TerminalProcessControl], &[])
+        .with_execution_ownership(ownership)
         .dispatch(
             &Request::TerminalCommandCancel {
                 id: resumed.id,
@@ -813,6 +817,73 @@ fn supervised_terminal_command_has_owned_identity_output_input_and_completion_wi
         .expect("a reconnected controller can cancel the immutable command");
     assert!(matches!(cancelled, Reply::TerminalCommand(_)));
     assert_eq!(host.ledger.reached(), vec!["executions.cancel", "executions.inspect"]);
+}
+
+#[test]
+fn terminal_command_identity_cannot_be_forged_around_a_foreign_execution() {
+    let host = Host::new();
+    let id = "e".repeat(32);
+    let mut attacker = session(
+        &[
+            Capability::TerminalOutput,
+            Capability::TerminalInput,
+            Capability::TerminalProcessControl,
+        ],
+        &[],
+    );
+    let requests = [
+        Request::TerminalCommandInspect {
+            id: id.clone(),
+            owner: COMMAND_OWNER.into(),
+            slot: "s1".into(),
+            generation: 0,
+            revision: 0,
+        },
+        Request::TerminalCommandOutput {
+            id: id.clone(),
+            owner: COMMAND_OWNER.into(),
+            slot: "s1".into(),
+            generation: 0,
+            revision: 0,
+            after: 0,
+            limit: 1,
+        },
+        Request::TerminalCommandWrite {
+            id: id.clone(),
+            owner: COMMAND_OWNER.into(),
+            slot: "s1".into(),
+            generation: 0,
+            revision: 0,
+            contents: vec![0, 3, b'\n', 255],
+        },
+        Request::TerminalCommandCloseInput {
+            id: id.clone(),
+            owner: COMMAND_OWNER.into(),
+            slot: "s1".into(),
+            generation: 0,
+            revision: 0,
+        },
+        Request::TerminalCommandCancel {
+            id,
+            owner: COMMAND_OWNER.into(),
+            slot: "s1".into(),
+            generation: 0,
+            revision: 0,
+            signal: "SIGTERM".into(),
+            timeout_ms: 1,
+        },
+    ];
+    for request in requests {
+        assert!(matches!(
+            attacker.dispatch(&request, &services(&host)),
+            Err(Failure::Denied { detail, .. })
+                if detail == "execution control is limited to processes created by this extension incarnation"
+        ));
+    }
+    assert!(
+        host.ledger.reached().is_empty(),
+        "foreign IDs must be rejected before lookup, output, input, or cancellation"
+    );
 }
 
 #[test]
@@ -832,7 +903,12 @@ fn pane_snapshot_fences_command_creation_but_not_its_durable_identity() {
     assert!(matches!(result, Err(Failure::Conflict { .. })));
     assert!(host.ledger.reached().is_empty(), "stale authority must execute nothing");
 
-    let resumed = session(&[Capability::TerminalOutput], &[]).dispatch(
+    let ownership = hl_extension::ExecutionOwnership::default();
+    ownership.lock().expect("ownership").insert("e".repeat(32));
+
+    let resumed = session(&[Capability::TerminalOutput], &[])
+        .with_execution_ownership(ownership.clone())
+        .dispatch(
         &Request::TerminalCommandInspect {
             id: "e".repeat(32),
             owner: COMMAND_OWNER.into(),
@@ -847,7 +923,9 @@ fn pane_snapshot_fences_command_creation_but_not_its_durable_identity() {
         host.ledger.reached() == vec!["executions.inspect"],
         "a replacement pane must not orphan a durable command"
     );
-    let output = session(&[Capability::TerminalOutput], &[]).dispatch(
+    let output = session(&[Capability::TerminalOutput], &[])
+        .with_execution_ownership(ownership)
+        .dispatch(
         &Request::TerminalCommandOutput {
             id: "e".repeat(32),
             owner: COMMAND_OWNER.into(),
@@ -1027,6 +1105,10 @@ impl WorkspaceFiles for Host {
     fn read(&self, _path: &RelativePath) -> Result<Vec<u8>, HostError> {
         self.ledger.note("files.read");
         Ok(b"contents".to_vec())
+    }
+    fn read_link(&self, _path: &RelativePath) -> Result<Vec<u8>, HostError> {
+        self.ledger.note("files.read_link");
+        Ok(b"app.log".to_vec())
     }
     fn read_range(
         &self,
@@ -2434,7 +2516,13 @@ fn every_call_succeeds_with_its_capability_and_fails_without_it() {
             capabilities.push(Capability::TerminalLayoutControl);
             capabilities.push(Capability::TerminalProcessControl);
         }
+        let ownership = hl_extension::ExecutionOwnership::default();
+        ownership
+            .lock()
+            .expect("ownership")
+            .insert("e".repeat(32));
         let mut granted = session(&capabilities, &["logs"])
+            .with_execution_ownership(ownership)
             .with_images(hl_extension::ImageGrant {
                 read: vec![hl_extension::ImageSelector::All { all: true }],
                 r#use: vec![hl_extension::ImageSelector::All { all: true }],
@@ -4319,7 +4407,17 @@ fn execution_stdin_is_bounded_authorized_and_explicitly_half_closed() {
     ));
     assert!(host.ledger.reached().is_empty());
 
-    let mut allowed = session(&[Capability::ContainerInput], &[]);
+    let mut foreign = session(&[Capability::ContainerInput], &[]);
+    assert!(matches!(
+        foreign.dispatch(&write, &services(&host)),
+        Err(Failure::Denied { detail, .. })
+            if detail == "execution control is limited to processes created by this extension incarnation"
+    ));
+    assert!(host.ledger.reached().is_empty(), "foreign input must be rejected before lookup");
+
+    let ownership = hl_extension::ExecutionOwnership::default();
+    ownership.lock().expect("ownership").insert(id.clone());
+    let mut allowed = session(&[Capability::ContainerInput], &[]).with_execution_ownership(ownership);
     for contents in [Vec::new(), vec![0; 65_537]] {
         assert!(matches!(
             allowed.dispatch(
