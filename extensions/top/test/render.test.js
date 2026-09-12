@@ -6592,12 +6592,10 @@ test('container controls follow the real daemon lifecycle states', () => {
   assert.deepEqual(ancestorProperty(stage, 'Details', 'CardContent', 'Align'), {
     Align: 'Center',
   });
-  assert.deepEqual(taggedProperty(stage, 'Create a container', 'Expander', 'Variant'), {
+  assert.deepEqual(taggedProperty(stage, 'Create a container', 'Button', 'Variant'), {
     Variant: 'Outline',
   });
-  assert.deepEqual(taggedProperty(stage, 'Create a container', 'Expander', 'Width'), {
-    Length: 'Content',
-  });
+  assert.equal(taggedProperty(stage, 'Create a container', 'Button', 'Size')?.ControlSize, 'Small');
 
   stage = host();
   stage.render(h(Containers, { api, resource: inventory('created') }));
