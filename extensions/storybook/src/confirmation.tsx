@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Column, ConfirmAction, Heading, InlineMessage, Text } from '@husklet/react';
+import { Column, ConfirmAction, Heading, InlineMessage, Row, Text } from '@husklet/react';
 
 export const CONFIRMATION_STORY = 'ConfirmAction';
 
@@ -7,10 +7,10 @@ export const CONFIRMATION_STORY = 'ConfirmAction';
 export function ConfirmationStory() {
   const [removed, setRemoved] = useState(false);
   return (
-    <Column gap={2}>
-      <Heading label={'Remove cache volume'} scale={'title'} />
+    <Column gap={3}>
+      <Heading label={'Destructive flow'} scale={'title'} />
       <Text
-        label={'The immutable volume generation is shown before any destructive request.'}
+        label={'A destructive action reveals its exact authority before it can run.'}
         wrap={true}
       />
       {removed ? (
@@ -24,6 +24,40 @@ export function ConfirmationStory() {
           onConfirm={async () => setRemoved(true)}
         />
       )}
+      <Heading label={'Sizes'} scale={'title'} />
+      <Row gap={2} wrap={true}>
+        <ConfirmAction
+          authorityKey={'small-example'}
+          label={'Small'}
+          confirmLabel={'Confirm small'}
+          question={'Confirm the small action?'}
+          size={'small'}
+          onConfirm={() => {}}
+        />
+        <ConfirmAction
+          authorityKey={'medium-example'}
+          label={'Medium'}
+          confirmLabel={'Confirm medium'}
+          question={'Confirm the medium action?'}
+          size={'medium'}
+          onConfirm={() => {}}
+        />
+        <ConfirmAction
+          authorityKey={'large-example'}
+          label={'Large'}
+          confirmLabel={'Confirm large'}
+          question={'Confirm the large action?'}
+          size={'large'}
+          onConfirm={() => {}}
+        />
+      </Row>
+      <Text
+        label={
+          'Use small in compact management rows, medium by default, and large only for touch-forward layouts.'
+        }
+        color={'text-dim'}
+        wrap={true}
+      />
     </Column>
   );
 }

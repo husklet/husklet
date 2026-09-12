@@ -1010,6 +1010,9 @@ mod unix {
                 let card = ancestor_with_class(check.upcast_ref(), "hl-card")
                     .expect("image check action belongs to the installed extension card");
                 let state = find_mapped_labelled(&card, "Running");
+                let disable = find_button(&card, "Disable");
+                let remove = find_button(&card, "Remove");
+                let permissions = find_expander(&card, "View permissions");
                 let check_bounds = check
                     .compute_bounds(&card)
                     .expect("image check action belongs to its card");
@@ -1020,6 +1023,23 @@ mod unix {
                 assert!(check.has_css_class("size-small"));
                 assert_eq!(check.height(), 28, "{width_name} image check uses the compact tier");
                 assert!(check.is_focusable(), "{width_name} image check is keyboard reachable");
+                assert!(!permissions.is_expanded(), "permissions start collapsed");
+                for (label, action) in [("Disable", disable), ("Remove", remove)] {
+                    assert!(
+                        action.is_mapped(),
+                        "{width_name} {label} is visible without opening permissions"
+                    );
+                    assert!(
+                        action.has_css_class("size-small"),
+                        "{width_name} {label} uses the compact tier"
+                    );
+                    assert_eq!(action.height(), 28, "{width_name} {label} is 28px high");
+                    assert!(action.is_focusable(), "{width_name} {label} is keyboard reachable");
+                    assert!(
+                        action.ancestor(gtk::Expander::static_type()).is_none(),
+                        "{width_name} {label} remained hidden inside permissions"
+                    );
+                }
                 assert!(
                     check_bounds.y() >= state_bounds.y() + state_bounds.height(),
                     "{width_name} image check was crowded into the identity/state row: state={state_bounds:?}, action={check_bounds:?}"

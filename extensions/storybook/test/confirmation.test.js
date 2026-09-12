@@ -57,3 +57,30 @@ test('confirmation flow is selectable from the shipped playground', () => {
   assert.ok(labelled(patches, CONFIRMATION_STORY));
   assert.ok(labelled(patches, 'Remove volume'));
 });
+
+test('ConfirmAction documents compact, default, and touch-forward sizes on its own page', () => {
+  const frame = host().render(h(ConfirmationStory));
+  const labels = frame.patches
+    .filter((patch) => patch.SetProp?.prop === 'Label')
+    .map((patch) => patch.SetProp.value?.Text);
+  const sizes = Object.fromEntries(
+    frame.patches
+      .filter((patch) => patch.SetProp?.prop === 'Size')
+      .map((patch) => {
+        const label = frame.patches.find(
+          (candidate) =>
+            candidate.SetProp?.id === patch.SetProp.id && candidate.SetProp.prop === 'Label',
+        )?.SetProp.value?.Text;
+        return [label, patch.SetProp.value?.ControlSize];
+      }),
+  );
+
+  assert(labels.includes('Destructive flow'));
+  assert(labels.includes('Sizes'));
+  assert.deepEqual(sizes, { Small: 'Small', Medium: 'Medium', Large: 'Large' });
+  assert.equal(
+    frame.patches.filter((patch) => patch.Create?.tag === 'ConfirmAction').length,
+    0,
+    'the composite resolves to protocol-native controls rather than inventing a host tag',
+  );
+});

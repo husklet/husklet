@@ -3265,15 +3265,23 @@ test('installed extensions expose truthful enabled, disabled, fault and retry st
     }),
   );
   await settled();
-  assert.ok(labelled(stage, 'Permissions & management'));
-  assert.ok(
+  assert.ok(labelled(stage, 'View permissions'));
+  assert.equal(
     ancestorTags(stage, 'Disable').includes('Expander'),
-    'secondary lifecycle controls stay inside one compact management disclosure',
+    false,
+    'daily lifecycle control is visible without opening the permissions disclosure',
   );
-  assert.ok(
+  assert.equal(
     ancestorTags(stage, 'Remove').includes('Expander'),
-    'destructive removal does not compete with the primary card action',
+    false,
+    'destructive management is discoverable without mistaking it for a permission',
   );
+  assert.deepEqual(taggedProperty(stage, 'Disable', 'Button', 'Size'), {
+    ControlSize: 'Small',
+  });
+  assert.deepEqual(taggedProperty(stage, 'Remove', 'Button', 'Size'), {
+    ControlSize: 'Small',
+  });
   invoke(stage, 'Disable');
   invoke(stage, 'Disable');
   await settled();

@@ -2191,30 +2191,31 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                             {extension.name === 'top' ? (
                               <InstalledPermissionSummary extension={extension} />
                             ) : (
-                              <Expander label="Permissions & management" expanded={false}>
-                                <Column gap={1}>
+                              <>
+                                <Expander label="View permissions" expanded={false}>
                                   <InstalledPermissionSummary extension={extension} />
-                                  <Separator orientation="horizontal" />
-                                  <Row gap={1} wrap>
-                                    {extension.enabled && !extension.status.startsWith('fault:') ? (
-                                      <Button
-                                        label="Disable"
-                                        variant="ghost"
-                                        enabled={!busy}
-                                        onInvoke={() => lifecycle(extension, 'disable')}
-                                      />
-                                    ) : null}
-                                    <ConfirmAction
-                                      label="Remove"
-                                      confirmLabel={`Remove ${extension.name}`}
-                                      question={`Remove ${extension.name} and permanently delete its private workspace data?`}
-                                      authorityKey={extension.image_digest}
+                                </Expander>
+                                <Row gap={1} width="fill" align="center" justify="start" wrap>
+                                  {extension.enabled && !extension.status.startsWith('fault:') ? (
+                                    <Button
+                                      label="Disable"
+                                      size="small"
+                                      variant="ghost"
                                       enabled={!busy}
-                                      onConfirm={() => lifecycle(extension, 'remove')}
+                                      onInvoke={() => lifecycle(extension, 'disable')}
                                     />
-                                  </Row>
-                                </Column>
-                              </Expander>
+                                  ) : null}
+                                  <ConfirmAction
+                                    label="Remove"
+                                    confirmLabel={`Remove ${extension.name}`}
+                                    question={`Remove ${extension.name} and permanently delete its private workspace data?`}
+                                    authorityKey={extension.image_digest}
+                                    enabled={!busy}
+                                    size="small"
+                                    onConfirm={() => lifecycle(extension, 'remove')}
+                                  />
+                                </Row>
+                              </>
                             )}
                           </CardContent>
                         </Card>

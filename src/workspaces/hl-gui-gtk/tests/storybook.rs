@@ -37,6 +37,7 @@ mod unix {
         "Expander",
         "InlineMessage",
         "RecoveryState",
+        "ConfirmAction",
         "Extension acquisition",
         "Validated settings form",
         "Keyboard and semantic actions",
@@ -241,6 +242,7 @@ mod unix {
                 | "Expander"
                 | "InlineMessage"
                 | "RecoveryState"
+                | "ConfirmAction"
                 | "Switch"
                 | "DataTable"
         );
@@ -461,6 +463,22 @@ mod unix {
             settle_toolkit();
             assert!(focus.has_focus(), "IconButton exposes its native focus state");
             let _ = surface.reports().drain();
+        }
+        if story == "ConfirmAction" {
+            for (label, class, expected) in [
+                ("Small", "size-small", 28),
+                ("Medium", "size-medium", 36),
+                ("Large", "size-large", 44),
+            ] {
+                let action = find::<gtk::Button>(&root, |button| button_caption(button).as_deref() == Some(label));
+                assert!(action.has_css_class(class), "{label} ConfirmAction lost {class}");
+                assert_eq!(
+                    action.height(),
+                    expected,
+                    "{label} ConfirmAction uses its semantic height"
+                );
+                assert!(action.is_focusable(), "{label} ConfirmAction is keyboard reachable");
+            }
         }
         if story == "Entry" {
             let focus = find::<gtk::Entry>(&root, |entry| {
@@ -2417,6 +2435,9 @@ mod unix {
                     "pending acquisition cancellation must remain a native accessible button"
                 );
                 cancel.emit_clicked();
+            }
+            "ConfirmAction" => {
+                find::<gtk::Button>(root, |button| button_caption(button).as_deref() == Some("Small")).emit_clicked();
             }
             "Validated settings form" => {
                 find::<gtk::ToggleButton>(root, |button| button.label().as_deref() == Some("backend")).emit_clicked();
