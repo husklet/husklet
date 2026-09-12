@@ -2426,6 +2426,23 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
           reference: immutableIdentity(reference, [32], 'network'),
           container: immutableIdentity(container, [32, 64], 'container'),
         }),
+      withTemporaryConnection: async (reference, container, operation, options) => {
+        const networkId = immutableIdentity(reference, [32], 'network');
+        const containerId = immutableIdentity(container, [32, 64], 'container');
+        const network = await api.networks.inspect(networkId);
+        if (network.endpoints === undefined || network.endpoints.truncated) {
+          throw new TypeError(
+            `network ${networkId} membership is not complete; temporary attachment cannot safely decide cleanup ownership`,
+          );
+        }
+        const alreadyConnected = network.endpoints.containers.includes(containerId);
+        if (!alreadyConnected) await api.networks.connect(networkId, containerId, options);
+        try {
+          return await operation();
+        } finally {
+          if (!alreadyConnected) await api.networks.disconnect(networkId, containerId);
+        }
+      },
     },
     terminal: {
       panes: async () => exactPaneInventory(expect(await session.call('pane_list'), 'panes')),

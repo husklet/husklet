@@ -1424,6 +1424,36 @@ fn network_connect_authority_cannot_remove_a_network_over_a_real_socket() {
 }
 
 #[test]
+fn network_connect_authority_cannot_detach_an_endpoint_over_a_real_socket() {
+    let (host_end, extension_end) = connected_pair();
+    let host = Host::new();
+    let mut session = Session::new(Authority::new(
+        ExtensionName::new("postgres-inspector").unwrap(),
+        Grant::new([Capability::NetworkConnect]),
+        Vec::new(),
+    ));
+    let request = Request::NetworkDisconnect {
+        reference: "a".repeat(32),
+        container: "c".repeat(64),
+    };
+    let mut sender = hl_extension::Wire::new(extension_end);
+    let mut receiver = hl_extension::Wire::new(host_end);
+
+    sender.send(&codec::request(&request).unwrap()).unwrap();
+    let decoded = codec::read_request(&receiver.receive().unwrap()).unwrap();
+    let failure = session
+        .dispatch(&decoded, &services(&host))
+        .expect_err("temporary attachment authority must not imply cleanup authority");
+    receiver.send(&codec::failure(&failure).unwrap()).unwrap();
+
+    assert!(matches!(
+        codec::read_failure(&sender.receive().unwrap()),
+        Ok(Failure::Denied { capability, .. }) if capability == Capability::NetworkDisconnect.as_str()
+    ));
+    assert!(host.network_aliases.borrow().is_empty(), "network adapter was not reached");
+}
+
+#[test]
 fn network_connect_cannot_cross_an_ungranted_container_scope_over_a_real_socket() {
     let (host_end, extension_end) = connected_pair();
     let host = Host::new();

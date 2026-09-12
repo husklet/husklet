@@ -1490,6 +1490,16 @@ export interface WorkspaceApi {
       options?: { aliases?: readonly string[] },
     ): Promise<void>;
     disconnect(reference: string, container: string): Promise<void>;
+    /**
+     * Attach for one bounded operation and detach only when this call created the endpoint.
+     * Refuses truncated membership because it cannot safely distinguish an existing attachment.
+     */
+    withTemporaryConnection<T>(
+      reference: string,
+      container: string,
+      operation: () => Promise<T>,
+      options?: { aliases?: readonly string[] },
+    ): Promise<T>;
   };
   terminal: {
     panes(): Promise<PaneInventory>;

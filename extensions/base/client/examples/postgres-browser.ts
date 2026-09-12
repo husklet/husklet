@@ -6,6 +6,7 @@ type Configuration = {
   path: string;
   containerId: string;
   generation: number;
+  networkId: string;
   database: string;
   query: string;
   passwordCredential: string;
@@ -17,12 +18,13 @@ if (
   !configuration?.path ||
   !configuration.containerId ||
   !Number.isSafeInteger(configuration.generation) ||
+  !configuration.networkId ||
   !configuration.database ||
   !configuration.query ||
   !configuration.passwordCredential
 ) {
   throw new TypeError(
-    'usage: postgres-browser.ts JSON(path, containerId, generation, database, query, passwordCredential, timeoutMs?)',
+    'usage: postgres-browser.ts JSON(path, containerId, generation, networkId, database, query, passwordCredential, timeoutMs?)',
   );
 }
 
@@ -45,10 +47,10 @@ try {
   let rows = 0;
   const preview: unknown[] = [];
   try {
-    const result = await containers.execJsonLines(
+    const result = await workspace(session).networks.withTemporaryConnection(
+      configuration.networkId,
       container.id,
-      container.generation,
-      {
+      () => containers.execJsonLines(container.id, container.generation, {
         command: [
           'psql',
           '--no-psqlrc',
@@ -68,11 +70,11 @@ try {
         onStarted: (id) => {
           executionId = id;
         },
-      },
-      (value) => {
+      }, (value) => {
         rows += 1;
         if (preview.length < 25) preview.push(value);
-      },
+      }),
+      { aliases: ['postgres-inspector'] },
     );
     const execution = result.execution;
     if (execution.exit_code !== 0) {

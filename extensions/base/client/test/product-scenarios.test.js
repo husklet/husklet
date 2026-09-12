@@ -960,6 +960,7 @@ test('Postgres browser refuses a replacement generation before resolving credent
     {
       containerId: id,
       generation: 7,
+      networkId: 'a'.repeat(32),
       database: 'app',
       query: 'select 1',
       passwordCredential: 'postgres.password',

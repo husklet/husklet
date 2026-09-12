@@ -11,6 +11,7 @@ test('Postgres browser streams credential-backed rows over real Unix framing', a
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-postgres-browser-'));
   const socketPath = path.join(directory, 'host.sock');
   const containerId = 'c'.repeat(64);
+  const networkId = 'a'.repeat(32);
   const executionId = 'e'.repeat(32);
   const requests = [];
   const connections = new Set();
@@ -39,7 +40,19 @@ test('Postgres browser streams credential-backed rows over real Unix framing', a
         if (frame.kind !== KIND.request) continue;
         requests.push(frame.payload);
         let payload;
-        if (frame.payload.call === 'container_exec_credential') {
+        if (frame.payload.call === 'network_inspect') {
+          payload = {
+            reply: 'network',
+            with: {
+              id: networkId,
+              name: 'database',
+              driver: 'bridge',
+              scope: 'local',
+              kind: 'custom',
+              endpoints: { containers: [], truncated: false },
+            },
+          };
+        } else if (frame.payload.call === 'container_exec_credential') {
           payload = { reply: 'identity', with: executionId };
         } else if (frame.payload.call === 'execution_write' && !outputRequested) {
           // Model a bidirectional process whose stdin writer cannot advance until
@@ -120,6 +133,9 @@ test('Postgres browser streams credential-backed rows over real Unix framing', a
           'containers:execute',
           'containers:input',
           'credentials:inject',
+          'networks:read',
+          'networks:connect',
+          'networks:disconnect',
         ],
       },
     });
@@ -131,8 +147,10 @@ test('Postgres browser streams credential-backed rows over real Unix framing', a
     let liveExecution;
     let deadlockTimer;
     const result = await Promise.race([
-      workspace(session)
-        .containers.execJsonLines(
+      workspace(session).networks.withTemporaryConnection(
+        networkId,
+        containerId,
+        () => workspace(session).containers.execJsonLines(
           containerId,
           7,
           {
@@ -150,7 +168,9 @@ test('Postgres browser streams credential-backed rows over real Unix framing', a
             rows.push(value);
             await Promise.resolve();
           },
-        )
+        ),
+        { aliases: ['postgres-inspector'] },
+      )
         .finally(() => clearTimeout(deadlockTimer)),
       new Promise(
         (_, reject) =>
@@ -165,7 +185,12 @@ test('Postgres browser streams credential-backed rows over real Unix framing', a
     assert.equal(result.executionId, executionId);
     assert.equal(result.execution.exit_code, 0);
     assert.equal(liveExecution.id, executionId);
-    assert.deepEqual(requests.slice(0, 2), [
+    assert.deepEqual(requests.slice(0, 4), [
+      { call: 'network_inspect', with: { reference: networkId } },
+      {
+        call: 'network_connect',
+        with: { reference: networkId, container: containerId, aliases: ['postgres-inspector'] },
+      },
       {
         call: 'container_exec_credential',
         with: {
@@ -182,13 +207,14 @@ test('Postgres browser streams credential-backed rows over real Unix framing', a
       { call: 'execution_inspect', with: { id: executionId } },
     ]);
     assert.deepEqual(
-      requests.slice(2).map((request) => request.call),
+      requests.slice(4).map((request) => request.call),
       [
         'execution_output',
         'execution_write',
         'execution_output',
         'execution_close_input',
         'execution_inspect',
+        'network_disconnect',
       ],
     );
     assert.deepEqual(
