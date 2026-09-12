@@ -2144,6 +2144,73 @@ test('real Unix change iterator reports a typed journal rotation and remains reu
   }
 });
 
+test('real Unix change iterator rejects a non-advancing continuation and keeps the session reusable', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-journal-stall-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const calls = [];
+  const connections = new Set();
+  const server = net.createServer((socket) => {
+    connections.add(socket);
+    socket.on('close', () => connections.delete(socket));
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.kind !== KIND.request) continue;
+        calls.push(frame.payload.call);
+        const payload = frame.payload.call === 'filesystem_changes'
+          ? {
+              reply: 'file_changes',
+              with: {
+                journal: FILE_JOURNAL,
+                changes: [],
+                next: 12,
+                current: 13,
+                more: true,
+                truncated: false,
+              },
+            }
+          : {
+              reply: 'workspace',
+              with: { name: 'index', image: 'toolbox', architecture: 'amd64' },
+            };
+        const response = encode({ channel: frame.channel, kind: KIND.response, payload });
+        socket.write(response.subarray(0, 2));
+        socket.write(response.subarray(2, 9));
+        socket.write(response.subarray(9));
+      }
+    });
+    const greeting = encode({
+      channel: CONTROL,
+      kind: KIND.open,
+      payload: {
+        protocol: 1,
+        peer: 'adversarial-indexer-host',
+        granted: ['filesystem:read', 'workspaces:read'],
+      },
+    });
+    socket.write(greeting.subarray(0, 1));
+    socket.write(greeting.subarray(1));
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  let session;
+  try {
+    session = await connect({ path: socketPath });
+    await assert.rejects(
+      workspace(session).files.changes({ journal: FILE_JOURNAL, revision: 12 }),
+      /inconsistent filesystem change page/,
+    );
+    assert.deepEqual(calls, ['filesystem_changes'], 'a stalled continuation must not be requested again');
+    assert.equal((await workspace(session).info()).name, 'index');
+    assert.deepEqual(calls, ['filesystem_changes', 'workspace_info']);
+    await session.close();
+  } finally {
+    await session?.close();
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('real Unix filesystem watcher publishes filtered cursor-only progress for restart', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-filtered-cursor-'));
   const socketPath = path.join(directory, 'host.sock');

@@ -2699,7 +2699,7 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
           ) ||
           (page.changes.length > 0 && page.next < page.changes.at(-1).revision) ||
           (page.truncated && (page.changes.length > 0 || page.next !== page.current)) ||
-          (page.more && page.next >= page.current)
+          (page.more && (page.next <= after || page.next >= page.current))
         )
           throw new TypeError('host returned an inconsistent filesystem change page');
         return page;
