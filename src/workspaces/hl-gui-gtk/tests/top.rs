@@ -379,6 +379,19 @@ mod unix {
                     "{width_name} container card collapsed to {}px instead of using the page width",
                     card.width()
                 );
+                assert!(
+                    card.height() <= 80,
+                    "{width_name} collapsed container record stacked identity, status and actions to {}px",
+                    card.height()
+                );
+                let create = find_expander(&root, "Create a container");
+                assert!(create.has_css_class("variant-outline"));
+                assert_eq!(create.height(), 28, "{width_name} create disclosure stays compact");
+                assert_eq!(
+                    create.tooltip_text().as_deref(),
+                    Some("Configure and start a new container")
+                );
+                assert!(create.grab_focus(), "Create a container remains keyboard reachable");
                 for label in ["Details", "Start"] {
                     let action = find_button(&card, label);
                     assert!(action.has_css_class("size-small"));
@@ -573,6 +586,19 @@ mod unix {
                     manage.allocation().height()
                 );
                 assert!(manage.grab_focus());
+                let network_card = widgets_with_class(&root, "hl-card")
+                    .into_iter()
+                    .next()
+                    .expect("network inventory renders a card");
+                assert!(
+                    network_card.height() <= 112,
+                    "{width_name} collapsed network record stacked its summary to {}px",
+                    network_card.height()
+                );
+                let danger = find_expander(&network_card, "Danger zone");
+                assert!(danger.has_css_class("variant-outline"));
+                assert_eq!(danger.height(), 28, "{width_name} network danger disclosure stays compact");
+                assert!(danger.grab_focus(), "network danger disclosure is keyboard reachable");
                 let widgets = [
                     entry.clone().upcast::<gtk::Widget>(),
                     create.clone().upcast(),
@@ -626,12 +652,7 @@ mod unix {
                     card.width()
                 );
                 assert!(
-                    card.height() <= 128,
-                    "{width_name} collapsed execution record is too tall: {}px",
-                    card.height()
-                );
-                assert!(
-                    card.height() <= 128,
+                    card.height() <= 104,
                     "{width_name} one-line image record is too tall: {}px",
                     card.height()
                 );
@@ -644,6 +665,22 @@ mod unix {
                     inspect.height()
                 );
                 assert!(inspect.grab_focus(), "image Inspect action is keyboard reachable");
+                let danger = find_expander(&card, "Danger zone");
+                assert!(danger.has_css_class("variant-outline"));
+                assert_eq!(danger.height(), 28, "{width_name} image danger disclosure stays compact");
+                assert!(danger.grab_focus(), "image danger disclosure is keyboard reachable");
+                if width == 1_200 {
+                    let size = find_label(&card, "7.8 MiB")
+                        .compute_bounds(&card)
+                        .expect("image size belongs to its card");
+                    let action = inspect
+                        .compute_bounds(&card)
+                        .expect("image action belongs to its card");
+                    assert!(
+                        (size.y() - action.y()).abs() <= 8.0,
+                        "wide image metadata and action split into separate bands: size={size:?} action={action:?}"
+                    );
+                }
             }
             if fixture == "populated" && name == "executions" {
                 let card = widgets_with_class(&root, "hl-card")
@@ -656,6 +693,24 @@ mod unix {
                     "{width_name} execution card collapsed to {}px instead of using the page width",
                     card.width()
                 );
+                let maximum = if width == 1_200 { 88 } else { 120 };
+                assert!(
+                    card.height() <= maximum,
+                    "{width_name} collapsed execution record stacked its summary to {}px",
+                    card.height()
+                );
+                if width == 1_200 {
+                    let status = find_label(&card, "exited 0")
+                        .compute_bounds(&card)
+                        .expect("execution status belongs to its card");
+                    let details = find_button(&card, "Details")
+                        .compute_bounds(&card)
+                        .expect("execution action belongs to its card");
+                    assert!(
+                        (status.y() - details.y()).abs() <= 8.0,
+                        "wide execution status and actions split into separate bands: status={status:?} details={details:?}"
+                    );
+                }
                 for label in ["Details", "Load output", "Wait up to 5s"] {
                     let action = find_button(&card, label);
                     assert!(action.has_css_class("size-small"));

@@ -27,6 +27,7 @@ import {
 } from '@husklet/react';
 import { ImageDetailsSource, bounded, boundedMessage, bytes, shortId } from './model.js';
 import type { Resource } from './overview.js';
+import { ResourceSummary } from './resource-summary.js';
 
 const TERMINAL_PULL_STATES = new Set(['complete', 'failed', 'cancelled']);
 type Inspection = {
@@ -307,59 +308,58 @@ export function Images({
         </Expander>
         {view.records.map((item) => (
           <Card key={item.id} variant={detail?.id === item.id ? 'filled' : 'outline'} width="fill">
-            <Row gap={2} align="center" justify="start" wrap width="fill">
-              <CardHeader
-                label={item.reference || '<untagged>'}
-                detail={shortId(item.id)}
-                align="start"
-                width="fill"
-                grow
-              />
-              <Button
-                label={
-                  inspection.id === item.id && inspection.state === 'error'
-                    ? 'Retry inspect'
-                    : 'Inspect'
-                }
-                size="small"
-                variant="outline"
-                enabled={!busy}
-                onInvoke={() => inspect(item)}
-              />
-            </Row>
+            <ResourceSummary
+              label={item.reference || '<untagged>'}
+              detail={shortId(item.id)}
+              status={<Text label={bytes(item.size)} color="text-dim" />}
+              actions={
+                <Button
+                  label={
+                    inspection.id === item.id && inspection.state === 'error'
+                      ? 'Retry inspect'
+                      : 'Inspect'
+                  }
+                  size="small"
+                  variant="outline"
+                  enabled={!busy}
+                  onInvoke={() => inspect(item)}
+                />
+              }
+            />
+            {inspection.id === item.id ? (
+              <CardContent>
+                {inspection.id === item.id ? (
+                  <>
+                    <ResourceState
+                      state={
+                        inspection.state === 'idle'
+                          ? 'loading'
+                          : inspection.state === 'ready' && inspection.count === 0
+                            ? 'empty'
+                            : inspection.state
+                      }
+                      loadingLabel="Reading image details…"
+                      emptyLabel="No image details"
+                      emptyDetail="The host returned no inspectable fields."
+                      error={boundedMessage(inspection.error)}
+                      retryLabel="Retry inspect"
+                      onRetry={() => inspect(item)}
+                    >
+                      <StructuredDetail value={detail} />
+                    </ResourceState>
+                    {inspection.state === 'error' ? (
+                      <Text
+                        label="Verify that the image still exists and that this extension has access to it, then retry inspection."
+                        color="warning"
+                        wrap
+                      />
+                    ) : null}
+                  </>
+                ) : null}
+              </CardContent>
+            ) : null}
             <CardContent>
-              <Text label={bytes(item.size)} color="text-dim" />
-              {inspection.id === item.id ? (
-                <>
-                  <ResourceState
-                    state={
-                      inspection.state === 'idle'
-                        ? 'loading'
-                        : inspection.state === 'ready' && inspection.count === 0
-                          ? 'empty'
-                          : inspection.state
-                    }
-                    loadingLabel="Reading image details…"
-                    emptyLabel="No image details"
-                    emptyDetail="The host returned no inspectable fields."
-                    error={boundedMessage(inspection.error)}
-                    retryLabel="Retry inspect"
-                    onRetry={() => inspect(item)}
-                  >
-                    <StructuredDetail value={detail} />
-                  </ResourceState>
-                  {inspection.state === 'error' ? (
-                    <Text
-                      label="Verify that the image still exists and that this extension has access to it, then retry inspection."
-                      color="warning"
-                      wrap
-                    />
-                  ) : null}
-                </>
-              ) : null}
-            </CardContent>
-            <CardContent>
-              <Expander label="Danger zone" width="fill" align="start">
+              <Expander label="Danger zone" variant="outline" width="content" align="start">
                 <Column gap={1}>
                   <Text label="Removing this image cannot be undone." color="text-dim" wrap />
                   {confirm === item.id ? (

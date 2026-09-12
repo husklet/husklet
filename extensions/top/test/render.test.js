@@ -5247,13 +5247,17 @@ test('volume and network panels render bounded real inventories and controls', (
   const volumeStage = stageFromFrame(volumeFrame);
   assert.equal(taggedProperty(volumeStage, 'cache', 'CardHeader', 'Align')?.Align, 'Start');
   assert.ok(taggedProperty(volumeStage, 'cache', 'CardHeader', 'Width'));
+  assert.deepEqual(ancestorTags(volumeStage, 'Inspect').slice(0, 3), ['Row', 'Row', 'CardContent']);
   for (const label of ['Networks', 'private', 'Remove'])
     assert.ok(labels(networkFrame).includes(label), label);
   const networkInventoryStage = stageFromFrame(networkFrame);
   assert.deepEqual(taggedProperty(networkInventoryStage, 'Networks', 'Heading', 'Scale'), {
     Scale: 'Display',
   });
-  assert.ok(taggedProperty(networkInventoryStage, 'private', 'Heading', 'Scale'));
+  assert.equal(
+    taggedProperty(networkInventoryStage, 'private', 'CardHeader', 'Align')?.Align,
+    'Start',
+  );
   assert.equal(
     networkFrame.patches.filter((patch) => patch.Create?.tag === 'CardContent').length,
     3,
@@ -5293,6 +5297,11 @@ test('volume and network panels render bounded real inventories and controls', (
     'the primary connection-management action appears in the summary band',
   );
   assert.equal(ancestorTags(networkStage, 'Manage connections').includes('CardActions'), false);
+  assert.deepEqual(ancestorTags(networkStage, 'Manage connections').slice(0, 3), [
+    'Row',
+    'Row',
+    'CardContent',
+  ]);
   assert.deepEqual(
     taggedProperty(networkStage, 'Manage connections', 'Button', 'Size'),
     { ControlSize: 'Small' },
@@ -6547,8 +6556,20 @@ test('container controls follow the real daemon lifecycle states', () => {
   assert.equal(taggedProperty(stage, 'More actions', 'Expander', 'Justify')?.Align, 'Center');
   assert.equal(taggedProperty(stage, 'Details', 'Button', 'Variant')?.Variant, 'Filled');
   assert.equal(taggedProperty(stage, 'Details', 'Button', 'Size')?.ControlSize, 'Small');
-  assert.deepEqual(ancestorProperty(stage, 'Details', 'CardActions', 'Align'), {
+  assert.equal(
+    ancestorTags(stage, 'Details').includes('CardActions'),
+    false,
+    'frequent lifecycle actions do not create a detached footer band',
+  );
+  assert.deepEqual(ancestorTags(stage, 'Details').slice(0, 3), ['Row', 'Row', 'CardContent']);
+  assert.deepEqual(ancestorProperty(stage, 'Details', 'CardContent', 'Align'), {
     Align: 'Center',
+  });
+  assert.deepEqual(taggedProperty(stage, 'Create a container', 'Expander', 'Variant'), {
+    Variant: 'Outline',
+  });
+  assert.deepEqual(taggedProperty(stage, 'Create a container', 'Expander', 'Width'), {
+    Length: 'Content',
   });
 
   stage = host();

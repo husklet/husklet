@@ -3,9 +3,6 @@ import {
   Badge,
   Button,
   Card,
-  CardActions,
-  CardContent,
-  CardHeader,
   Column,
   ConfirmAction,
   Expander,
@@ -29,6 +26,7 @@ import {
 } from './container-detail.js';
 import { ContainerRename } from './container-rename.js';
 import type { Resource } from './overview.js';
+import { ResourceSummary } from './resource-summary.js';
 
 const { useEffect, useMemo, useRef, useState } = React;
 
@@ -210,59 +208,59 @@ export function Containers({
         >
           {view.records.map((item) => (
             <Card key={item.id} variant={selected === item.id ? 'filled' : 'outline'} width="fill">
-              <CardHeader
+              <ResourceSummary
                 label={item.name || shortId(item.id)}
                 detail={item.image}
-                align="start"
-                width="fill"
+                status={
+                  <>
+                    <Badge label={item.state} tone={stateTone(item.state)} />
+                    <Text label={`ID ${shortId(item.id)}`} color="text-dim" />
+                  </>
+                }
+                actions={
+                  <>
+                    {selected === item.id &&
+                    inspection.state === 'error' &&
+                    isAuthorityDenial(inspection.error) ? null : (
+                      <Button
+                        label={
+                          selected === item.id
+                            ? inspection.state === 'loading'
+                              ? 'Reading details…'
+                              : inspection.state === 'error'
+                                ? 'Retry details'
+                                : 'Hide details'
+                            : 'Details'
+                        }
+                        variant="filled"
+                        tone="accent"
+                        size="small"
+                        enabled={busy === ''}
+                        onInvoke={() => toggleDetails(item)}
+                      />
+                    )}
+                    {startable(item.state) ? (
+                      <Button
+                        label="Start"
+                        variant="outline"
+                        size="small"
+                        enabled={busy === ''}
+                        onInvoke={() => act('start', item.id, undefined, item.generation)}
+                      />
+                    ) : null}
+                  </>
+                }
+                overflow={
+                  <ContainerActions
+                    api={api}
+                    item={item}
+                    busy={busy}
+                    act={act}
+                    remove={remove}
+                    reload={resource.reload}
+                  />
+                }
               />
-              <CardContent gap={1} align="start" width="fill">
-                <Row gap={1} align="center" justify="start" width="fill" wrap>
-                  <Badge label={item.state} tone={stateTone(item.state)} />
-                  <Text label={`ID ${shortId(item.id)}`} color="text-dim" />
-                </Row>
-              </CardContent>
-              <CardActions gap={1} align="center" justify="start" width="fill">
-                <Row gap={1} wrap align="center" justify="start">
-                  {selected === item.id &&
-                  inspection.state === 'error' &&
-                  isAuthorityDenial(inspection.error) ? null : (
-                    <Button
-                      label={
-                        selected === item.id
-                          ? inspection.state === 'loading'
-                            ? 'Reading details…'
-                            : inspection.state === 'error'
-                              ? 'Retry details'
-                              : 'Hide details'
-                          : 'Details'
-                      }
-                      variant="filled"
-                      tone="accent"
-                      size="small"
-                      enabled={busy === ''}
-                      onInvoke={() => toggleDetails(item)}
-                    />
-                  )}
-                  {startable(item.state) ? (
-                    <Button
-                      label="Start"
-                      variant="outline"
-                      size="small"
-                      enabled={busy === ''}
-                      onInvoke={() => act('start', item.id, undefined, item.generation)}
-                    />
-                  ) : null}
-                </Row>
-                <ContainerActions
-                  api={api}
-                  item={item}
-                  busy={busy}
-                  act={act}
-                  remove={remove}
-                  reload={resource.reload}
-                />
-              </CardActions>
               {selected === item.id ? (
                 <ContainerDetail
                   api={api}

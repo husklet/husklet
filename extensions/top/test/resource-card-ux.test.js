@@ -61,6 +61,9 @@ test('image inventory is a full-width compact summary with secondary inspection 
     ),
     'inspection remains a secondary action rather than competing with image pull',
   );
+  assert.deepEqual(ancestorTags(stage, 'Inspect').slice(0, 3), ['Row', 'Row', 'CardContent']);
+  assert.deepEqual(property(stage, 'Danger zone', 'Variant'), { Variant: 'Outline' });
+  assert.deepEqual(property(stage, 'Danger zone', 'Width'), { Length: 'Content' });
   invoke(stage, 'Inspect');
   await settled();
   assert.ok(
@@ -217,6 +220,27 @@ function currentLabels(stage) {
     return true;
   };
   return [...labels].filter(([node]) => active(node)).map(([, label]) => label);
+}
+
+function ancestorTags(stage, label) {
+  const patches = stage.frames.flatMap((frame) => frame.patches);
+  const tags = new Map(
+    patches.filter((patch) => patch.Create).map((patch) => [patch.Create.id, patch.Create.tag]),
+  );
+  const parents = new Map(
+    patches
+      .filter((patch) => patch.Insert)
+      .map((patch) => [patch.Insert.child, patch.Insert.parent]),
+  );
+  let node = patches
+    .filter((patch) => patch.SetProp?.prop === 'Label' && patch.SetProp.value?.Text === label)
+    .at(-1)?.SetProp.id;
+  const ancestors = [];
+  while (parents.has(node)) {
+    node = parents.get(node);
+    ancestors.push(tags.get(node));
+  }
+  return ancestors;
 }
 
 function labelled(stage, label) {

@@ -3,7 +3,6 @@ import {
   Button,
   Card,
   CardContent,
-  CardHeader,
   Column,
   ConfirmAction,
   EmptyState,
@@ -24,6 +23,7 @@ import {
 } from '@husklet/react';
 import { VolumeDetailsSource, bounded, boundedMessage } from './model.js';
 import type { Resource } from './overview.js';
+import { ResourceSummary } from './resource-summary.js';
 import { AuthorityRecovery } from './authority-recovery.js';
 
 type Inspection = {
@@ -204,12 +204,11 @@ export function Volumes({
               variant={inspection.name === volume.name ? 'filled' : 'outline'}
               width="fill"
             >
-              <CardHeader label={volume.name} detail={volume.driver} align="start" width="fill" />
-              <CardContent>
-                {inspectionNeedsAccess ? (
-                  <AuthorityRecovery resource="volume" onOpenExtensions={onOpenExtensions} />
-                ) : (
-                  <Row>
+              <ResourceSummary
+                label={volume.name}
+                detail={volume.driver}
+                actions={
+                  inspectionNeedsAccess ? null : (
                     <Button
                       label={
                         inspection.name === volume.name && inspection.state === 'error'
@@ -220,12 +219,17 @@ export function Volumes({
                       tone="accent"
                       onInvoke={() => inspect(volume)}
                     />
-                  </Row>
-                )}
-              </CardContent>
+                  )
+                }
+              />
+              {inspectionNeedsAccess ? (
+                <CardContent>
+                  <AuthorityRecovery resource="volume" onOpenExtensions={onOpenExtensions} />
+                </CardContent>
+              ) : null}
               {!inspectionNeedsAccess ? (
                 <CardContent>
-                  <Expander label="Danger zone" width="fill" align="start">
+                  <Expander label="Danger zone" variant="outline" width="content" align="start">
                     <Column gap={1}>
                       <Text
                         label="Removing this volume permanently deletes its stored data."

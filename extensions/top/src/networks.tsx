@@ -36,6 +36,7 @@ import {
   shortId,
 } from './model.js';
 import type { Resource } from './overview.js';
+import { ResourceSummary } from './resource-summary.js';
 import { AuthorityRecovery } from './authority-recovery.js';
 
 type Inspection = {
@@ -379,17 +380,22 @@ export function Networks({
                   : `${membership.containers.length} connected`;
               return (
                 <Card key={id} width="fill" variant="outline">
-                  <CardContent gap={1}>
-                    <Row gap={2} align="center" justify="start" wrap width="fill">
-                      <Column gap={0}>
-                        <Heading label={network.name} scale="body" />
-                        <Text label={`${network.driver} · ${network.scope}`} color="text-dim" />
-                      </Column>
-                      <Badge
-                        label={membershipLabel}
-                        tone={!membership || membership.truncated ? 'warning' : 'neutral'}
-                      />
-                      {!inspectionNeedsAccess ? (
+                  <ResourceSummary
+                    label={network.name}
+                    detail={`${network.driver} · ${network.scope}`}
+                    status={
+                      <>
+                        <Badge
+                          label={membershipLabel}
+                          tone={!membership || membership.truncated ? 'warning' : 'neutral'}
+                        />
+                        {network.kind === 'builtin' ? (
+                          <Badge label="Built-in · protected" tone="accent" />
+                        ) : null}
+                      </>
+                    }
+                    actions={
+                      inspectionNeedsAccess ? null : (
                         <Button
                           key={`manage-${id}`}
                           label={
@@ -406,21 +412,20 @@ export function Networks({
                           enabled={inspection.state !== 'loading'}
                           onInvoke={() => inspect(network)}
                         />
+                      )
+                    }
+                  />
+                  {membershipUnknown ? (
+                    <CardContent>
+                      {membershipUnknown ? (
+                        <Text
+                          label="Attachment status unknown for this container · Manage connections to resolve"
+                          color="warning"
+                          wrap
+                        />
                       ) : null}
-                    </Row>
-                    {network.kind === 'builtin' ? (
-                      <Row>
-                        <Badge label="Built-in · protected" tone="accent" />
-                      </Row>
-                    ) : null}
-                    {membershipUnknown ? (
-                      <Text
-                        label="Attachment status unknown for this container · Manage connections to resolve"
-                        color="warning"
-                        wrap
-                      />
-                    ) : null}
-                  </CardContent>
+                    </CardContent>
+                  ) : null}
                   {disconnectRequest?.network === id ? (
                     <DisconnectConsent
                       key="disconnect-consent"
@@ -510,7 +515,7 @@ export function Networks({
                   </Column>
                   {network.kind !== 'builtin' ? (
                     <CardContent key="danger-zone">
-                      <Expander label="Danger zone">
+                      <Expander label="Danger zone" variant="outline" width="content">
                         <Column gap={1}>
                           <Text
                             label="Removing this network disconnects it from the workspace and cannot be undone."

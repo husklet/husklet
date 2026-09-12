@@ -4,7 +4,6 @@ import {
   Button,
   Card,
   CardContent,
-  CardHeader,
   Column,
   ConfirmAction,
   Expander,
@@ -31,6 +30,7 @@ import {
   shortId,
 } from './model.js';
 import type { Resource } from './overview.js';
+import { ResourceSummary } from './resource-summary.js';
 
 const DETAIL_SCHEMA = [
   { key: 'property', title: 'Property', width: { chars: 20 } },
@@ -263,42 +263,86 @@ export function Executions({
             variant={selected === item.id ? 'filled' : 'outline'}
             width="fill"
           >
-            <Row gap={2} align="center" justify="start" wrap width="fill">
-              <CardHeader
-                label={item.command?.join(' ') || shortId(item.id)}
-                detail={`container ${shortId(item.container_id)}`}
-                align="start"
-                width="fill"
-                grow
-              />
-              <Row gap={1} align="center" wrap>
-                <Button
-                  label={selected === item.id ? 'Hide details' : 'Details'}
-                  size="small"
-                  variant="filled"
-                  tone="accent"
-                  enabled={!busy}
-                  onInvoke={() => (selected === item.id ? setSelected('') : void inspect(item.id))}
+            <ResourceSummary
+              label={item.command?.join(' ') || shortId(item.id)}
+              detail={`container ${shortId(item.container_id)}`}
+              status={
+                <Badge
+                  label={item.running ? 'running' : `exited ${item.exit_code}`}
+                  tone={item.running ? 'positive' : 'neutral'}
                 />
-                <Button
-                  label={busy === `logs:${item.id}` ? 'Loading logs…' : 'Load output'}
-                  size="small"
-                  enabled={!busy}
-                  onInvoke={() => void logs(item.id)}
-                />
-                <Button
-                  label={busy === `wait:${item.id}` ? 'Waiting…' : 'Wait up to 5s'}
-                  size="small"
-                  enabled={!busy && item.running}
-                  onInvoke={() => void wait(item.id)}
-                />
-              </Row>
-            </Row>
+              }
+              actions={
+                <>
+                  <Button
+                    label={selected === item.id ? 'Hide details' : 'Details'}
+                    size="small"
+                    variant="filled"
+                    tone="accent"
+                    enabled={!busy}
+                    onInvoke={() =>
+                      selected === item.id ? setSelected('') : void inspect(item.id)
+                    }
+                  />
+                  <Button
+                    label={busy === `logs:${item.id}` ? 'Loading logs…' : 'Load output'}
+                    size="small"
+                    enabled={!busy}
+                    onInvoke={() => void logs(item.id)}
+                  />
+                  <Button
+                    label={busy === `wait:${item.id}` ? 'Waiting…' : 'Wait up to 5s'}
+                    size="small"
+                    enabled={!busy && item.running}
+                    onInvoke={() => void wait(item.id)}
+                  />
+                </>
+              }
+              overflow={
+                <Expander
+                  label="More actions"
+                  variant="outline"
+                  width="content"
+                  align="start"
+                  tooltip="Terminate this process or remove its completed execution record"
+                >
+                  <Column gap={1}>
+                    <Text
+                      label={
+                        item.running
+                          ? 'Terminate the running process.'
+                          : 'Remove this completed execution record and its captured output.'
+                      }
+                      color="text-dim"
+                      wrap
+                    />
+                    <Row gap={1} wrap>
+                      <ConfirmAction
+                        authorityKey={`execution:${item.id}:SIGTERM`}
+                        label="Terminate"
+                        confirmLabel="Confirm SIGTERM"
+                        pendingLabel="Confirm SIGTERM"
+                        question={`Send SIGTERM to execution ${item.id}?`}
+                        enabled={!busy && item.running}
+                        size="small"
+                        onConfirm={() => terminate(item)}
+                      />
+                      <ConfirmAction
+                        authorityKey={`execution:${item.id}:remove`}
+                        label="Remove record"
+                        confirmLabel="Confirm removal"
+                        pendingLabel="Confirm removal"
+                        question={`Remove execution record ${shortId(item.id)}?`}
+                        enabled={!busy && !item.running}
+                        size="small"
+                        onConfirm={() => remove(item)}
+                      />
+                    </Row>
+                  </Column>
+                </Expander>
+              }
+            />
             <CardContent>
-              <Badge
-                label={item.running ? 'running' : `exited ${item.exit_code}`}
-                tone={item.running ? 'positive' : 'neutral'}
-              />
               {selected === item.id ? (
                 <ExecutionDetail
                   inspection={inspection}
@@ -307,49 +351,6 @@ export function Executions({
                   onRetry={() => inspect(item.id)}
                 />
               ) : null}
-            </CardContent>
-            <CardContent>
-              <Expander
-                label="More actions"
-                variant="outline"
-                width="content"
-                align="start"
-                tooltip="Terminate this process or remove its completed execution record"
-              >
-                <Column gap={1}>
-                  <Text
-                    label={
-                      item.running
-                        ? 'Terminate the running process.'
-                        : 'Remove this completed execution record and its captured output.'
-                    }
-                    color="text-dim"
-                    wrap
-                  />
-                  <Row gap={1} wrap>
-                    <ConfirmAction
-                      authorityKey={`execution:${item.id}:SIGTERM`}
-                      label="Terminate"
-                      confirmLabel="Confirm SIGTERM"
-                      pendingLabel="Confirm SIGTERM"
-                      question={`Send SIGTERM to execution ${item.id}?`}
-                      enabled={!busy && item.running}
-                      size="small"
-                      onConfirm={() => terminate(item)}
-                    />
-                    <ConfirmAction
-                      authorityKey={`execution:${item.id}:remove`}
-                      label="Remove record"
-                      confirmLabel="Confirm removal"
-                      pendingLabel="Confirm removal"
-                      question={`Remove execution record ${shortId(item.id)}?`}
-                      enabled={!busy && !item.running}
-                      size="small"
-                      onConfirm={() => remove(item)}
-                    />
-                  </Row>
-                </Column>
-              </Expander>
             </CardContent>
           </Card>
         ))}

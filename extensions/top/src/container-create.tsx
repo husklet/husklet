@@ -670,6 +670,10 @@ export function ContainerCreate({
         label={prominent ? 'Container setup' : label}
         expanded={prominent ? expanded : undefined}
         visible={!prominent || expanded}
+        variant="outline"
+        width="content"
+        align="start"
+        tooltip="Configure and start a new container"
         onExpand={(event) => setExpanded(Boolean(event.value))}
       >
         <Card variant={'outline'}>
