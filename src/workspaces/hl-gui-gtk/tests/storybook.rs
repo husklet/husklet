@@ -398,7 +398,7 @@ mod unix {
         }
         if story == "Button" {
             let search = find::<gtk::Entry>(&root, |entry| {
-                entry.placeholder_text().as_deref() == Some("Search components")
+                entry.placeholder_text().as_deref() == Some("Search all pages")
             });
             let width = search.width();
             search.set_text("Se");
@@ -1119,6 +1119,16 @@ mod unix {
                 if width == 600 {
                     assert!(!paned.is_visible(), "{story} left its desktop sidebar visible at 600px");
                     assert!(compact.is_visible(), "{story} hid its compact selector at 600px");
+                    let compact_selector = descendants::<gtk::ToggleButton>(&compact)
+                        .into_iter()
+                        .find(|button| button.has_css_class("hl-select"))
+                        .expect("compact navigation keeps its page selector");
+                    assert!(
+                        compact_selector.width() >= 500,
+                        "{story} clipped its compact page selector to {}px inside a {}px compact row instead of using the available width",
+                        compact_selector.width(),
+                        compact.width(),
+                    );
                     assert!(
                         layout.last_child().is_some_and(|child| child.eq(body)),
                         "{story} did not give the shared document the compact width"
@@ -1217,7 +1227,7 @@ mod unix {
                 .collect::<Vec<_>>();
             assert_eq!(
                 navigation_headers.len(),
-                4,
+                2,
                 "Storybook renders one semantic heading for each visible navigation group"
             );
             let mut header_labels = navigation_headers
@@ -1225,7 +1235,7 @@ mod unix {
                 .map(|header| header.text().to_string())
                 .collect::<Vec<_>>();
             header_labels.sort();
-            assert_eq!(header_labels, ["Browse", "Buttons", "Component family", "Components"]);
+            assert_eq!(header_labels, ["Buttons", "Library"]);
             for header in &navigation_headers {
                 assert_eq!(header.accessible_role(), gtk::AccessibleRole::Heading);
                 assert_eq!(header.height(), 16, "Storybook group headings remain compact");

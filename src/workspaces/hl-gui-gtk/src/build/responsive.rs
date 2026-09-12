@@ -200,7 +200,15 @@ pub(crate) fn attach(widget: &gtk::Widget, child: &gtk::Widget, index: usize) ->
     };
     let imp = pane.imp();
     match index {
-        0 => imp.layout().prepend(child),
+        0 => {
+            // Compact navigation is the header for the shared body. Give it
+            // the complete cross-axis allocation; otherwise GTK centers the
+            // child's natural width and long page names are clipped even when
+            // their controls explicitly request `width=fill`.
+            child.set_hexpand(true);
+            child.set_halign(gtk::Align::Fill);
+            imp.layout().prepend(child);
+        }
         1 => imp.paned().set_start_child(Some(child)),
         2 => imp.paned().set_end_child(Some(child)),
         _ => return false,

@@ -224,7 +224,7 @@ export function Sidebar({
   return (
     <Scroll width={{ chars: 26 }} height={'fill'}>
       <Column pad={1} gap={1}>
-        <ListSubheader key={'browse'} label={'Browse'} />
+        <ListSubheader key={'browse'} label={'Library'} />
         <Select
           key={'mode'}
           value={mode}
@@ -234,16 +234,12 @@ export function Sidebar({
           ]}
           onChange={(event) => onMode(event.value as NavigationMode)}
         />
-        <ListSubheader
-          key={'find'}
-          label={'Components'}
-          tooltip={'search every component and product pattern'}
-        />
         <Entry
           key={'search'}
           width={'fill'}
           value={search}
-          placeholder={'Search components'}
+          placeholder={'Search all pages'}
+          tooltip={'search every component and product pattern'}
           onChange={(event) => setSearch(String(event.value ?? '').slice(0, 80))}
         />
         {query.length > 0
@@ -276,14 +272,10 @@ export function Sidebar({
           : [
               ...(mode === 'component'
                 ? [
-                    <ListSubheader
-                      key={'components'}
-                      label={'Component family'}
-                      tooltip={'choose one bounded catalogue family'}
-                    />,
                     <Select
                       key={'family'}
                       width={'fill'}
+                      tooltip={'choose one bounded catalogue family'}
                       value={family.name}
                       choices={families.map((candidate) => ({
                         value: candidate.name,
