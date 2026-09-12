@@ -8,10 +8,12 @@ use crate::config::WorkspaceConfig;
 /// Ordered identities and release-matched image references for a new workspace.
 ///
 /// This order is also their default order in the workspace sidebar.
-pub const DEFAULT_EXTENSIONS: [(&str, &str); 1] = [(
-    "top",
-    concat!("ghcr.io/husklet/husklet/extension-top:", env!("CARGO_PKG_VERSION")),
-)];
+const TOP_IMAGE: &str = match option_env!("HL_TOP_IMAGE") {
+    Some(reference) => reference,
+    None => concat!("ghcr.io/husklet/husklet/extension-top:", env!("CARGO_PKG_VERSION")),
+};
+
+pub const DEFAULT_EXTENSIONS: [(&str, &str); 1] = [("top", TOP_IMAGE)];
 
 /// Acquires, grants, records, and enables the trusted first-party control surface.
 ///
@@ -21,7 +23,22 @@ pub const DEFAULT_EXTENSIONS: [(&str, &str); 1] = [(
 /// the same tag, and the current digest must replace it before the workspace is
 /// allowed to start.
 pub fn install_defaults(workspace: &WorkspaceConfig) -> Result<(), String> {
-    install_defaults_with(workspace, Candidate::read_fresh)
+    install_defaults_with(workspace, |workspace, reference| {
+        if immutable_release_reference(reference) {
+            Candidate::read(workspace, reference)
+        } else {
+            Candidate::read_fresh(workspace, reference)
+        }
+    })
+}
+
+fn immutable_release_reference(reference: &str) -> bool {
+    reference.rsplit_once("@sha256:").is_some_and(|(_, digest)| {
+        digest.len() == 64
+            && digest
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    })
 }
 
 fn install_defaults_with(
@@ -140,11 +157,27 @@ mod tests {
     fn defaults_are_release_matched_and_sidebar_ordered() {
         assert_eq!(DEFAULT_EXTENSIONS[0].0, "top");
         for (name, reference) in DEFAULT_EXTENSIONS {
-            assert_eq!(
-                reference,
-                format!("ghcr.io/husklet/husklet/extension-{name}:{}", env!("CARGO_PKG_VERSION"))
-            );
+            let fallback = format!("ghcr.io/husklet/husklet/extension-{name}:{}", env!("CARGO_PKG_VERSION"));
+            let expected = option_env!("HL_TOP_IMAGE").unwrap_or(&fallback);
+            assert_eq!(reference, expected);
+            if option_env!("HL_TOP_IMAGE").is_some() {
+                assert!(immutable_release_reference(reference));
+            }
         }
+    }
+
+    #[test]
+    fn only_a_complete_sha256_reference_is_immutable() {
+        let digest = "a".repeat(64);
+        assert!(immutable_release_reference(&format!(
+            "registry.test/top:0.4.0@sha256:{digest}"
+        )));
+        assert!(!immutable_release_reference("registry.test/top:0.4.0"));
+        assert!(!immutable_release_reference("registry.test/top:0.4.0@sha256:abc"));
+        assert!(!immutable_release_reference(&format!(
+            "registry.test/top:0.4.0@sha256:{}",
+            "z".repeat(64)
+        )));
     }
 
     #[test]

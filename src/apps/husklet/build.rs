@@ -46,6 +46,11 @@ impl IntoIterator for RuntimeIdentityInputs {
 }
 
 fn main() {
+    // The release bundle injects immutable first-party image references. Cargo
+    // must rebuild when either changes rather than reusing an executable that
+    // embedded a previous release's image identity.
+    println!("cargo:rerun-if-env-changed=HL_TOP_IMAGE");
+    println!("cargo:rerun-if-env-changed=HL_STORYBOOK_IMAGE");
     let crate_root = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap());
     let workspace = crate_root.join("../../..");
     let inputs = [

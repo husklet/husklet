@@ -30,8 +30,19 @@ trap 'rm -rf "$APP"' EXIT
 log() { printf '\033[1;34m[bundle]\033[0m %s\n' "$*"; }
 die() { printf '\033[1;31m[bundle] %s\033[0m\n' "$*" >&2; exit 1; }
 
+require_pinned_image() {
+  local variable="$1"
+  local reference="${!variable:-}"
+  [[ "$reference" =~ @sha256:[0-9a-f]{64}$ ]] \
+    || die "$variable must name the published version at an immutable sha256 digest"
+}
+
 [ "$(uname)" = "Darwin" ] || die "must run on macOS"
 [ -n "${HL_GTK4:-}" ] || die "run inside the nix dev shell: nix develop . --command src/apps/husklet/package/bundle.sh"
+if [ -n "$BUNDLE_ID" ]; then
+  require_pinned_image HL_TOP_IMAGE
+  require_pinned_image HL_STORYBOOK_IMAGE
+fi
 command -v dylibbundler >/dev/null || die "dylibbundler not found (nix dev shell)"
 for tool in gdk-pixbuf-query-loaders glib-compile-schemas gtk4-update-icon-cache; do
   command -v "$tool" >/dev/null || die "$tool not found (nix dev shell)"

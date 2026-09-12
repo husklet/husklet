@@ -57,7 +57,10 @@ node -e '
 ' "$root"
 
 workflow="$root/.github/workflows/release.yml"
-expect_literal .github/workflows/release.yml '              export HL_STORYBOOK_IMAGE="ghcr.io/$GITHUB_REPOSITORY/extension-storybook:$RELEASE_VERSION"'
+expect_literal .github/workflows/release.yml '          export HL_TOP_IMAGE="$(.github/scripts/resolve-published-image.sh "$top_reference")"'
+expect_literal .github/workflows/release.yml '          export HL_STORYBOOK_IMAGE="$(.github/scripts/resolve-published-image.sh "$storybook_reference")"'
+expect_literal src/apps/husklet/package/bundle.sh '  require_pinned_image HL_TOP_IMAGE'
+expect_literal src/apps/husklet/package/bundle.sh '  require_pinned_image HL_STORYBOOK_IMAGE'
 expect_literal .github/workflows/release.yml '        extension: [storybook, top]'
 expect_literal .github/workflows/release.yml '        run: .github/scripts/verify-anonymous-extension-image.sh "$IMAGE"'
 node -e '
@@ -126,5 +129,6 @@ for extension in storybook top; do
 done
 
 "$root/.github/scripts/test-verify-anonymous-extension-image.sh"
+"$root/.github/scripts/test-resolve-published-image.sh"
 
 echo "first-party image Dockerfile and manifest contracts are valid"

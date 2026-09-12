@@ -539,12 +539,15 @@ jobs:
           # built in, and `$RELEASE_VERSION` because it reaches the inner shell through the
           # step's own `env:` block.
           # shellcheck disable=SC2016
+          top_reference="ghcr.io/$GITHUB_REPOSITORY/extension-top:$RELEASE_VERSION"
+          storybook_reference="ghcr.io/$GITHUB_REPOSITORY/extension-storybook:$RELEASE_VERSION"
+          export HL_TOP_IMAGE="$(.github/scripts/resolve-published-image.sh "$top_reference")"
+          export HL_STORYBOOK_IMAGE="$(.github/scripts/resolve-published-image.sh "$storybook_reference")"
           nix --extra-experimental-features 'nix-command flakes' develop . --command \
             bash -euo pipefail -c '
               export CARGO_TARGET_DIR="$PWD/target-macos"
               export HL_BUNDLE_TARGET="$PWD/target"
               export HL_VERSION="$RELEASE_VERSION"
-              export HL_STORYBOOK_IMAGE="ghcr.io/$GITHUB_REPOSITORY/extension-storybook:$RELEASE_VERSION"
               src/apps/husklet/package/bundle.sh "$RELEASE_VERSION" com.husklet.app
               src/apps/husklet/package/make-dmg.sh "$RELEASE_VERSION"
             '
