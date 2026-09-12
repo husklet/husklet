@@ -72,6 +72,9 @@ export function NumberEntryWorkbench() {
           <FieldSpecimen label="Enabled" width={{ chars: 14 }}>
             <NumberEntry value={8} minimum={1} maximum={16} width={{ chars: 14 }} />
           </FieldSpecimen>
+          <FieldSpecimen label="Invalid" helper="Enter 2 to 16 workers" width={{ chars: 14 }}>
+            <NumberEntry value={1} minimum={2} maximum={16} tone="danger" width={{ chars: 14 }} />
+          </FieldSpecimen>
           <FieldSpecimen
             label="Disabled"
             helper="Keep the retained value visible"

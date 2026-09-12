@@ -237,11 +237,11 @@ catalogue! {
     Search: leaf, props[Value, Placeholder, Enabled], triggers[Change, Submit, Key, Focus, Context],
     CommandPalette: children, props[Value, Placeholder, Gap, Enabled], triggers[Change, Submit, Key, Focus, Context],
     TagInput: children, props[Value, Placeholder, Gap, Enabled], triggers[Change, Submit, Key, Focus, Context],
-    NumberEntry: leaf, props[Value, Minimum, Maximum, Step, Enabled], triggers[Change, Key, Focus, Context],
-    TextArea: leaf, props[Value, Monospace, Enabled], triggers[Change, Key, Focus, Context],
+    NumberEntry: leaf, props[Value, Minimum, Maximum, Step, Enabled, Tone], triggers[Change, Key, Focus, Context],
+    TextArea: leaf, props[Value, Monospace, Enabled, Tone], triggers[Change, Key, Focus, Context],
     PasswordEntry: leaf, props[Value, Placeholder, Secret, Enabled], triggers[Change, Key, Focus, Context],
     Autocomplete: leaf, props[Choices, Enabled], triggers[Change, Select, Key, Focus, Context],
-    TextField: children, props[Label, Value, Detail, Placeholder, Gap, Enabled], triggers[],
+    TextField: children, props[Label, Value, Detail, Placeholder, Gap, Enabled, Tone], triggers[],
     InputAdornment: children, props[Label, Gap], triggers[],
     Slider: leaf, props[Value, Minimum, Maximum, Step, Enabled], triggers[Change],
     DatePicker: leaf, props[Value, Enabled], triggers[],
@@ -260,7 +260,7 @@ catalogue! {
     Checkbox: leaf, props[Label, Checked, Indeterminate, Selected, Enabled], triggers[Toggle],
     Radio: leaf, props[Label, Checked, Selected, Enabled], triggers[Toggle],
     RadioGroup: children, props[Gap, Orientation], triggers[],
-    Select: leaf, props[Value, Choices, Enabled], triggers[Change, Select, Key, Focus],
+    Select: leaf, props[Value, Choices, Enabled, Tone], triggers[Change, Select, Key, Focus],
 
     // Lists: rows composed from parts.
     List: children, props[], triggers[],

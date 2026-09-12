@@ -94,6 +94,9 @@ export function SelectWorkbench() {
           >
             <Select value="bash" choices={shells} enabled={false} width={{ chars: 30 }} />
           </FieldSpecimen>
+          <FieldSpecimen label="Invalid" helper="Choose a default shell" width={{ chars: 30 }}>
+            <Select value="" choices={shells} tone="danger" width={{ chars: 30 }} />
+          </FieldSpecimen>
           <FieldSpecimen
             label="Long label"
             helper="The value remains bounded by the field"

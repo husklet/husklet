@@ -56,7 +56,8 @@ fn controls(css: &mut String, theme: &Theme) {
          entry:hover, spinbutton:hover, dropdown:hover > button {{ border-color: {dim}; }}\n\
          entry:focus-within, spinbutton:focus-within, textview:focus-within {{ border-color: {accent}; box-shadow: 0 0 0 1px {accent}; }}\n\
          entry:disabled, spinbutton:disabled, textview:disabled, dropdown:disabled, .hl-select:disabled {{ opacity: .62; background: {surface}; }}\n\
-         entry.tone-danger, .hl-entry.tone-danger {{ border-color: {danger}; box-shadow: 0 0 0 1px {danger}; }}\n\
+         entry.tone-danger, .hl-entry.tone-danger, spinbutton.tone-danger, .choice.tone-danger, \
+         scrolledwindow.tone-danger textview, .tone-danger .hl-field {{ border-color: {danger}; box-shadow: 0 0 0 1px {danger}; }}\n\
          scrolledwindow, viewport, listview, columnview, notebook, frame, paned, expander {{ \
            background: transparent; color: {text}; }}\n\
          paned.hl-responsive-divider.horizontal > separator {{ min-width: 8px; min-height: 28px; \
@@ -518,7 +519,7 @@ mod tests {
         ));
         assert!(!css.contains("checkbutton:focus, checkbutton:focus-visible {"));
         assert!(css.contains(
-            "entry.tone-danger, .hl-entry.tone-danger { border-color: #ff9090; box-shadow: 0 0 0 1px #ff9090;"
+            "entry.tone-danger, .hl-entry.tone-danger, spinbutton.tone-danger, .choice.tone-danger, scrolledwindow.tone-danger textview, .tone-danger .hl-field { border-color: #ff9090; box-shadow: 0 0 0 1px #ff9090;"
         ));
         assert!(css.contains(".hl-table { background: #0f1115; border: 1px solid #323843;"));
         assert!(css.contains(".hl-tablehead .hl-tablecell { background: #21252d;"));

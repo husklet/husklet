@@ -29,9 +29,10 @@ test('NumberEntry documents bounds, steps, and availability as live controls', (
     'API',
   ]);
   const controls = creations(frame, 'NumberEntry').map((id) => properties(frame, id));
-  assert.equal(controls.length, 7);
+  assert.equal(controls.length, 8);
   assert(controls.some((props) => props.Step?.Number === 0.25));
   assert(controls.some((props) => props.Enabled?.Flag === false));
+  assert(controls.some((props) => props.Tone?.Tone === 'Danger'));
 });
 
 test('NumberEntry reports and retains a numeric controlled value', () => {

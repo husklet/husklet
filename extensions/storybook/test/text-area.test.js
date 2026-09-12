@@ -32,9 +32,10 @@ test('TextArea owns a focused multi-line component reference', () => {
     'API',
   ]);
   const editors = creations(frame, 'TextArea').map((id) => properties(frame, id));
-  assert.equal(editors.length, 5);
+  assert.equal(editors.length, 6);
   assert(editors.some((props) => props.Monospace?.Flag === false));
   assert(editors.some((props) => props.Enabled?.Flag === false));
+  assert(editors.some((props) => props.Tone?.Tone === 'Danger'));
 });
 
 test('TextArea retains its controlled multi-line Change value and visible count', () => {

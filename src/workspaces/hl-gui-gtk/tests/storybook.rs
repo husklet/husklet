@@ -10,9 +10,9 @@ mod unix {
 
     use gtk::prelude::*;
     use hl_extension::{
-        codec, Capability, ChannelId, ExtensionName, Frame, Grant, Hello, Kind, Reply, Request, Welcome, Wire, PROTOCOL,
+        Capability, ChannelId, ExtensionName, Frame, Grant, Hello, Kind, PROTOCOL, Reply, Request, Welcome, Wire, codec,
     };
-    use hl_gui::{Renderer as _, SourceMutation, Theme, Tree, LOG_VIEW_CHARACTER_LIMIT};
+    use hl_gui::{LOG_VIEW_CHARACTER_LIMIT, Renderer as _, SourceMutation, Theme, Tree};
     use hl_gui_gtk::Surface;
 
     const STORIES: &[&str] = &[
@@ -657,6 +657,12 @@ mod unix {
             capture_story(&realized_window, "Switch focused on");
         }
         if story == "Select" {
+            let invalid = descendants::<gtk::ToggleButton>(&root)
+                .into_iter()
+                .find(|choice| choice.has_css_class("choice") && choice.has_css_class("tone-danger"))
+                .expect("Select invalid specimen reaches native danger chrome");
+            assert!(invalid.is_sensitive(), "invalid Select remains correctable");
+            capture_widget(&realized_window, invalid.upcast_ref(), "Select invalid");
             let focus = find::<gtk::ToggleButton>(&root, |button| {
                 button.tooltip_text().as_deref() == Some("Focused shell selector")
             });
@@ -777,6 +783,17 @@ mod unix {
                 editor.height()
             );
             assert!(view.grab_focus(), "TextArea accepts keyboard focus");
+            let invalid = descendants::<gtk::ScrolledWindow>(&root)
+                .into_iter()
+                .find(|window| window.has_css_class("tone-danger"))
+                .expect("TextArea invalid specimen reaches its native editor chrome");
+            assert!(
+                invalid
+                    .child()
+                    .is_some_and(|child| child.downcast_ref::<gtk::TextView>().is_some()),
+                "TextArea danger chrome contains the editable rather than replacing it"
+            );
+            capture_widget(&realized_window, invalid.upcast_ref(), "TextArea invalid");
             capture_story(&realized_window, "TextArea before wide");
             realized_window.set_size_request(600, 800);
             realized_window.set_default_size(600, 800);
@@ -803,6 +820,12 @@ mod unix {
             assert_eq!(fractional.digits(), 2);
             assert_eq!(fractional.value(), 1.5);
             assert_eq!(fractional.text(), "1.50");
+            let invalid = descendants::<gtk::SpinButton>(&root)
+                .into_iter()
+                .find(|spin| spin.has_css_class("tone-danger"))
+                .expect("NumberEntry invalid specimen reaches native danger chrome");
+            assert!(invalid.is_sensitive(), "invalid NumberEntry remains correctable");
+            capture_widget(&realized_window, invalid.upcast_ref(), "NumberEntry invalid");
             assert!(counter.grab_focus(), "NumberEntry accepts keyboard focus");
             capture_story(&realized_window, "NumberEntry before wide");
             realized_window.set_size_request(600, 800);
@@ -1506,9 +1529,11 @@ mod unix {
                 7,
                 "Card workbench must render seven bounded live specimens"
             );
-            assert!(cards
-                .iter()
-                .all(|card| card.accessible_role() != gtk::AccessibleRole::Generic));
+            assert!(
+                cards
+                    .iter()
+                    .all(|card| card.accessible_role() != gtk::AccessibleRole::Generic)
+            );
             for card in &cards {
                 let header = card
                     .label_widget()

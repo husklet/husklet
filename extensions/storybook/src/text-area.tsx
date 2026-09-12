@@ -90,6 +90,15 @@ export function TextAreaWorkbench() {
               height={{ step: 24 }}
             />
           </FieldSpecimen>
+          <FieldSpecimen label="Invalid" helper="A command is required" width={{ chars: 36 }}>
+            <TextArea
+              value={'build:\n  command:'}
+              monospace
+              tone="danger"
+              width={{ chars: 36 }}
+              height={{ step: 24 }}
+            />
+          </FieldSpecimen>
         </SpecimenGrid>
       </DocumentationSection>
 

@@ -146,9 +146,15 @@ test('Select teaches controlled selection and bounded states before its API', ()
   const labels = frame.patches
     .filter((patch) => patch.SetProp?.prop === 'Label')
     .map((patch) => patch.SetProp.value?.Text);
-  for (const state of ['Empty', 'Focused', 'Selected', 'Disabled', 'Long label']) {
+  for (const state of ['Empty', 'Focused', 'Selected', 'Disabled', 'Invalid', 'Long label']) {
     assert(labels.includes(state), `Select is missing ${state}`);
   }
+  assert(
+    frame.patches.some(
+      (patch) => patch.SetProp?.prop === 'Tone' && patch.SetProp.value?.Tone === 'Danger',
+    ),
+    'Select is missing its invalid control tone',
+  );
   const headings = created(frame.patches, 'Heading').flatMap((id) =>
     frame.patches
       .filter((patch) => patch.SetProp?.id === id && patch.SetProp.prop === 'Label')
@@ -237,6 +243,6 @@ test('Select state specimens declare matching bounded widths in source', () => {
     /<DocumentationSection title="States">([\s\S]*?)<\/DocumentationSection>/,
   )?.[1];
   assert.ok(states, 'Select states section is missing');
-  assert.equal(states.match(/width=\{\{ chars: 30 \}\}/g)?.length, 10);
+  assert.equal(states.match(/width=\{\{ chars: 30 \}\}/g)?.length, 12);
   assert.doesNotMatch(states, /width="fill"/);
 });
