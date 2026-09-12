@@ -134,6 +134,7 @@ groups
   .get('Extensions')
   .push(
     '- `host.extensions.waitForAcquisition(...)` — waits for an exact acquisition job revision to advance, then reads its authoritative full status; requires `extensions:install`.',
+    '- `host.extensions.cancelAcquisitionAndWait(job, revision, options)` — subscribes before cancellation, rechecks the exact revision, and returns only after authoritative `cancelled` status or an explicit timeout; `options.signal` aborts observation and releases the subscription; requires `extensions:install`.',
     '- `host.extensions.enableAndWait(...)` — arms inventory before enabling an exact installed digest, then verifies its durable enabled state; requires `extensions:read` and `extensions:control`.',
     '- `host.extensions.disableAndWait(...)` — arms inventory before disabling an exact installed digest, then verifies durable standby; provider withdrawal remains separately observable; requires `extensions:read` and `extensions:control`.',
     '- `host.extensions.retryAndWait(...)` — arms inventory before retrying an exact faulted digest, rejects replacement/disappearance, then verifies durable duty; requires `extensions:read` and `extensions:control`.',

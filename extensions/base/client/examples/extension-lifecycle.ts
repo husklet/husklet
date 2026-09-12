@@ -24,7 +24,11 @@ let host = workspace(session);
 const catalogue = await host.extensions.catalogue();
 const cancelled = await host.extensions.startAcquisition(configuration.reference);
 const cancellation = await host.extensions.acquisition(cancelled.job);
-await host.extensions.cancelAcquisition(cancelled.job, cancellation.revision);
+const cancellationResult = await host.extensions.cancelAcquisitionAndWait(
+  cancelled.job,
+  cancellation.revision,
+);
+if (!cancellationResult.changed) throw new Error('acquisition cancellation was not observed');
 
 // Retrying is deliberately a new immutable acquisition job: the old cancelled
 // job remains inspectable and cannot be confused with later progress.

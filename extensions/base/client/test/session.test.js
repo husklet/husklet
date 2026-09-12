@@ -5170,6 +5170,98 @@ test('real Unix acquisition wait reconnects from authoritative status without a 
   }
 });
 
+test('real Unix acquisition cancellation proves exact terminal status across fragmented frames', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-acquisition-cancel-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const calls = [];
+  const connections = new Set();
+  let cancelled = false;
+  const fragmented = (socket, value) => {
+    const frame = encode(value);
+    socket.write(frame.subarray(0, 3));
+    socket.write(frame.subarray(3, 11));
+    socket.write(frame.subarray(11));
+  };
+  const status = () => ({
+    job: 'job-cancel',
+    reference: 'registry.example/tool:1',
+    revision: cancelled ? 5 : 4,
+    state: cancelled ? 'cancelled' : 'inspecting',
+    progress: null,
+    candidate: null,
+    error: null,
+  });
+  const server = net.createServer((socket) => {
+    connections.add(socket);
+    socket.on('close', () => connections.delete(socket));
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.kind !== KIND.request) continue;
+        calls.push(frame.payload.call);
+        if (frame.payload.call === 'extension_acquisition_status') {
+          fragmented(socket, {
+            channel: frame.channel,
+            kind: KIND.response,
+            payload: { reply: 'extension_acquisition', with: status() },
+          });
+        } else if (frame.payload.call === 'extension_acquisition_cancel') {
+          assert.deepEqual(frame.payload.with, { job: 'job-cancel', revision: 4 });
+          cancelled = true;
+          fragmented(socket, {
+            channel: 21,
+            kind: KIND.event,
+            payload: {
+              snapshot: 'extension_acquisitions',
+              of: { job: 'job-cancel', revision: 5, state: 'cancelled', coalesced: 0 },
+            },
+          });
+          fragmented(socket, {
+            channel: frame.channel,
+            kind: KIND.response,
+            payload: { reply: 'done' },
+          });
+        } else {
+          fragmented(socket, {
+            channel: frame.channel,
+            kind: KIND.response,
+            payload: { reply: 'done' },
+          });
+        }
+      }
+    });
+    fragmented(socket, {
+      channel: CONTROL,
+      kind: KIND.open,
+      payload: { protocol: 1, peer: 'acquisition-cancel', granted: ['extensions:install'] },
+    });
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    const extensions = workspace(session).extensions;
+    const result = await extensions.cancelAcquisitionAndWait('job-cancel', 4, {
+      timeoutMs: 100,
+    });
+    assert.equal(result.changed, true);
+    assert.equal(result.status.state, 'cancelled');
+    assert.equal(result.status.revision, 5);
+    assert.deepEqual(calls, [
+      'event_subscribe',
+      'extension_acquisition_status',
+      'extension_acquisition_cancel',
+      'extension_acquisition_status',
+      'event_unsubscribe',
+    ]);
+    assert.deepEqual(await extensions.acquisition('job-cancel'), status());
+    await session.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('real Unix acquisition rejects impossible progress without poisoning the session', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-acquisition-progress-'));
   const socketPath = path.join(directory, 'host.sock');

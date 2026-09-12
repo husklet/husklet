@@ -1029,6 +1029,7 @@ export interface WorkspaceApi {
         /** Wait for this exact acquisition job revision to advance, then return its authoritative status. */
         waitForAcquisition(job: string, afterRevision: number, options?: {
             timeoutMs?: number;
+            signal?: AbortSignal;
         }): Promise<{
             changed: true;
             status: ExtensionAcquisitionStatus;
@@ -1038,6 +1039,18 @@ export interface WorkspaceApi {
             revision: number;
         }>;
         cancelAcquisition(job: string, revision: number): Promise<void>;
+        /** Cancel this exact observed revision and wait for authoritative cancelled status. */
+        cancelAcquisitionAndWait(job: string, revision: number, options?: {
+            timeoutMs?: number;
+            signal?: AbortSignal;
+        }): Promise<{
+            changed: true;
+            status: ExtensionAcquisitionStatus;
+        } | {
+            changed: false;
+            job: string;
+            revision: number;
+        }>;
         install(job: string, revision: number, imageDigest: string, granted: ExtensionCapability[], containers?: ContainerGrant, images?: ImageGrant, networks?: NetworkGrant, volumes?: VolumeGrant, filesystem?: FilesystemGrant, workspaceEnvironment?: WorkspaceEnvironmentGrant): Promise<ExtensionSummary>;
         /** Inspect the exact ready revision, arm inventory, install it, then verify its published identity. */
         installAndWait(job: string, revision: number, review: ExtensionReviewedGrants, options?: {

@@ -993,12 +993,21 @@ export interface WorkspaceApi {
     waitForAcquisition(
       job: string,
       afterRevision: number,
-      options?: { timeoutMs?: number },
+      options?: { timeoutMs?: number; signal?: AbortSignal },
     ): Promise<
       | { changed: true; status: ExtensionAcquisitionStatus }
       | { changed: false; job: string; revision: number }
     >;
     cancelAcquisition(job: string, revision: number): Promise<void>;
+    /** Cancel this exact observed revision and wait for authoritative cancelled status. */
+    cancelAcquisitionAndWait(
+      job: string,
+      revision: number,
+      options?: { timeoutMs?: number; signal?: AbortSignal },
+    ): Promise<
+      | { changed: true; status: ExtensionAcquisitionStatus }
+      | { changed: false; job: string; revision: number }
+    >;
     install(
       job: string,
       revision: number,

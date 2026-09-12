@@ -196,6 +196,12 @@ function outputAbort(signal) {
   return error;
 }
 
+function acquisitionAbort(signal?: AbortSignal) {
+  const error = new Error('extension acquisition wait aborted', { cause: signal?.reason });
+  error.name = 'AbortError';
+  return error;
+}
+
 function requireOutputActive(signal) {
   if (signal?.aborted) throw outputAbort(signal);
 }
@@ -5288,7 +5294,11 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
     commitAcquisitionAndWait('install', job, revision, review, options);
   api.extensions.updateAndWait = (job, revision, review, options) =>
     commitAcquisitionAndWait('update', job, revision, review, options);
-  api.extensions.waitForAcquisition = async (job, afterRevision, { timeoutMs = 30_000 } = {}) => {
+  api.extensions.waitForAcquisition = async (
+    job,
+    afterRevision,
+    { timeoutMs = 30_000, signal } = {},
+  ) => {
     if (
       typeof job !== 'string' ||
       job.length === 0 ||
@@ -5304,6 +5314,7 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
       throw new RangeError('extension acquisition wait timeout must be between 1 and 30000ms');
     }
+    if (signal?.aborted) throw acquisitionAbort(signal);
     let dispose;
     let timer;
     let settled = false;
@@ -5314,8 +5325,10 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
         if (settled) return;
         settled = true;
         clearTimeout(timer);
+        signal?.removeEventListener('abort', abort);
         Promise.resolve(dispose?.()).then(() => (error ? reject(error) : resolve(value)), reject);
       };
+      const abort = () => finish(undefined, acquisitionAbort(signal));
       const refresh = async () => {
         if (settled || reading) return;
         reading = true;
@@ -5354,8 +5367,86 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
         },
         (error) => finish(undefined, error),
       );
+      signal?.addEventListener('abort', abort, { once: true });
+      if (signal?.aborted) abort();
       timer = setTimeout(() => finish({ changed: false, job, revision: afterRevision }), timeoutMs);
     });
+  };
+  api.extensions.cancelAcquisitionAndWait = async (
+    job,
+    revision,
+    { timeoutMs = 30_000, signal } = {},
+  ) => {
+    const identity = exactAcquisitionJob(job);
+    if (!Number.isSafeInteger(revision) || revision < 0)
+      throw new TypeError(
+        'extension acquisition cancellation requires a nonnegative safe integer revision',
+      );
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000)
+      throw new RangeError(
+        'extension acquisition cancellation timeout must be between 1 and 30000ms',
+      );
+    if (signal?.aborted) throw acquisitionAbort(signal);
+    const scoped = signal ? api.withSignal(signal) : api;
+    let pending = false;
+    let wake;
+    const next = (remaining) =>
+      pending
+        ? Promise.resolve(true)
+        : new Promise<boolean>((resolve, reject) => {
+            const abort = () => done(undefined, acquisitionAbort(signal));
+            const done = (value, error?: unknown) => {
+              clearTimeout(timer);
+              signal?.removeEventListener('abort', abort);
+              wake = undefined;
+              if (error) reject(error);
+              else resolve(value);
+            };
+            wake = () => done(true);
+            timer = setTimeout(() => done(false), remaining);
+            signal?.addEventListener('abort', abort, { once: true });
+            if (signal?.aborted) abort();
+          });
+    const stop = await api.watchExtensionAcquisitions((change) => {
+      if (change.job !== identity || change.revision <= revision) return;
+      pending = true;
+      wake?.();
+      wake = undefined;
+    });
+    let timer;
+    try {
+      const current = await scoped.extensions.acquisition(identity);
+      if (current.revision !== revision)
+        throw new Error('extension acquisition changed before cancellation authority');
+      if (current.state === 'cancelled')
+        return { changed: true, status: { ...current, state: 'cancelled' as const } };
+      if (
+        current.state === 'failed' ||
+        current.state === 'installed' ||
+        current.state === 'updated'
+      )
+        throw new Error(`extension acquisition already finished as ${current.state}`);
+      await scoped.extensions.cancelAcquisition(identity, revision);
+      const deadline = Date.now() + timeoutMs;
+      for (;;) {
+        const status = await scoped.extensions.acquisition(identity);
+        if (status.revision > revision) {
+          if (status.state !== 'cancelled')
+            throw new Error(
+              `extension acquisition finished as ${status.state} while cancellation was pending`,
+            );
+          return { changed: true, status: { ...status, state: 'cancelled' as const } };
+        }
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) return { changed: false, job: identity, revision };
+        const advanced = await next(remaining);
+        if (!advanced) return { changed: false, job: identity, revision };
+        pending = false;
+      }
+    } finally {
+      clearTimeout(timer);
+      await stop();
+    }
   };
   api.watchWorkspaceLifecycle = (listener) =>
     watch('workspace-lifecycle', 'workspace_lifecycle', listener, 'workspace lifecycle');
