@@ -109,6 +109,26 @@ test('volume authority refusal gives one recovery path and withholds removal', a
   assert.equal(openedExtensions, 1);
 });
 
+test('volume inventory keeps inspection and destructive disclosure in one compact summary row', () => {
+  const stage = host();
+  stage.render(
+    h(Volumes, {
+      api: { volumes: {} },
+      resource: resource([{ name: 'workspace-cache', driver: 'local', generation: '7' }]),
+      onOpenExtensions: () => {},
+    }),
+  );
+
+  assert.deepEqual(property(stage, 'Inspect', 'Size'), { ControlSize: 'Small' });
+  assert.deepEqual(property(stage, 'Inspect', 'Variant'), { Variant: 'Outline' });
+  assert.deepEqual(ancestorTags(stage, 'Inspect').slice(0, 3), ['Row', 'Row', 'CardContent']);
+  assert.deepEqual(ancestorTags(stage, 'Danger zone').slice(0, 3), ['Row', 'Row', 'CardContent']);
+  assert.deepEqual(property(stage, 'Danger zone', 'Tooltip'), {
+    Text: 'Remove this volume and permanently delete its stored data',
+  });
+  assert.deepEqual(property(stage, 'Remove', 'Size'), { ControlSize: 'Small' });
+});
+
 test('container authority refusal explains recovery and withholds detail operations', async () => {
   const denied = Object.assign(new Error('outside the consented resource scope'), {
     kind: 'denied',

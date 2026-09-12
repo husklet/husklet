@@ -80,7 +80,7 @@ mod unix {
         );
         for fixture in ["populated", "error"] {
             for (name, section) in CASES {
-                render_case(&repository, fixture, name, section, false);
+                render_case(&repository, fixture, name, section, false, false);
             }
         }
         render_case(
@@ -89,11 +89,20 @@ mod unix {
             "processes",
             "processes",
             false,
+            false,
         );
-        render_case(&repository, "populated", "extensions", "extensions", true);
+        render_case(&repository, "populated", "extensions", "extensions", true, false);
+        render_case(&repository, "populated", "volumes-denied", "volumes", false, true);
     }
 
-    fn render_case(repository: &Path, fixture: &str, name: &str, section: &str, catalogue_empty: bool) {
+    fn render_case(
+        repository: &Path,
+        fixture: &str,
+        name: &str,
+        section: &str,
+        catalogue_empty: bool,
+        deny_volume_access: bool,
+    ) {
         let capture_fixture = if catalogue_empty { "installed" } else { fixture };
         let socket = std::env::temp_dir().join(format!(
             "husklet-top-{}-{capture_fixture}-{name}.sock",
@@ -137,7 +146,7 @@ mod unix {
                     Capability::ExtensionInstall,
                     Capability::ContainerRead,
                     Capability::ImageRead,
-                    if name == "volumes" {
+                    if deny_volume_access {
                         Capability::Interface
                     } else {
                         Capability::VolumeRead
@@ -242,7 +251,7 @@ mod unix {
             "processes" => "Processes",
             "executions" => "Executions",
             "images" => "Images",
-            "volumes" => "Volumes",
+            "volumes" | "volumes-denied" => "Volumes",
             "networks" => "Networks",
             _ => unreachable!(),
         };
@@ -318,7 +327,7 @@ mod unix {
         // each subsequent state wide-first so GTK never treats a prior 1200px
         // allocation as the minimum for an attempted narrow allocation.
         for (width_name, width) in [("wide", 1_200), ("narrow", 600)] {
-            if name == "volumes" {
+            if deny_volume_access {
                 continue;
             }
             window.set_default_size(width, 800);
@@ -688,6 +697,70 @@ mod unix {
                         ],
                         1,
                     );
+                }
+            }
+            if fixture == "populated" && name == "volumes" {
+                let card = widgets_with_class(&root, "hl-card")
+                    .into_iter()
+                    .find(|card| has_label(card, "workspace-cache"))
+                    .expect("volume inventory renders its normal-authority card");
+                let minimum = if width == 1_200 { 900 } else { 540 };
+                assert!(
+                    card.width() >= minimum,
+                    "{width_name} volume card collapsed to {}px instead of using the page width",
+                    card.width()
+                );
+                assert!(
+                    card.height() <= 80,
+                    "{width_name} collapsed volume record split actions into a {}px second band",
+                    card.height()
+                );
+                let inspect = find_button(&card, "Inspect");
+                assert!(inspect.has_css_class("size-small"));
+                assert!(inspect.has_css_class("variant-outline"));
+                assert_eq!(inspect.height(), 28, "{width_name} volume inspection control height");
+                assert!(inspect.grab_focus(), "volume inspection is keyboard reachable");
+                let danger = find_expander(&card, "Danger zone");
+                assert!(danger.has_css_class("variant-outline"));
+                assert_eq!(danger.height(), 28, "{width_name} volume danger disclosure height");
+                assert_eq!(
+                    danger.tooltip_text().as_deref(),
+                    Some("Remove this volume and permanently delete its stored data")
+                );
+                assert!(danger.grab_focus(), "volume danger disclosure is keyboard reachable");
+                assert!(!danger.is_expanded(), "volume danger disclosure starts collapsed");
+                let inspect_bounds = inspect.compute_bounds(&card).expect("Inspect belongs to volume card");
+                let danger_bounds = danger
+                    .compute_bounds(&card)
+                    .expect("Danger zone belongs to volume card");
+                assert!(
+                    (inspect_bounds.y() - danger_bounds.y()).abs() <= 2.0,
+                    "{width_name} volume actions split across rows: inspect={inspect_bounds:?}, danger={danger_bounds:?}"
+                );
+                assert!(
+                    vertical_end(&root, &card) <= 240,
+                    "{width_name} first volume record fell below the first 240px"
+                );
+                if width == 1_200 {
+                    danger.emit_by_name::<()>("activate", &[]);
+                    settle_toolkit();
+                    assert!(danger.is_expanded(), "volume danger disclosure opens in place");
+                    root.measure(gtk::Orientation::Horizontal, -1);
+                    root.measure(gtk::Orientation::Vertical, width);
+                    root.allocate(width, 1_600, -1, None);
+                    settle_frame();
+                    find_mapped_labelled(
+                        &card,
+                        "Removing this volume permanently deletes its stored data.",
+                    );
+                    let remove = find_button(&card, "Remove");
+                    assert!(remove.has_css_class("size-small"));
+                    assert_eq!(remove.height(), 28, "expanded volume removal stays compact");
+                    assert!(remove.grab_focus(), "expanded volume removal is keyboard reachable");
+                    capture(&window, "volume-danger-wide", width, 800);
+                    danger.emit_by_name::<()>("activate", &[]);
+                    settle_toolkit();
+                    assert!(!danger.is_expanded(), "volume danger disclosure closes in place");
                 }
             }
             if fixture == "populated" && name == "images" {
@@ -1805,7 +1878,74 @@ mod unix {
                 &format!("Immutable image ID · sha256:{}", "b".repeat(64))
             ));
         }
-        if fixture == "populated" && name == "volumes" {
+        if fixture == "populated" && name == "volumes" && !deny_volume_access {
+            let _ = surface.reports().drain();
+            find_button(&root, "Inspect").emit_clicked();
+            settle_toolkit();
+            let interaction = surface
+                .reports()
+                .drain()
+                .into_iter()
+                .find(|event| matches!(event, hl_gui::Event::Invoke { .. }))
+                .expect("normal-authority volume Inspect emits an invocation");
+            wire.send(&Frame::new(
+                ChannelId::new(104),
+                hl_extension::Kind::Event,
+                codec::interaction(&interaction, Some("")).expect("normal-authority volume Inspect invocation encodes"),
+            ))
+            .expect("normal-authority volume Inspect invocation reaches Top");
+            let deadline = Instant::now() + DEADLINE;
+            while Instant::now() < deadline
+                && !has_label(surface.widget().upcast_ref::<gtk::Widget>(), "Volume details")
+            {
+                match receive_until(&mut wire, (Instant::now() + Duration::from_millis(80)).min(deadline)) {
+                    Ok(frame) if frame.kind == hl_extension::Kind::Credit => {}
+                    Ok(frame) => {
+                        let reply = match codec::read_request(&frame).expect("volume detail request decodes") {
+                            Request::VolumeInspect { name } => Reply::Volume(hl_extension::VolumeSummary {
+                                name,
+                                driver: "local".into(),
+                                generation: "volume-generation-7".into(),
+                            }),
+                            Request::InterfaceRender { frame } | Request::InterfaceRenderAt { frame, .. } => {
+                                tree.apply(&frame, &mut surface).expect("volume detail frame applies");
+                                Reply::Done
+                            }
+                            Request::SourceResize { mutation } | Request::SourceResizeAt { mutation, .. } => {
+                                if let SourceMutation::Length { source, version, rows } = mutation {
+                                    let _ = surface.resize(source, version, rows);
+                                }
+                                Reply::Done
+                            }
+                            other => panic!("unexpected normal-authority volume detail request: {other:?}"),
+                        };
+                        wire.send(&codec::reply(&reply).expect("volume detail reply encodes"))
+                            .expect("volume detail reply sends");
+                        settle_toolkit();
+                    }
+                    Err(hl_extension::Transit::Pending) => {}
+                    Err(error) => panic!("normal-authority volume detail failed: {error:?}"),
+                }
+            }
+            let detail_root = surface.widget().clone().upcast::<gtk::Widget>();
+            window.set_child(Some(&detail_root));
+            assert!(has_label(&detail_root, "Name · workspace-cache"));
+            assert!(has_label(&detail_root, "Driver · local"));
+            assert!(has_label(&detail_root, "Immutable generation · volume-generation-7"));
+            for (width_name, width) in [("wide", 1_200), ("narrow", 600)] {
+                window.set_default_size(width, 800);
+                window.set_size_request(width, 800);
+                window.present();
+                settle_toolkit();
+                detail_root.measure(gtk::Orientation::Horizontal, -1);
+                detail_root.measure(gtk::Orientation::Vertical, width);
+                detail_root.allocate(width, 1_600, -1, None);
+                settle_frame();
+                assert_contained(&detail_root, &format!("volume-detail/{width_name}"));
+                capture(&window, &format!("volume-detail-{width_name}"), width, 800);
+            }
+        }
+        if fixture == "populated" && deny_volume_access {
             let _ = surface.reports().drain();
             find_button(&root, "Inspect").emit_clicked();
             settle_toolkit();

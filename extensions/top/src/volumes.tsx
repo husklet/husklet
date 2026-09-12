@@ -215,39 +215,46 @@ export function Volumes({
                           ? 'Retry inspect'
                           : 'Inspect'
                       }
-                      variant="filled"
-                      tone="accent"
+                      size="small"
+                      variant="outline"
                       onInvoke={() => inspect(volume)}
                     />
+                  )
+                }
+                overflow={
+                  inspectionNeedsAccess ? null : (
+                    <Expander
+                      label="Danger zone"
+                      variant="outline"
+                      width="content"
+                      align="start"
+                      tooltip="Remove this volume and permanently delete its stored data"
+                    >
+                      <Column gap={1}>
+                        <Text
+                          label="Removing this volume permanently deletes its stored data."
+                          color="text-dim"
+                          wrap
+                        />
+                        <Row>
+                          <ConfirmAction
+                            authorityKey={`volume:${volume.name}:${volume.generation}:remove`}
+                            label="Remove"
+                            confirmLabel="Confirm remove"
+                            pendingLabel="Confirm remove"
+                            question={`Remove volume ${volume.name} generation ${volume.generation}?`}
+                            size="small"
+                            onConfirm={() => remove(volume)}
+                          />
+                        </Row>
+                      </Column>
+                    </Expander>
                   )
                 }
               />
               {inspectionNeedsAccess ? (
                 <CardContent>
                   <AuthorityRecovery resource="volume" onOpenExtensions={onOpenExtensions} />
-                </CardContent>
-              ) : null}
-              {!inspectionNeedsAccess ? (
-                <CardContent>
-                  <Expander label="Danger zone" variant="outline" width="content" align="start">
-                    <Column gap={1}>
-                      <Text
-                        label="Removing this volume permanently deletes its stored data."
-                        color="text-dim"
-                        wrap
-                      />
-                      <Row>
-                        <ConfirmAction
-                          authorityKey={`volume:${volume.name}:${volume.generation}:remove`}
-                          label="Remove"
-                          confirmLabel="Confirm remove"
-                          pendingLabel="Confirm remove"
-                          question={`Remove volume ${volume.name} generation ${volume.generation}?`}
-                          onConfirm={() => remove(volume)}
-                        />
-                      </Row>
-                    </Column>
-                  </Expander>
                 </CardContent>
               ) : null}
               {inspection.name === volume.name && !inspectionNeedsAccess ? (

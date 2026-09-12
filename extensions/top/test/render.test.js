@@ -5249,6 +5249,17 @@ test('volume and network panels render bounded real inventories and controls', (
   assert.equal(taggedProperty(volumeStage, 'cache', 'CardHeader', 'Align')?.Align, 'Start');
   assert.ok(taggedProperty(volumeStage, 'cache', 'CardHeader', 'Width'));
   assert.deepEqual(ancestorTags(volumeStage, 'Inspect').slice(0, 3), ['Row', 'Row', 'CardContent']);
+  assert.deepEqual(taggedProperty(volumeStage, 'Inspect', 'Button', 'Size'), {
+    ControlSize: 'Small',
+  });
+  assert.deepEqual(taggedProperty(volumeStage, 'Inspect', 'Button', 'Variant'), {
+    Variant: 'Outline',
+  });
+  assert.deepEqual(ancestorTags(volumeStage, 'Danger zone').slice(0, 3), [
+    'Row',
+    'Row',
+    'CardContent',
+  ]);
   for (const label of ['Networks', 'private', 'Remove'])
     assert.ok(labels(networkFrame).includes(label), label);
   const networkInventoryStage = stageFromFrame(networkFrame);
