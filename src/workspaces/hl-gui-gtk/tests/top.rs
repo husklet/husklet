@@ -3572,6 +3572,19 @@ mod unix {
             .collect::<Vec<_>>();
         assert_eq!(visible.len(), expected_visible, "{case} omitted first-row cards");
         if width > 600 {
+            let healthy = ancestor_with_class(&find_mapped_labelled(root, "disabled-linter"), "hl-card")
+                .expect("disabled installed extension belongs to a card");
+            assert!(
+                healthy.height() < first.height(),
+                "{case} healthy card inherited the fault diagnostic height: healthy={}px faulted={}px",
+                healthy.height(),
+                first.height()
+            );
+            assert!(
+                healthy.height() <= 190,
+                "{case} healthy installed card exceeded the compact 190px budget: {}px",
+                healthy.height()
+            );
             let widths = cards
                 .iter()
                 .filter(|card| card.is_mapped())

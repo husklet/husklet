@@ -232,10 +232,13 @@ impl Weave {
                 main -= extent;
             }
             let (x, y) = if vertical { (cross, main) } else { (main, cross) };
+            // A child stretches across its line only when it asks to expand on
+            // that axis. In particular, a card with Height::Content must keep
+            // its natural height when a diagnostic makes a peer taller.
             let cross_extent = if if vertical {
                 child.hexpands()
             } else {
-                child.vexpands() || child.has_css_class("hl-card")
+                child.vexpands()
             } {
                 line_cross
             } else {
@@ -431,6 +434,35 @@ mod tests {
             eprintln!("skipped: no display connection");
             return;
         }
+    }
+
+    #[test]
+    fn content_height_cards_do_not_inherit_a_taller_peers_height() {
+        if !crate::test_support::on_the_toolkit_thread(content_height_card_scenario) {
+            eprintln!("skipped: no display connection");
+            return;
+        }
+    }
+
+    fn content_height_card_scenario() {
+        let container = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        let flow = Flow::new(gtk::Orientation::Horizontal);
+        flow.set_spacing(4);
+        container.set_layout_manager(Some(flow));
+
+        for height in [120, 40] {
+            let card = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            card.add_css_class("hl-card");
+            card.set_size_request(260, height);
+            card.set_hexpand(true);
+            card.set_vexpand(false);
+            container.append(&card);
+        }
+
+        measured_allocate(container.upcast_ref(), 800, 120);
+        let cards = children(container.upcast_ref());
+        assert_eq!(cards[0].height(), 120);
+        assert_eq!(cards[1].height(), 40);
     }
 
     fn equal_card_columns_scenario() {

@@ -1227,6 +1227,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                         return (
                           <Card
                             key={entry.id}
+                            grow
                             width={{ minimum: { chars: 38 }, maximum: 'fill' }}
                             variant="outline"
                           >
