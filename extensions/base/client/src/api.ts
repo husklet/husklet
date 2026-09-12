@@ -118,6 +118,21 @@ export interface FilesystemGrant {
 export type ReadonlyFilesystemGrant = {
   readonly [Operation in keyof FilesystemGrant]: readonly Readonly<FilesystemSelector>[];
 };
+export type ReadonlyContainerGrant = Readonly<Omit<ContainerGrant, 'selectors'>> & {
+  readonly selectors: readonly Readonly<ContainerSelector>[];
+};
+export type ReadonlyImageGrant = Readonly<Omit<ImageGrant, 'read' | 'use' | 'pull' | 'remove'>> & {
+  readonly read: readonly Readonly<ImageSelector>[];
+  readonly use: readonly Readonly<ImageSelector>[];
+  readonly pull: readonly Readonly<ImageSelector>[];
+  readonly remove: readonly Readonly<ImageSelector>[];
+};
+export type ReadonlyNetworkGrant = Readonly<Omit<NetworkGrant, 'selectors'>> & {
+  readonly selectors: readonly Readonly<NetworkSelector>[];
+};
+export type ReadonlyVolumeGrant = Readonly<Omit<VolumeGrant, 'selectors'>> & {
+  readonly selectors: readonly Readonly<VolumeSelector>[];
+};
 export interface WorkspaceEnvironmentGrant {
   read: ({ workspace: string; name: string } | { all: true })[];
   write: ({ workspace: string; name: string } | { all: true })[];
@@ -844,6 +859,10 @@ export declare class Session {
   readonly grantedCapabilities: readonly ExtensionCapability[];
   /** Immutable exact filesystem selectors granted to this connected extension. */
   readonly grantedFilesystem: ReadonlyFilesystemGrant;
+  readonly grantedContainers: ReadonlyContainerGrant;
+  readonly grantedImages: ReadonlyImageGrant;
+  readonly grantedNetworks: ReadonlyNetworkGrant;
+  readonly grantedVolumes: ReadonlyVolumeGrant;
   call<C extends WireCall>(
     method: C,
     ...args: WireRequestFor<C> extends { with: infer P }
@@ -876,6 +895,10 @@ export interface WorkspaceApi {
   readonly granted: readonly string[];
   readonly grantedCapabilities: readonly ExtensionCapability[];
   readonly grantedFilesystem: ReadonlyFilesystemGrant;
+  readonly grantedContainers: ReadonlyContainerGrant;
+  readonly grantedImages: ReadonlyImageGrant;
+  readonly grantedNetworks: ReadonlyNetworkGrant;
+  readonly grantedVolumes: ReadonlyVolumeGrant;
   /** Returns the complete typed facade with every call bound to this signal. */
   withSignal(signal: AbortSignal): WorkspaceApi;
   info(): Promise<WorkspaceInfo>;

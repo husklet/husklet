@@ -12,6 +12,19 @@ const CALLS = 2;
 const ERROR = 2;
 const COALESCED = 4;
 const CLOSE_TIMEOUT = 1_000;
+const freezeGrant = (value) => {
+    requiredObject(value, 'host greeting resource grant');
+    for (const entry of Object.values(value)) {
+        if (Array.isArray(entry)) {
+            for (const selector of entry) {
+                requiredObject(selector, 'host greeting resource selector');
+                Object.freeze(selector);
+            }
+            Object.freeze(entry);
+        }
+    }
+    return Object.freeze(value);
+};
 const SNAPSHOT_TOPICS = new Map(PROTOCOL_TOPICS.map(({ wire, snapshot }) => [snapshot, wire]));
 const TOPIC_CAPABILITIES = new Map(PROTOCOL_TOPICS.map(({ wire, capability }) => [wire, capability]));
 const CAPABILITIES = new Set(PROTOCOL_CAPABILITIES.map(({ wire }) => wire));
@@ -301,6 +314,16 @@ export class Session {
         delete: Object.freeze([]),
         rename: Object.freeze([]),
     });
+    #containers = freezeGrant({ selectors: [], create: false });
+    #images = freezeGrant({
+        read: [],
+        use: [],
+        pull: [],
+        remove: [],
+        prune_all_unused: false,
+    });
+    #networks = freezeGrant({ selectors: [], create: false });
+    #volumes = freezeGrant({ selectors: [], create: false });
     #greeted;
     #ready;
     #rejectReady;
@@ -380,6 +403,18 @@ export class Session {
     /** Immutable exact filesystem selectors granted to this connected extension. */
     get grantedFilesystem() {
         return this.#filesystem;
+    }
+    get grantedContainers() {
+        return this.#containers;
+    }
+    get grantedImages() {
+        return this.#images;
+    }
+    get grantedNetworks() {
+        return this.#networks;
+    }
+    get grantedVolumes() {
+        return this.#volumes;
     }
     /** Resolves when the handshake is complete and calls may be sent. */
     get ready() {
@@ -923,6 +958,64 @@ export class Session {
                 throw new TypeError(`host greeting discloses ${operation} selectors without ${capability}`);
         }
         this.#filesystem = Object.freeze(grantedFilesystem);
+        const resources = {
+            containers: welcome.containers ?? { selectors: [], create: false },
+            images: welcome.images ?? {
+                read: [],
+                use: [],
+                pull: [],
+                remove: [],
+                prune_all_unused: false,
+            },
+            networks: welcome.networks ?? { selectors: [], create: false },
+            volumes: welcome.volumes ?? { selectors: [], create: false },
+        };
+        encodeRequest('extension_install', {
+            job: 'grant-validation',
+            revision: 0,
+            image_digest: `sha256:${'0'.repeat(64)}`,
+            granted: [],
+            ...resources,
+            filesystem: {},
+            workspace_environment: {},
+        });
+        const holds = (capability) => this.#granted.includes(capability);
+        const any = (values) => values.some(holds);
+        if (resources.containers.selectors.length > 0 &&
+            !any([
+                'containers:read',
+                'containers:execute',
+                'containers:input',
+                'containers:lifecycle',
+                'containers:remove',
+                'containers:attach',
+            ]))
+            throw new TypeError('host greeting discloses container selectors without container authority');
+        if (resources.containers.create && !holds('containers:create'))
+            throw new TypeError('host greeting discloses container creation without containers:create');
+        for (const [operation, capability] of [
+            ['read', 'images:read'],
+            ['pull', 'images:pull'],
+            ['remove', 'images:remove'],
+        ])
+            if (resources.images[operation].length > 0 && !holds(capability))
+                throw new TypeError(`host greeting discloses image ${operation} selectors without ${capability}`);
+        if (resources.images.use.length > 0 && !holds('containers:create'))
+            throw new TypeError('host greeting discloses image use selectors without containers:create');
+        if (resources.images.prune_all_unused && !holds('images:prune'))
+            throw new TypeError('host greeting discloses image pruning without images:prune');
+        if (resources.networks.selectors.length > 0 && !any(['networks:read', 'networks:write']))
+            throw new TypeError('host greeting discloses network selectors without network authority');
+        if (resources.networks.create && !holds('networks:write'))
+            throw new TypeError('host greeting discloses network creation without networks:write');
+        if (resources.volumes.selectors.length > 0 && !any(['volumes:read', 'volumes:write']))
+            throw new TypeError('host greeting discloses volume selectors without volume authority');
+        if (resources.volumes.create && !holds('volumes:write'))
+            throw new TypeError('host greeting discloses volume creation without volumes:write');
+        this.#containers = freezeGrant(resources.containers);
+        this.#images = freezeGrant(resources.images);
+        this.#networks = freezeGrant(resources.networks);
+        this.#volumes = freezeGrant(resources.volumes);
         this.#write({
             channel: CONTROL,
             kind: KIND.response,

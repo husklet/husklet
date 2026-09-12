@@ -253,6 +253,8 @@ still checks every request authoritatively, including changes in authority after
 the handshake. `session.grantedFilesystem` (also available on `workspace(session)`)
 is the immutable effective read/write/create/delete/rename selector set for this
 extension only, so a narrowly scoped extension can explain its reach without probing.
+The same caller-only view is available as `grantedContainers`, `grantedImages`,
+`grantedNetworks`, and `grantedVolumes`; selector arrays and their entries are deeply immutable.
 
 `@husklet/react` consumes and re-exports this client for compatibility.
 

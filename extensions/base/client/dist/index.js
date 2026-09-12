@@ -997,6 +997,18 @@ export function workspace(session, { signal } = {}) {
         get grantedFilesystem() {
             return session.grantedFilesystem;
         },
+        get grantedContainers() {
+            return session.grantedContainers;
+        },
+        get grantedImages() {
+            return session.grantedImages;
+        },
+        get grantedNetworks() {
+            return session.grantedNetworks;
+        },
+        get grantedVolumes() {
+            return session.grantedVolumes;
+        },
         info: async () => expect(await session.call('workspace_info'), 'workspace'),
         list: async () => {
             const workspaces = expect(await session.call('workspace_list'), 'workspaces');

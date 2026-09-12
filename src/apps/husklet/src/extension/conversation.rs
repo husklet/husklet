@@ -799,6 +799,10 @@ impl Conversation {
             peer: self.session.authority().peer().clone(),
             granted: self.session.authority().granted().clone(),
             filesystem: self.session.filesystem_grant().clone(),
+            containers: self.session.container_grant().clone(),
+            images: self.session.image_grant().clone(),
+            networks: self.session.network_grant().clone(),
+            volumes: self.session.volume_grant().clone(),
             limits: Limits::default(),
         };
         let frame = codec::welcome(&welcome).map_err(|coding| Fault::Malformed(coding.to_string()))?;

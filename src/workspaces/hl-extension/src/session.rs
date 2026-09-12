@@ -354,6 +354,15 @@ impl Session {
     }
 
     #[must_use]
+    pub const fn container_grant(&self) -> &ContainerGrant { &self.containers }
+    #[must_use]
+    pub const fn image_grant(&self) -> &crate::ImageGrant { &self.images }
+    #[must_use]
+    pub const fn network_grant(&self) -> &crate::NetworkGrant { &self.networks }
+    #[must_use]
+    pub const fn volume_grant(&self) -> &crate::VolumeGrant { &self.volumes }
+
+    #[must_use]
     pub fn visible_networks(&self, networks: Vec<crate::port::NetworkSummary>) -> crate::port::NetworkInventory {
         crate::port::NetworkInventory::bounded(
             networks

@@ -316,6 +316,8 @@ fn the_host_states_the_grant_before_the_extension_asks_for_anything() {
             }],
             ..hl_extension::FilesystemGrant::default()
         },
+        containers: hl_extension::ContainerGrant::default(), images: hl_extension::ImageGrant::default(),
+        networks: hl_extension::NetworkGrant::default(), volumes: hl_extension::VolumeGrant::default(),
         limits: Limits::default(),
     };
 

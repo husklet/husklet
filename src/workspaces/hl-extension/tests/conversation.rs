@@ -1127,6 +1127,8 @@ fn a_whole_interface_is_rendered_from_a_socket() {
             peer: ExtensionName::new("containers").expect("name"),
             granted: Grant::new([Capability::Interface]),
             filesystem: hl_extension::FilesystemGrant::default(),
+            containers: hl_extension::ContainerGrant::default(), images: hl_extension::ImageGrant::default(),
+            networks: hl_extension::NetworkGrant::default(), volumes: hl_extension::VolumeGrant::default(),
             limits: hl_extension::Limits::default(),
         })
         .expect("the welcome encodes"),

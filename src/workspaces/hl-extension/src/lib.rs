@@ -83,6 +83,14 @@ pub struct Welcome {
     pub granted: Grant,
     #[serde(default)]
     pub filesystem: FilesystemGrant,
+    #[serde(default)]
+    pub containers: ContainerGrant,
+    #[serde(default)]
+    pub images: ImageGrant,
+    #[serde(default)]
+    pub networks: NetworkGrant,
+    #[serde(default)]
+    pub volumes: VolumeGrant,
     pub limits: Limits,
 }
 
