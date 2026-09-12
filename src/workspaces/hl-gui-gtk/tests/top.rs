@@ -758,6 +758,10 @@ mod unix {
                     assert_eq!(remove.height(), 28, "expanded volume removal stays compact");
                     assert!(remove.grab_focus(), "expanded volume removal is keyboard reachable");
                     capture(&window, "volume-danger-wide", width, 800);
+                    assert!(
+                        danger.grab_focus(),
+                        "focus returns to the disclosure before its focused child is removed"
+                    );
                     danger.emit_by_name::<()>("activate", &[]);
                     settle_toolkit();
                     assert!(!danger.is_expanded(), "volume danger disclosure closes in place");
