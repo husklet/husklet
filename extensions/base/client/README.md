@@ -250,7 +250,9 @@ After `connect()` resolves, `session.grantedCapabilities` is an immutable array
 of the exact Rust capability wire names. Calls and subscriptions lacking one of
 those negotiated grants reject locally without writing a request frame. The host
 still checks every request authoritatively, including changes in authority after
-the handshake.
+the handshake. `session.grantedFilesystem` (also available on `workspace(session)`)
+is the immutable effective read/write/create/delete/rename selector set for this
+extension only, so a narrowly scoped extension can explain its reach without probing.
 
 `@husklet/react` consumes and re-exports this client for compatibility.
 

@@ -1257,6 +1257,9 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
     get grantedCapabilities() {
       return session.grantedCapabilities ?? session.granted;
     },
+    get grantedFilesystem() {
+      return session.grantedFilesystem;
+    },
     info: async () => expect(await session.call('workspace_info'), 'workspace'),
     list: async () => {
       const workspaces = expect(await session.call('workspace_list'), 'workspaces');

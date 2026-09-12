@@ -347,6 +347,12 @@ impl Session {
         &self.filesystem.read
     }
 
+    /// The caller's effective filesystem scope, for handshake disclosure.
+    #[must_use]
+    pub const fn filesystem_grant(&self) -> &FilesystemGrant {
+        &self.filesystem
+    }
+
     #[must_use]
     pub fn visible_networks(&self, networks: Vec<crate::port::NetworkSummary>) -> crate::port::NetworkInventory {
         crate::port::NetworkInventory::bounded(

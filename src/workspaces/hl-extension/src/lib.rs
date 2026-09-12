@@ -71,8 +71,20 @@ pub use ui_event::{UiCollectionSelection, UiEvent, UiPointerPhase, UiSelectedRow
 /// JavaScript cannot distinguish consecutive integers beyond this boundary.
 pub const JSON_SAFE_INTEGER_MAX: u64 = 9_007_199_254_740_991;
 
-/// The host's opening frame, carrying this domain's grant.
-pub type Welcome = hl_rpc::Welcome<Capability>;
+/// The host's opening frame, carrying only this extension's effective grant.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Welcome {
+    pub protocol: u32,
+    pub host: String,
+    pub workspace: String,
+    #[serde(rename = "extension")]
+    pub peer: ExtensionName,
+    pub granted: Grant,
+    #[serde(default)]
+    pub filesystem: FilesystemGrant,
+    pub limits: Limits,
+}
 
 /// Pending output for one session, keyed by this domain's topics.
 pub type Outbox = hl_rpc::Outbox<Topic>;

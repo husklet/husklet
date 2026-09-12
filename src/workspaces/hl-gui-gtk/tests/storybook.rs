@@ -132,6 +132,7 @@ mod unix {
                 workspace: "test".into(),
                 peer: ExtensionName::new("storybook").expect("valid extension name"),
                 granted: Grant::new([Capability::Interface]),
+                filesystem: hl_extension::FilesystemGrant::default(),
                 limits: hl_extension::Limits::default(),
             })
             .expect("welcome encodes"),

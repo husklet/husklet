@@ -141,6 +141,7 @@ mod unix {
                     Capability::NetworkWrite,
                     Capability::TerminalRead,
                 ]),
+                filesystem: hl_extension::FilesystemGrant::default(),
                 limits: hl_extension::Limits::default(),
             })
             .expect("welcome encodes"),

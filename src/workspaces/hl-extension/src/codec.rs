@@ -234,6 +234,7 @@ mod tests {
             workspace: "dev".into(),
             peer: ExtensionName::new("fixture").unwrap(),
             granted: Grant::new([Capability::WorkspaceRead]),
+            filesystem: crate::FilesystemGrant::default(),
             limits: Limits::default(),
         })
         .expect("welcome encodes");

@@ -118,7 +118,7 @@ groups
     '- `host.files.readRanges(...)` — reads up to 64 separately confined ranges in one 64 KiB aggregate request and rejects different identities or totals for repeated paths, so one batch cannot mix file generations; requires `filesystem:read`.',
     "- `host.files.write(...)`, `writeObserved(...)`, and `createObserved(...)` — consume byte iterables only through the host's 64 KiB mutation bound before framing; observed variants retain inode identity/race protection.",
     '- `host.files.readChunks(...)` — iterates an identity-pinned file through bounded ranges with consumer backpressure; requires `filesystem:read`.',
-    "- `host.files.readText(path, { maxBytes, ... })` — reads identity-pinned UTF-8 across range boundaries, reports malformed text as `FileTextDecodeError`, and reports an oversized generation as `FileTextLimitError` with exact path, identity, authoritative total, and caller limit; requires `filesystem:read`.",
+    '- `host.files.readText(path, { maxBytes, ... })` — reads identity-pinned UTF-8 across range boundaries, reports malformed text as `FileTextDecodeError`, and reports an oversized generation as `FileTextLimitError` with exact path, identity, authoritative total, and caller limit; requires `filesystem:read`.',
   );
 groups
   .get('Extension preferences')
@@ -213,7 +213,7 @@ wrong caller.
 | LLM terminal agent | Strong | Pane inventory, bounded screen text, raw input, command spawn, semantic XML/actions, revisions, and change subscriptions support an observe/act loop without an MCP-specific API. |
 | PostgreSQL GUI | Strong | Exact container/network grants, process/execution APIs, bounded stdin/output, explicit EOF, cancellation, host-resolved credential references, published-port discovery, and virtualized rendered tables cover administration without placing passwords in argv. Credentials have host-private file isolation, not OS-keychain encryption; host port forwarding remains absent. |
 | Container/process inspector | Strong | Container inventories, immutable IDs and generations, exact resource selectors, process snapshots, executions, logs, lifecycle controls, and observed wait helpers are present. |
-| Single-file workspace editor | Strong | \`[filesystem]\` grants read, write, create, delete, and rename roots independently, so consent to modify one exact file cannot create, remove, or move it. \`stat\` plus \`writeObserved\` provides compare-and-swap replacement. |
+| Single-file workspace editor | Strong | \`[filesystem]\` grants read, write, create, delete, and rename roots independently, and \`grantedFilesystem\` exposes only the caller's immutable effective selectors, so consent to modify one exact file cannot create, remove, or move it. \`stat\` plus \`writeObserved\` provides compare-and-swap replacement. |
 | Atomic multi-file editor | Unsupported | Individual observed writes preflight and publish one file at a time. POSIX has no atomic rename transaction spanning several names or directories, so a later stale identity or I/O failure can leave earlier files committed. No batch API is exposed until the host has a recoverable workspace transaction layer. |
 | UI inspection/automation | Strong | Native panes expose bounded, redacted semantic XML and revision-bound advertised actions; terminal panes expose bounded screen/history text. Arbitrary pixel/OCR access is intentionally absent. |
 | Layout/tab controller | Strong | Topology, pinning, split, focus, ratio, retitle, close, occupant switching, and observed variants cover layout control. |

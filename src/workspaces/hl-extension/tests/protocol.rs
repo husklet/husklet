@@ -307,6 +307,15 @@ fn the_host_states_the_grant_before_the_extension_asks_for_anything() {
         workspace: "dev".into(),
         peer: ExtensionName::new("containers").expect("name"),
         granted: Grant::new([Capability::ContainerRead]),
+        filesystem: hl_extension::FilesystemGrant {
+            read: vec![hl_extension::FilesystemSelector::Subtree {
+                subtree: RelativePath::new("src").expect("path"),
+            }],
+            write: vec![hl_extension::FilesystemSelector::Exact {
+                exact: RelativePath::new("state/index.json").expect("path"),
+            }],
+            ..hl_extension::FilesystemGrant::default()
+        },
         limits: Limits::default(),
     };
 
@@ -315,6 +324,7 @@ fn the_host_states_the_grant_before_the_extension_asks_for_anything() {
 
     assert_eq!(decoded, welcome);
     assert!(decoded.granted.holds(Capability::ContainerRead));
+    assert_eq!(decoded.filesystem, welcome.filesystem);
     assert!(
         !decoded.granted.holds(Capability::ContainerLifecycle),
         "an extension must learn what it lacks without probing for it"

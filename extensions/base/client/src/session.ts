@@ -12,7 +12,14 @@ import {
   validateSnapshot,
   validateUiEvent as validateCurrentUiEvent,
 } from './generated-protocol.js';
-import type { CallOptions, ConnectOptions, FileInventory, HostEvent, RowRequest } from './api.js';
+import type {
+  CallOptions,
+  ConnectOptions,
+  FileInventory,
+  HostEvent,
+  RowRequest,
+  ReadonlyFilesystemGrant,
+} from './api.js';
 
 /** The protocol this package speaks. The host refuses anything else. */
 export const PROTOCOL = PROTOCOL_VERSION;
@@ -350,6 +357,13 @@ export class Session {
   #closedPromise;
   #resolveClosed;
   #granted: readonly string[] = [];
+  #filesystem: ReadonlyFilesystemGrant = Object.freeze({
+    read: Object.freeze([]),
+    write: Object.freeze([]),
+    create: Object.freeze([]),
+    delete: Object.freeze([]),
+    rename: Object.freeze([]),
+  });
   #greeted;
   #ready;
   #rejectReady;
@@ -437,6 +451,11 @@ export class Session {
   /** Immutable exact wire capabilities negotiated with the host. */
   get grantedCapabilities() {
     return this.#granted;
+  }
+
+  /** Immutable exact filesystem selectors granted to this connected extension. */
+  get grantedFilesystem() {
+    return this.#filesystem;
   }
 
   /** Resolves when the handshake is complete and calls may be sent. */
@@ -958,6 +977,33 @@ export class Session {
         (capability): capability is string => typeof capability === 'string',
       ),
     );
+    const filesystem = welcome.filesystem ?? {};
+    requiredObject(filesystem, 'host greeting filesystem grant');
+    const operations = ['read', 'write', 'create', 'delete', 'rename'];
+    if (Object.keys(filesystem).some((operation) => !operations.includes(operation)))
+      throw new TypeError('host greeting filesystem grant contains an unknown operation');
+    const grantedFilesystem = {};
+    for (const operation of operations) {
+      const selectors = filesystem[operation] ?? [];
+      if (!Array.isArray(selectors))
+        throw new TypeError(`host greeting filesystem ${operation} grant must be an array`);
+      grantedFilesystem[operation] = Object.freeze(
+        selectors.map((selector) => {
+          requiredObject(selector, `host greeting filesystem ${operation} selector`);
+          const keys = Object.keys(selector);
+          if (keys.length !== 1 || !['exact', 'subtree'].includes(keys[0]))
+            throw new TypeError(
+              `host greeting filesystem ${operation} selector must be exact or subtree`,
+            );
+          encodeRequest('filesystem_stat', { path: selector[keys[0]] });
+          return Object.freeze({ [keys[0]]: selector[keys[0]] });
+        }),
+      );
+      const capability = operation === 'read' ? 'filesystem:read' : 'filesystem:write';
+      if (selectors.length > 0 && !this.#granted.includes(capability))
+        throw new TypeError(`host greeting discloses ${operation} selectors without ${capability}`);
+    }
+    this.#filesystem = Object.freeze(grantedFilesystem as unknown as ReadonlyFilesystemGrant);
     this.#write({
       channel: CONTROL,
       kind: KIND.response,

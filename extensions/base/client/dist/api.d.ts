@@ -107,6 +107,9 @@ export interface FilesystemGrant {
     delete: FilesystemSelector[];
     rename: FilesystemSelector[];
 }
+export type ReadonlyFilesystemGrant = {
+    readonly [Operation in keyof FilesystemGrant]: readonly Readonly<FilesystemSelector>[];
+};
 export interface WorkspaceEnvironmentGrant {
     read: ({
         workspace: string;
@@ -875,6 +878,8 @@ export declare class Session {
     readonly closed: Promise<Error>;
     readonly granted: readonly string[];
     readonly grantedCapabilities: readonly ExtensionCapability[];
+    /** Immutable exact filesystem selectors granted to this connected extension. */
+    readonly grantedFilesystem: ReadonlyFilesystemGrant;
     call<C extends WireCall>(method: C, ...args: WireRequestFor<C> extends {
         with: infer P;
     } ? [params: P, options?: CallOptions] : [params?: undefined, options?: CallOptions]): Promise<WireReplyFor<C>>;
@@ -900,6 +905,7 @@ export declare function bootstrapSurface(session: Session, options?: {
 export interface WorkspaceApi {
     readonly granted: readonly string[];
     readonly grantedCapabilities: readonly ExtensionCapability[];
+    readonly grantedFilesystem: ReadonlyFilesystemGrant;
     /** Returns the complete typed facade with every call bound to this signal. */
     withSignal(signal: AbortSignal): WorkspaceApi;
     info(): Promise<WorkspaceInfo>;
