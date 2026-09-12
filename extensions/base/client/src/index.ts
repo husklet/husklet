@@ -1394,7 +1394,10 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
               [32],
               'workspace configuration revision',
             ),
-            configuration,
+            // Environment values use the independently consented, selector-scoped
+            // patch operation. Never copy inspected secrets into a broad settings
+            // replacement request, and never turn a redacted empty array into deletion.
+            configuration: { ...configuration, environment: [] },
           }),
           'workspace_configuration',
         ),

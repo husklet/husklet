@@ -102,7 +102,9 @@ export function Workspace({ api }: { api: WorkspaceApi }) {
       const candidate = withNumbers(configuration, numbers);
       validate(candidate);
       const environmentPatch = diffEnvironment(observed.environment, candidate.environment);
-      const settings = { ...candidate, environment: observed.environment };
+      // Environment changes are committed only through the exact-variable patch API.
+      // The general settings update deliberately carries no environment values.
+      const settings = { ...candidate, environment: [] };
       let updated = await api.update(
         configuration.name,
         configuration.generation,

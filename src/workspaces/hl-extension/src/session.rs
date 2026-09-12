@@ -1438,6 +1438,12 @@ impl Session {
             } => {
                 immutable_identity(generation, &[32], "workspace generation")?;
                 immutable_identity(configuration_revision, &[32], "workspace configuration revision")?;
+                if !configuration.environment.is_empty() {
+                    return Err(Failure::Conflict {
+                        detail: "workspace_update cannot change environment values; use workspace_environment_patch with exact variable consent"
+                            .into(),
+                    });
+                }
                 Ok(Reply::WorkspaceConfiguration(self.visible_workspace(port.update(
                     name,
                     generation,

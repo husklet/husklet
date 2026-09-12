@@ -938,6 +938,11 @@ export interface WorkspaceApi {
   list(): Promise<WorkspaceState[]>;
   inspect(name: string): Promise<WorkspaceConfiguration>;
   create(configuration: WorkspaceConfiguration): Promise<WorkspaceConfiguration>;
+  /**
+   * Replace general workspace settings at an observed revision. Environment
+   * entries are never transmitted by this call; use patchEnvironment so each
+   * variable remains independently selector-scoped.
+   */
   update(
     name: string,
     generation: string,

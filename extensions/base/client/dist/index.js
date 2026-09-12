@@ -1093,7 +1093,10 @@ export function workspace(session, { signal } = {}) {
             name,
             generation: immutableIdentity(generation, [32], 'workspace generation'),
             configuration_revision: immutableIdentity(configurationRevision, [32], 'workspace configuration revision'),
-            configuration,
+            // Environment values use the independently consented, selector-scoped
+            // patch operation. Never copy inspected secrets into a broad settings
+            // replacement request, and never turn a redacted empty array into deletion.
+            configuration: { ...configuration, environment: [] },
         }), 'workspace_configuration'), name),
         patchEnvironment: async (name, generation, configurationRevision, patch) => expect(await session.call('workspace_environment_patch', {
             name,

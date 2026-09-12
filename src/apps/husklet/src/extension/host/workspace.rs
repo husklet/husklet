@@ -820,6 +820,18 @@ impl Store {
         Ok(workspace)
     }
 
+    fn configured_update(
+        value: &WorkspaceConfiguration,
+        previous: &WorkspaceConfig,
+    ) -> Result<WorkspaceConfig, HostError> {
+        let mut workspace = Self::configured(value)?;
+        // Environment values have their own selector-scoped patch operation.
+        // Preserve them here even if a caller bypasses the protocol session or
+        // submits the redacted, empty configuration returned by inspection.
+        workspace.env.clone_from(&previous.env);
+        Ok(workspace)
+    }
+
     fn find(&self, name: &str) -> Result<WorkspaceConfig, HostError> {
         crate::config::WorkspaceStore::load(Self::path())
             .map_err(|error| HostError::Failed(error.to_string()))?
@@ -873,7 +885,7 @@ impl WorkspaceControl for Store {
         if configuration.name != name {
             return Err(HostError::Conflict("renaming a workspace is not supported".into()));
         }
-        let mut workspace = Self::configured(configuration)?;
+        let mut workspace = Self::configured_update(configuration, &old)?;
         if Self::running(&old) && workspace.storage != old.storage {
             return Err(HostError::Conflict(
                 "workspace storage cannot change while the workspace is running".into(),
@@ -1024,6 +1036,20 @@ mod workspace_control_tests {
         let restored = Store::configured(&carried).expect("valid configuration");
         workspace.generation.clone_from(&restored.generation);
         assert_eq!(restored, workspace);
+    }
+
+    #[test]
+    fn settings_conversion_preserves_environment_outside_the_patch_api() {
+        let mut old = crate::config::WorkspaceConfig::new("other", "alpine:3.20", hl_ws::Arch::Amd64);
+        old.env = vec![("DATABASE_PASSWORD".into(), "secret".into())];
+        let mut redacted = Store::configuration(&old);
+        redacted.environment = vec![("DATABASE_PASSWORD".into(), "injected".into())];
+        redacted.shell = Some("/bin/fish -l".into());
+
+        let updated = Store::configured_update(&redacted, &old).expect("valid settings");
+
+        assert_eq!(updated.shell.as_deref(), Some("/bin/fish -l"));
+        assert_eq!(updated.env, old.env);
     }
 
     #[test]

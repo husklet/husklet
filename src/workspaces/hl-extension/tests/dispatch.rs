@@ -1491,7 +1491,10 @@ fn calls() -> Vec<(Request, Capability)> {
                 name: "other".into(),
                 generation: "0123456789abcdef0123456789abcdef".into(),
                 configuration_revision: "abcdef0123456789abcdef0123456789".into(),
-                configuration: workspace_configuration(),
+                configuration: WorkspaceConfiguration {
+                    environment: Vec::new(),
+                    ..workspace_configuration()
+                },
             },
             Capability::WorkspaceConfigure,
         ),
@@ -2497,7 +2500,10 @@ fn workspace_mutations_require_a_complete_generation_before_host_authority() {
         name: "other".into(),
         generation: "short".into(),
         configuration_revision: "abcdef0123456789abcdef0123456789".into(),
-        configuration: workspace_configuration(),
+        configuration: WorkspaceConfiguration {
+            environment: Vec::new(),
+            ..workspace_configuration()
+        },
     };
     assert!(
         session(&[Capability::WorkspaceConfigure], &[])
@@ -2514,6 +2520,41 @@ fn workspace_mutations_require_a_complete_generation_before_host_authority() {
             .is_err()
     );
     assert!(host.ledger.reached().is_empty());
+}
+
+#[test]
+fn workspace_settings_update_cannot_bypass_exact_environment_patch_authority() {
+    let host = Host::new();
+    let request = Request::WorkspaceUpdate {
+        name: "other".into(),
+        generation: "0123456789abcdef0123456789abcdef".into(),
+        configuration_revision: "abcdef0123456789abcdef0123456789".into(),
+        configuration: workspace_configuration(),
+    };
+    let authority = Authority::new(
+        ExtensionName::new("sample").unwrap(),
+        Grant::new([
+            Capability::WorkspaceConfigure,
+            Capability::WorkspaceEnvironmentWrite,
+        ]),
+        Vec::new(),
+    );
+    let mut session = Session::new(authority).with_workspace_environment(
+        hl_extension::WorkspaceEnvironmentGrant {
+            read: Vec::new(),
+            write: vec![hl_extension::WorkspaceEnvironmentSelector::Exact {
+                workspace: "other".into(),
+                name: "DATABASE_PASSWORD".into(),
+            }],
+        },
+    );
+
+    let failure = session
+        .dispatch(&request, &services(&host))
+        .expect_err("general settings update must not carry environment values");
+    assert!(matches!(failure, Failure::Conflict { ref detail }
+        if detail.contains("workspace_environment_patch")));
+    assert!(host.ledger.reached().is_empty(), "rejection must precede the host");
 }
 
 #[test]

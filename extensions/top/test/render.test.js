@@ -985,7 +985,11 @@ test('workspace save rotates environment through the explicit revision-bound pat
   await settled();
   await settled();
   assert.equal(calls[0][0], 'update');
-  assert.deepEqual(calls[0][4].environment, [['TOKEN', 'old']]);
+  assert.deepEqual(
+    calls[0][4].environment,
+    [],
+    'general settings never retransmit the prior secret; only the exact patch carries it',
+  );
   assert.deepEqual(calls[1], [
     'patch',
     'daily',

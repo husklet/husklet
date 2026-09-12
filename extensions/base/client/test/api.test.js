@@ -709,7 +709,7 @@ test('workspace lifecycle methods use the typed control calls', async (context) 
     shell: null,
     cpus: null,
     memory_mb: null,
-    environment: [],
+    environment: [['DATABASE_PASSWORD', 'do-not-copy-into-settings-update']],
     mounts: [],
     docker_socket: true,
     scrollback: 100000,
@@ -757,6 +757,16 @@ test('workspace lifecycle methods use the typed control calls', async (context) 
       'workspace_stop',
       'workspace_restart',
     ],
+  );
+  assert.deepEqual(
+    calls[2].with.configuration.environment,
+    [],
+    'general workspace settings never retransmit inspected environment values',
+  );
+  assert.deepEqual(
+    configuration.environment,
+    [['DATABASE_PASSWORD', 'do-not-copy-into-settings-update']],
+    'sanitizing the request does not mutate the caller configuration',
   );
   for (let index = 0; index < operations.length; index += 1) {
     const payload =
