@@ -25,6 +25,7 @@ import { PasswordEntryWorkbench } from './password-entry.js';
 import { SearchWorkbench } from './search.js';
 import { RecoveryStateStory } from './recovery-state.js';
 import { ResourceStateStory } from './resource-state.js';
+import { ResourceIdentityStory } from './resource-identity.js';
 import { SelectWorkbench } from './select.js';
 import { SliderWorkbench } from './slider.js';
 import { SwitchWorkbench } from './switch.js';
@@ -59,6 +60,7 @@ type NativeWorkbenchName =
 const compositeExamples = {
   ConfirmAction: ConfirmationStory,
   ResourceState: ResourceStateStory,
+  ResourceIdentity: ResourceIdentityStory,
   RecoveryState: RecoveryStateStory,
   TerminalTranscript: TerminalTranscriptStory,
   CommandPaletteView: CommandPaletteStory,

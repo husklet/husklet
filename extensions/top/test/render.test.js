@@ -5279,10 +5279,13 @@ test('network inspection exposes loading, retry, empty and domain-specific detai
   assert.ok(labelled(stage, 'Connected containers · 1'));
   assert.ok(labelled(stage, '1 connected'));
   assert.ok(labelled(stage, 'Refresh connections'));
-  assert.ok(labelled(stage, `Immutable network ID · ${'b'.repeat(12)}`));
-  assert.deepEqual(property(stage, `Immutable network ID · ${'b'.repeat(12)}`, 'Tooltip'), {
-    Text: networkId,
-  });
+  assert.ok(labelled(stage, 'Immutable network ID'));
+  assert.ok(
+    stage.frames
+      .flatMap((frame) => frame.patches)
+      .some((patch) => patch.SetProp?.prop === 'Value' && patch.SetProp.value?.Text === networkId),
+    'network inspection exposes the complete selectable identity',
+  );
   assert.ok(labelled(stage, `Container · ${'a'.repeat(12)}`));
   assert.deepEqual(property(stage, `Container · ${'a'.repeat(12)}`, 'Tooltip'), {
     Text: containerId,

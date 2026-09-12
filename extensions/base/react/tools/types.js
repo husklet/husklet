@@ -80,6 +80,7 @@ export interface CompositeComponentDefinition<Name extends string = string, Fami
 export const compositeComponents: readonly [
   { readonly name: 'ConfirmAction'; readonly family: 'buttons'; readonly summary: string },
   { readonly name: 'ResourceState'; readonly family: 'feedback'; readonly summary: string },
+  { readonly name: 'ResourceIdentity'; readonly family: 'content'; readonly summary: string },
   { readonly name: 'RecoveryState'; readonly family: 'feedback'; readonly summary: string },
   { readonly name: 'TerminalTranscript'; readonly family: 'content'; readonly summary: string },
   { readonly name: 'CommandPaletteView'; readonly family: 'navigation'; readonly summary: string },
@@ -282,6 +283,13 @@ export interface ResourceStateProps extends NodeProps {
 }
 export const ResourceState: ComponentType<ResourceStateProps>;
 export const RESOURCE_STATE_TEXT_BYTE_LIMIT: 1024;
+
+export interface ResourceIdentityProps {
+  label: string;
+  value: string;
+}
+export const ResourceIdentity: ComponentType<ResourceIdentityProps>;
+export const RESOURCE_IDENTITY_BYTE_LIMIT: 4096;
 
 export interface RecoveryStateProps extends NodeProps {
   error?: unknown;

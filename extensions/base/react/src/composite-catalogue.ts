@@ -27,6 +27,12 @@ export const compositeComponents = [
     summary: 'A mutually exclusive loading, empty, failure, or ready resource boundary.',
   },
   {
+    name: 'ResourceIdentity',
+    family: 'content',
+    summary:
+      'A compact label with the complete selectable identity required for exact resource actions.',
+  },
+  {
     name: 'RecoveryState',
     family: 'feedback',
     summary: 'Actionable recovery with bounded technical details disclosed on request.',

@@ -17,6 +17,7 @@ import {
   InlineMessage,
   ResourceState,
   RecoveryState,
+  ResourceIdentity,
   Row,
   Scroll,
   Select,
@@ -744,11 +745,7 @@ function NetworkSummaryDetail({ network }: { network: NetworkSummary }) {
         <Badge label={`Scope · ${network.scope}`} />
         <Badge label={network.kind === 'builtin' ? 'Built-in' : 'Custom'} />
       </Row>
-      <Text
-        label={`Immutable network ID · ${shortId(network.id)}`}
-        color="text-dim"
-        tooltip={network.id}
-      />
+      <ResourceIdentity label="Immutable network ID" value={network.id} />
       <Heading label={`Connected containers · ${containers.length}`} scale="caption" />
       {!endpoints ? (
         <InlineMessage

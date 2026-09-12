@@ -1137,9 +1137,21 @@ mod unix {
                     .next()
                     .expect("expanded network remains in its card");
                 assert!(
-                    card.height() <= 270,
+                    card.height() <= 310,
                     "{width_name} empty membership inflated the network card to {}px",
                     card.height()
+                );
+                find_labelled(&expanded_root, "Immutable network ID");
+                let identity = find_label(&expanded_root, &network_id);
+                assert!(
+                    identity.has_css_class("hl-code"),
+                    "{width_name} complete network identity remains selectable code"
+                );
+                assert!(
+                    identity.width() <= card.width() - 20,
+                    "{width_name} complete network identity escaped its card: identity={} card={}",
+                    identity.width(),
+                    card.width()
                 );
                 find_labelled(&expanded_root, "No containers connected.");
                 capture(&window, &format!("expanded-networks-{width_name}"), width, 800);

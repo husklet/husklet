@@ -27,6 +27,7 @@ export * from './command-palette.js';
 export * from './json-tree.js';
 export * from './confirm-action.js';
 export * from './resource-state.js';
+export * from './resource-identity.js';
 export * from './recovery-state.js';
 export * from './window-cache.js';
 export * from './composite-catalogue.js';

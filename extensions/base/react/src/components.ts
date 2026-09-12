@@ -13,6 +13,7 @@ type InternalComponentName =
   | 'Badge'
   | 'Button'
   | 'Column'
+  | 'Code'
   | 'CommandPalette'
   | 'EmptyState'
   | 'InlineMessage'
