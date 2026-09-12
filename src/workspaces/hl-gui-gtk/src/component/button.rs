@@ -31,12 +31,10 @@ fn standard() -> gtk::Button {
     let widget = sized(action());
     widget.add_css_class("hl-button");
     let content = axis::row(0);
-    content.add_css_class("hl-button-chrome");
-    content.set_valign(gtk::Align::Center);
     content.append(&slot::emblem_image());
     content.append(&slot::activity_spinner());
     content.append(&slot::caption_label());
-    widget.set_child(Some(&content));
+    widget.set_child(Some(&chrome("hl-button-chrome", &content)));
     widget
 }
 
@@ -45,13 +43,19 @@ fn inline() -> gtk::Button {
     let widget = action();
     widget.add_css_class("hl-inline-button");
     let content = axis::row(0);
-    content.add_css_class("hl-inline-button-chrome");
-    content.set_valign(gtk::Align::Center);
     content.append(&slot::emblem_image());
     content.append(&slot::activity_spinner());
     content.append(&slot::caption_label());
-    widget.set_child(Some(&content));
+    widget.set_child(Some(&chrome("hl-inline-button-chrome", &content)));
     widget
+}
+
+fn chrome(class: &str, content: &gtk::Box) -> gtk::Frame {
+    let chrome = gtk::Frame::new(None);
+    chrome.add_css_class(class);
+    chrome.set_valign(gtk::Align::Center);
+    chrome.set_child(Some(content));
+    chrome
 }
 
 fn action() -> gtk::Button {

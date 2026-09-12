@@ -231,9 +231,9 @@ fn control_sizes(css: &mut String) {
          button.hl-button.size-small > .hl-button-chrome { min-height: 28px; padding: 0 8px; font-size: 12px; border-radius: 6px; }\n\
          button.hl-button.size-medium > .hl-button-chrome { min-height: 36px; padding: 0 12px; font-size: 14px; border-radius: 6px; }\n\
          button.hl-button.size-large > .hl-button-chrome { min-height: 44px; padding: 0 16px; font-size: 16px; border-radius: 8px; }\n\
-         button.hl-button.size-small > .hl-button-chrome { border-spacing: 6px; } button.size-small image { -gtk-icon-size: 14px; }\n\
-         button.hl-button.size-medium > .hl-button-chrome { border-spacing: 8px; } button.size-medium image { -gtk-icon-size: 18px; }\n\
-         button.hl-button.size-large > .hl-button-chrome { border-spacing: 8px; } button.size-large image { -gtk-icon-size: 20px; }\n\
+         button.hl-button.size-small > .hl-button-chrome > box { border-spacing: 6px; } button.size-small image { -gtk-icon-size: 14px; }\n\
+         button.hl-button.size-medium > .hl-button-chrome > box { border-spacing: 8px; } button.size-medium image { -gtk-icon-size: 18px; }\n\
+         button.hl-button.size-large > .hl-button-chrome > box { border-spacing: 8px; } button.size-large image { -gtk-icon-size: 20px; }\n\
          button.hl-iconbutton.size-small { min-width: 28px; min-height: 28px; padding: 0; }\n\
          button.hl-iconbutton.size-medium { min-width: 36px; min-height: 36px; padding: 0; }\n\
          button.hl-iconbutton.size-large { min-width: 44px; min-height: 44px; padding: 0; }\n\
@@ -267,7 +267,6 @@ fn standard_buttons(css: &mut String, theme: &Theme) {
         css,
         "button.hl-button, button.hl-button:hover, button.hl-button:active {{ background: transparent; border-color: transparent; box-shadow: none; }}\n\
          button.hl-button:focus-visible {{ outline: none; }}\n\
-         button.hl-button:focus-visible > .hl-button-chrome {{ outline: 2px solid {accent}; outline-offset: 2px; }}\n\
          button.hl-button.variant-plain > .hl-button-chrome {{ background: transparent; color: {text}; border: 1px solid transparent; }}\n\
          button.hl-button.variant-filled > .hl-button-chrome {{ background: {text}; color: {ground}; border: 1px solid {text}; }}\n\
          button.hl-button.variant-outline > .hl-button-chrome {{ background: transparent; color: {text}; border: 1px solid {line}; }}\n\
@@ -276,7 +275,9 @@ fn standard_buttons(css: &mut String, theme: &Theme) {
          button.hl-button.variant-filled:hover > .hl-button-chrome {{ box-shadow: inset 0 0 0 999px rgba(255,255,255,.10); }}\n\
          button.hl-button.variant-filled:active > .hl-button-chrome {{ box-shadow: inset 0 0 0 999px rgba(0,0,0,.14); }}\n\
          button.hl-button:disabled > .hl-button-chrome {{ color: {faint}; background: {surface}; border-color: {line}; box-shadow: none; }}\n\
-         button.hl-button.variant-ghost:disabled > .hl-button-chrome, button.hl-button.variant-plain:disabled > .hl-button-chrome {{ background: transparent; border-color: transparent; }}",
+         button.hl-button.variant-ghost:disabled > .hl-button-chrome, button.hl-button.variant-plain:disabled > .hl-button-chrome {{ background: transparent; border-color: transparent; }}\n\
+         button.hl-button:focus-visible > .hl-button-chrome, button.hl-button > .hl-button-chrome.hl-focus-visible-proof {{ outline: none; box-shadow: inset 0 0 0 2px {accent}; }}\n\
+         button.hl-button.variant-filled:focus-visible > .hl-button-chrome, button.hl-button.variant-filled > .hl-button-chrome.hl-focus-visible-proof {{ box-shadow: inset 0 0 0 2px {ground}; }}",
         raised = theme.color(Token::Raised).hex(),
         text = theme.color(Token::Text).hex(),
         ground = theme.color(Token::Ground).hex(),
@@ -293,13 +294,14 @@ fn inline_buttons(css: &mut String, theme: &Theme) {
         css,
         "button.hl-inline-button, button.hl-inline-button:hover, button.hl-inline-button:active {{ background: transparent; border-color: transparent; box-shadow: none; }}\n\
          button.hl-inline-button:focus-visible {{ outline: none; }}\n\
-         button.hl-inline-button:focus-visible > .hl-inline-button-chrome {{ outline: 2px solid {accent}; outline-offset: 2px; }}\n\
          button.hl-inline-button > .hl-inline-button-chrome {{ background: transparent; color: {text}; border-color: transparent; }}\n\
          button.hl-inline-button.variant-outline > .hl-inline-button-chrome {{ border-color: {line}; }}\n\
          button.hl-inline-button.variant-filled > .hl-inline-button-chrome {{ background: {text}; color: {ground}; border-color: {text}; }}\n\
          button.hl-inline-button.variant-filled.tone-accent > .hl-inline-button-chrome {{ background: {accent}; color: {ground}; border-color: {accent}; }}\n\
          button.hl-inline-button:hover > .hl-inline-button-chrome {{ background: {raised}; color: {text}; border-color: {accent}; }}\n\
-         button.hl-inline-button:disabled > .hl-inline-button-chrome {{ background: transparent; color: {faint}; border-color: {line}; }}",
+         button.hl-inline-button:disabled > .hl-inline-button-chrome {{ background: transparent; color: {faint}; border-color: {line}; }}\n\
+         button.hl-inline-button:focus-visible > .hl-inline-button-chrome, button.hl-inline-button > .hl-inline-button-chrome.hl-focus-visible-proof {{ outline: none; box-shadow: inset 0 0 0 2px {accent}; }}\n\
+         button.hl-inline-button.variant-filled:focus-visible > .hl-inline-button-chrome, button.hl-inline-button.variant-filled > .hl-inline-button-chrome.hl-focus-visible-proof {{ box-shadow: inset 0 0 0 2px {ground}; }}",
         text = theme.color(Token::Text).hex(),
         ground = theme.color(Token::Ground).hex(),
         line = theme.color(Token::Line).hex(),
@@ -568,7 +570,7 @@ mod tests {
         );
         assert!(css.contains("button.hl-inline-button:focus-visible { outline: none; }"));
         assert!(css.contains(
-            "button.hl-inline-button:focus-visible > .hl-inline-button-chrome { outline: 2px solid #559df7; outline-offset: 2px; }"
+            "button.hl-inline-button:focus-visible > .hl-inline-button-chrome, button.hl-inline-button > .hl-inline-button-chrome.hl-focus-visible-proof { outline: none; box-shadow: inset 0 0 0 2px #559df7; }"
         ));
     }
 
@@ -577,7 +579,7 @@ mod tests {
         let css = super::sheet(&Theme::dark());
         assert!(css.contains("button.hl-button:focus-visible { outline: none; }"));
         assert!(css.contains(
-            "button.hl-button:focus-visible > .hl-button-chrome { outline: 2px solid #559df7; outline-offset: 2px; }"
+            "button.hl-button:focus-visible > .hl-button-chrome, button.hl-button > .hl-button-chrome.hl-focus-visible-proof { outline: none; box-shadow: inset 0 0 0 2px #559df7; }"
         ));
         assert!(
             css.contains("button:focus-visible { outline: 2px"),

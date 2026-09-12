@@ -455,8 +455,8 @@ mod unix {
             assert!(!disabled.is_sensitive());
             assert!(!disabled.grab_focus(), "disabled Button entered keyboard focus order");
             for (width, width_name) in [(600, "narrow"), (1_200, "wide")] {
-                realized_window.set_size_request(width, 800);
-                realized_window.set_default_size(width, 800);
+                realized_window.set_size_request(width, 1_500);
+                realized_window.set_default_size(width, 1_500);
                 settle_window_width(&realized_window, width);
                 for (label, variant) in [
                     ("Focus filled", "filled"),
@@ -466,15 +466,23 @@ mod unix {
                     let action = find::<gtk::Button>(&root, |button| button_caption(button).as_deref() == Some(label));
                     assert!(action.has_css_class(&format!("variant-{variant}")));
                     assert!(action.grab_focus(), "{label} accepts keyboard focus");
-                    settle_toolkit();
                     assert!(action.has_focus(), "{label} owns native focus");
+                    let chrome = action.child().expect("focused Button owns chrome");
+                    assert!(chrome.has_css_class("hl-button-chrome"));
+                    action.set_state_flags(gtk::StateFlags::FOCUSED | gtk::StateFlags::FOCUS_VISIBLE, false);
                     assert!(
                         action
-                            .child()
-                            .is_some_and(|chrome| chrome.has_css_class("hl-button-chrome"))
+                            .state_flags()
+                            .contains(gtk::StateFlags::FOCUSED | gtk::StateFlags::FOCUS_VISIBLE)
                     );
+                    // Xvfb cannot originate keyboard modality. Mirror the production
+                    // `:focus-visible` chrome selector after asserting GTK's focus state.
+                    chrome.add_css_class("hl-focus-visible-proof");
+                    reveal_for_capture(&root, action.upcast_ref());
+                    capture_story(&realized_window, &format!("Button focused {variant} {width_name}"));
+                    chrome.remove_css_class("hl-focus-visible-proof");
+                    action.unset_state_flags(gtk::StateFlags::FOCUSED | gtk::StateFlags::FOCUS_VISIBLE);
                 }
-                capture_story(&realized_window, &format!("Button focused ghost {width_name}"));
             }
         }
         if story == "IconButton" {
@@ -1203,10 +1211,8 @@ mod unix {
                         "{width}px InlineButton target shrank to {}px",
                         action.height()
                     );
-                    let chrome = descendants::<gtk::Box>(action.upcast_ref())
-                        .into_iter()
-                        .find(|child| child.has_css_class("hl-inline-button-chrome"))
-                        .expect("InlineButton owns visual chrome");
+                    let chrome = action.child().expect("InlineButton owns visual chrome");
+                    assert!(chrome.has_css_class("hl-inline-button-chrome"));
                     assert!(
                         chrome.height() <= 30,
                         "{width}px InlineButton chrome expanded to {}px",
@@ -1218,13 +1224,34 @@ mod unix {
                 });
                 assert!(inspect.grab_focus(), "enabled InlineButton accepts keyboard focus");
                 assert!(inspect.has_focus(), "InlineButton exposes native focus state");
-                let focus_ghost = find::<gtk::Button>(&root, |button| {
-                    button_caption(button).as_deref() == Some("Focus ghost")
-                });
-                assert!(focus_ghost.grab_focus());
-                assert!(focus_ghost.has_focus());
                 let width_name = if width == 600 { "narrow" } else { "wide" };
-                capture_story(&realized_window, &format!("InlineButton focused ghost {width_name}"));
+                for (label, variant) in [
+                    ("Focus filled", "filled"),
+                    ("Focus outline", "outline"),
+                    ("Focus ghost", "ghost"),
+                ] {
+                    let action = find::<gtk::Button>(&root, |button| button_caption(button).as_deref() == Some(label));
+                    assert!(action.grab_focus());
+                    assert!(action.has_focus());
+                    action.set_state_flags(gtk::StateFlags::FOCUSED | gtk::StateFlags::FOCUS_VISIBLE, false);
+                    assert!(
+                        action
+                            .state_flags()
+                            .contains(gtk::StateFlags::FOCUSED | gtk::StateFlags::FOCUS_VISIBLE)
+                    );
+                    let chrome = action.child().expect("focused InlineButton owns chrome");
+                    assert!(chrome.has_css_class("hl-inline-button-chrome"));
+                    // See the Button proof above: this class is test-only and is never
+                    // emitted by the adapter.
+                    chrome.add_css_class("hl-focus-visible-proof");
+                    reveal_for_capture(&root, action.upcast_ref());
+                    capture_story(
+                        &realized_window,
+                        &format!("InlineButton focused {variant} {width_name}"),
+                    );
+                    chrome.remove_css_class("hl-focus-visible-proof");
+                    action.unset_state_flags(gtk::StateFlags::FOCUSED | gtk::StateFlags::FOCUS_VISIBLE);
+                }
                 let _ = surface.reports().drain();
             }
             if let Some((paned, body)) = &responsive {
@@ -2340,6 +2367,22 @@ mod unix {
 
     fn capture_story(window: &gtk::Window, story: &str) {
         capture_widget(window, window.upcast_ref::<gtk::Widget>(), story);
+    }
+
+    fn reveal_for_capture(root: &gtk::Widget, target: &gtk::Widget) {
+        let Some(bounds) = target.compute_bounds(root) else {
+            return;
+        };
+        let Some(document) = descendants::<gtk::ScrolledWindow>(root)
+            .into_iter()
+            .filter(|scroll| scroll.has_css_class("hl-scroll"))
+            .next_back()
+        else {
+            return;
+        };
+        let adjustment = document.vadjustment();
+        adjustment.set_value((adjustment.value() + f64::from(bounds.y()) - 240.0).max(0.0));
+        settle_toolkit();
     }
 
     fn capture_widget(window: &gtk::Window, widget: &gtk::Widget, story: &str) {
