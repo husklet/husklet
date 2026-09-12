@@ -10,13 +10,15 @@ import { KIND, Reader, encode } from '../../../extensions/base/react/dist/wire.j
 import { Extensions } from '../dist/app.js';
 import { host } from './host.js';
 
-test('installed extension detects a republished same-version image over real Unix framing', async () => {
+test('digest-pinned same-version review rejects a substituted image over real Unix framing', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'husklet-extension-update-'));
   const socketPath = join(directory, 'host.sock');
   const oldDigest = `sha256:${'a'.repeat(64)}`;
   const nextDigest = `sha256:${'b'.repeat(64)}`;
-  const reference = 'registry.example/storybook:2';
+  const reference = `registry.example/storybook:2@sha256:${'c'.repeat(64)}`;
+  const substitutedReference = `registry.example/storybook:2@sha256:${'d'.repeat(64)}`;
   const calls = [];
+  let starts = 0;
   const server = net.createServer((socket) => {
     const reader = new Reader();
     socket.write(
@@ -35,6 +37,7 @@ test('installed extension detects a republished same-version image over real Uni
         const call = frame.payload?.call;
         if (!call) continue;
         calls.push(frame.payload);
+        if (call === 'extension_acquisition_start') starts += 1;
         const payload =
           call === 'extension_list'
             ? {
@@ -76,7 +79,7 @@ test('installed extension detects a republished same-version image over real Uni
                       reply: 'extension_acquisition',
                       with: {
                         job: 'update-job',
-                        reference,
+                        reference: starts === 1 ? substitutedReference : reference,
                         revision: 4,
                         state: 'ready',
                         progress: null,
@@ -106,7 +109,14 @@ test('installed extension detects a republished same-version image over real Uni
     stage.render(h(Extensions, { api: workspace(session) }));
     await until(() => labelled(stage, 'Check for changes'));
     invokeByTooltip(stage, 'Check storybook image for changes');
-    await until(() => labelled(stage, 'Update with selected access'));
+    await until(() => labelled(stage, 'Catalogue verification could not be completed.'));
+    assert.ok(
+      labelled(
+        stage,
+        'Catalogue image changed: expected the selected image reference, but the acquisition completed for a different reference. Return to the catalogue and review its latest entry before installing.',
+      ),
+    );
+    assert.equal(enabledByLabel(stage, 'Update with selected access'), false);
     await until(() =>
       labelled(
         stage,
@@ -128,6 +138,17 @@ test('installed extension detects a republished same-version image over real Uni
     );
     assert.ok(labelled(stage, 'Verified publisher · Husklet'));
     assert.ok(labelled(stage, 'Catalogue source · husklet:first-party/storybook'));
+    assert.ok(
+      labelled(
+        stage,
+        `Source registry.example/storybook:2 · sha256:${'d'.repeat(12)}…${'d'.repeat(8)}`,
+      ),
+    );
+    assert.equal(labelled(stage, `Source ${substitutedReference}`), undefined);
+    assert.ok(
+      tooltip(stage, substitutedReference),
+      'the full immutable reference remains available on demand',
+    );
     assert.equal(
       labelled(stage, 'Direct OCI image · no catalogue publisher verification.'),
       undefined,
@@ -146,6 +167,21 @@ function labelled(stage, label) {
     .flatMap((frame) => frame.patches)
     .filter((patch) => patch.SetProp?.prop === 'Label' && patch.SetProp.value?.Text === label)
     .at(-1);
+}
+
+function tooltip(stage, label) {
+  return stage.frames
+    .flatMap((frame) => frame.patches)
+    .filter((patch) => patch.SetProp?.prop === 'Tooltip' && patch.SetProp.value?.Text === label)
+    .at(-1);
+}
+
+function enabledByLabel(stage, label) {
+  const node = labelled(stage, label)?.SetProp.id;
+  return stage.frames
+    .flatMap((frame) => frame.patches)
+    .filter((patch) => patch.SetProp?.id === node && patch.SetProp.prop === 'Enabled')
+    .at(-1)?.SetProp.value?.Flag;
 }
 
 function invokeByTooltip(stage, tooltip) {

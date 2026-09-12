@@ -2092,7 +2092,7 @@ mod unix {
         surface: &mut Surface,
         window: &gtk::Window,
     ) {
-        let reference = "ghcr.io/example/developer-tool-01:1.0.0";
+        let reference = "ghcr.io/example/developer-tool-01:1.0.0@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
         let old_digest = format!("sha256:{}", "4".repeat(64));
         let next_digest = format!("sha256:{}", "b".repeat(64));
         let root = surface.widget().clone().upcast::<gtk::Widget>();
@@ -2131,8 +2131,21 @@ mod unix {
         );
         let failure_root = surface.widget().clone().upcast::<gtk::Widget>();
         assert!(
-            has_label(&failure_root, reference),
-            "header retains the copyable image reference"
+            has_label(
+                &failure_root,
+                "Source ghcr.io/example/developer-tool-01:1.0.0 · sha256:cccccccccccc…cccccccc"
+            ),
+            "failure retains a compact image reference"
+        );
+        assert_eq!(
+            find_label(
+                &failure_root,
+                "Source ghcr.io/example/developer-tool-01:1.0.0 · sha256:cccccccccccc…cccccccc"
+            )
+            .tooltip_text()
+            .as_deref(),
+            Some(reference),
+            "the full immutable reference remains available on demand"
         );
         assert!(
             !has_label(&failure_root, &format!("Image · {reference}")),
@@ -2338,6 +2351,23 @@ mod unix {
             &review_root,
             "Catalogue source · community/developer-tool-01"
         ));
+        assert!(has_label(
+            &review_root,
+            "Source ghcr.io/example/developer-tool-01:1.0.0 · sha256:cccccccccccc…cccccccc"
+        ));
+        assert_eq!(
+            find_label(
+                &review_root,
+                "Source ghcr.io/example/developer-tool-01:1.0.0 · sha256:cccccccccccc…cccccccc"
+            )
+            .tooltip_text()
+            .as_deref(),
+            Some(reference)
+        );
+        assert!(
+            !has_label(&review_root, &format!("Source {reference}")),
+            "the primary review does not overflow with the raw immutable digest"
+        );
         assert!(has_label(
             &review_root,
             "Publisher is not verified; confirm the catalogue source and reviewed digest. Image changes from sha256:444444444444…44444444; access has been reset."
@@ -2973,7 +3003,7 @@ mod unix {
             title: "Storybook".into(),
             description: "Inspect the Husklet interface component library.".into(),
             version: "0.4.0".into(),
-            reference: "ghcr.io/husklet/storybook:0.4.0".into(),
+            reference: format!("ghcr.io/husklet/storybook:0.4.0@sha256:{}", "a".repeat(64)),
             publisher: "Husklet".into(),
             source: "Built in".into(),
             publisher_verified: true,
@@ -2985,7 +3015,11 @@ mod unix {
             title: format!("Developer Tool {index:02}"),
             description: format!("A bounded daily developer workflow for task {index:02}."),
             version: "1.0.0".into(),
-            reference: format!("ghcr.io/example/developer-tool-{index:02}:1.0.0"),
+            reference: if index == 1 {
+                format!("ghcr.io/example/developer-tool-{index:02}:1.0.0@sha256:{}", "c".repeat(64))
+            } else {
+                format!("ghcr.io/example/developer-tool-{index:02}:1.0.0")
+            },
             publisher: if index % 2 == 0 { "Acme" } else { "Community" }.into(),
             source: format!("community/developer-tool-{index:02}"),
             publisher_verified: false,

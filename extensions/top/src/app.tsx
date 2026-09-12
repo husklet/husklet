@@ -58,6 +58,7 @@ export {
   capabilityLabel,
   catalogueTrust,
   catalogueCandidateMismatch,
+  compactImageReference,
   filterCatalogueEntries,
   filterInstalledExtensions,
 } from './extensions.js';

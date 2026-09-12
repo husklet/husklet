@@ -164,15 +164,26 @@ export function catalogueTrust(entry: ExtensionCatalogueEntry) {
 }
 
 export function catalogueCandidateMismatch(
-  entry: Pick<ExtensionCatalogueEntry, 'id' | 'version'> | null,
+  entry: Pick<ExtensionCatalogueEntry, 'id' | 'version' | 'reference'> | null,
   candidate: { name: string; version: string } | null | undefined,
+  acquiredReference?: string,
 ) {
   if (!entry || !candidate) return '';
+  if (acquiredReference !== undefined && acquiredReference !== entry.reference)
+    return `Catalogue image changed: expected the selected image reference, but the acquisition completed for a different reference.`;
   if (candidate.name !== entry.id)
     return `Catalogue identity changed: expected ${entry.id}, but the inspected image declares ${candidate.name}.`;
   if (candidate.version !== entry.version)
     return `Catalogue version changed: expected ${entry.version}, but the inspected image declares ${candidate.version}.`;
   return '';
+}
+
+export function compactImageReference(reference: string) {
+  const separator = reference.lastIndexOf('@');
+  if (separator < 0) return reference;
+  const name = reference.slice(0, separator);
+  const digest = reference.slice(separator + 1);
+  return `${name} · ${compactDigest(digest)}`;
 }
 
 function compareCatalogueEntries(left: ExtensionCatalogueEntry, right: ExtensionCatalogueEntry) {
@@ -674,7 +685,11 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
       !acquisition?.candidate ||
       acquisition.state !== 'ready' ||
       isInstalledCandidateUnchanged(acquisition.candidate) ||
-      catalogueCandidateMismatch(catalogueExpectation, acquisition.candidate) ||
+      catalogueCandidateMismatch(
+        catalogueExpectation,
+        acquisition.candidate,
+        acquisition.reference,
+      ) ||
       busy
     )
       return;
@@ -986,6 +1001,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
   const catalogueMismatch = catalogueCandidateMismatch(
     catalogueExpectation,
     acquisition?.candidate,
+    acquisition?.reference,
   );
   const requestedPermissionCount = acquisition?.candidate
     ? acquisition.candidate.requested.length +
@@ -1261,7 +1277,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                                     wrap
                                   />
                                   <Text
-                                    label={`Image · ${entry.reference}`}
+                                    label={`Image · ${compactImageReference(entry.reference)}`}
                                     color="text-dim"
                                     tooltip={entry.reference}
                                     wrap
@@ -1405,7 +1421,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                         ? 'Update extension'
                         : acquisition.candidate
                           ? 'Install extension'
-                          : acquisition.reference
+                          : 'Image inspection'
                     }
                     align="start"
                     width="fill"
@@ -1415,7 +1431,12 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                       <Text
                         label={`${acquisition.candidate.name} · ${acquisition.candidate.version}`}
                       />
-                      <Text label={`Source ${acquisition.reference}`} color="text-dim" wrap />
+                      <Text
+                        label={`Source ${compactImageReference(acquisition.reference)}`}
+                        color="text-dim"
+                        tooltip={acquisition.reference}
+                        wrap
+                      />
                       <Text
                         label={`Reviewed image ${compactDigest(acquisition.candidate.image_digest)}`}
                         tooltip={acquisition.candidate.image_digest}
@@ -1887,6 +1908,12 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                   )}
                   {acquisition && acquisition.state !== 'ready' && (
                     <CardContent gap={1}>
+                      <Text
+                        label={`Source ${compactImageReference(acquisition.reference)}`}
+                        color="text-dim"
+                        tooltip={acquisition.reference}
+                        wrap
+                      />
                       {acquisition.state === 'failed' ? (
                         <Column gap={1}>
                           <InlineMessage

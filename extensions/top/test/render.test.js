@@ -29,6 +29,7 @@ import {
   acquisitionLabel,
   catalogueTrust,
   catalogueCandidateMismatch,
+  compactImageReference,
   capabilityLabel,
   filterCatalogueEntries,
   filterInstalledExtensions,
@@ -59,7 +60,19 @@ test('catalogue display strings cannot forge verified publisher status', () => {
 });
 
 test('an acquired image must retain the catalogue identity the developer selected', () => {
-  const selected = { id: 'database', version: '2.0.0' };
+  const selected = {
+    id: 'database',
+    version: '2.0.0',
+    reference: `registry/database:2@sha256:${'a'.repeat(64)}`,
+  };
+  assert.equal(
+    catalogueCandidateMismatch(
+      selected,
+      { name: 'database', version: '2.0.0' },
+      `registry/database:2@sha256:${'b'.repeat(64)}`,
+    ),
+    'Catalogue image changed: expected the selected image reference, but the acquisition completed for a different reference.',
+  );
   assert.equal(
     catalogueCandidateMismatch(selected, { name: 'other-tool', version: '2.0.0' }),
     'Catalogue identity changed: expected database, but the inspected image declares other-tool.',
@@ -69,6 +82,10 @@ test('an acquired image must retain the catalogue identity the developer selecte
     'Catalogue version changed: expected 2.0.0, but the inspected image declares 1.0.0.',
   );
   assert.equal(catalogueCandidateMismatch(selected, { name: 'database', version: '2.0.0' }), '');
+  assert.equal(
+    compactImageReference(selected.reference),
+    `registry/database:2 · sha256:${'a'.repeat(12)}…${'a'.repeat(8)}`,
+  );
 });
 import {
   ContainerDetailsSource,
@@ -189,6 +206,8 @@ test('Top sidebar preference is narrowly bounded and retried with fresh CAS auth
   ]);
 });
 
+const FIRST_PARTY_REFERENCE = `ghcr.io/husklet/husklet/extension-storybook:2.0.0@sha256:${'c'.repeat(64)}`;
+
 const firstPartyCatalogue = async () => ({
   entries: [
     {
@@ -196,7 +215,7 @@ const firstPartyCatalogue = async () => ({
       title: 'Component playground',
       description: 'Explore extension components, large tables, terminals, diffs, and metrics.',
       version: '2.0.0',
-      reference: 'ghcr.io/husklet/husklet/extension-storybook:latest',
+      reference: FIRST_PARTY_REFERENCE,
       publisher: 'Husklet',
       source: 'husklet:first-party/storybook',
       publisher_verified: true,
@@ -805,7 +824,7 @@ test('Top owns workspace settings and extension management in the same tab', asy
   assert.ok(labelled(stage, '1 extension'));
   assert.ok(labelled(stage, 'Component playground'));
   assert.ok(
-    labelled(stage, 'Image · ghcr.io/husklet/husklet/extension-storybook:latest'),
+    labelled(stage, `Image · ${compactImageReference(FIRST_PARTY_REFERENCE)}`),
     'discovery names the exact OCI input that review will inspect',
   );
   assert.ok(labelled(stage, 'Install from an OCI image'));
@@ -1132,7 +1151,7 @@ test('extension discovery reviews the first-party Storybook without requiring a 
           },
           acquisition: async () => ({
             job: 'storybook-review',
-            reference: 'ghcr.io/husklet/husklet/extension-storybook:latest',
+            reference: FIRST_PARTY_REFERENCE,
             revision: 1,
             state: 'failed',
             progress: null,
@@ -1155,11 +1174,8 @@ test('extension discovery reviews the first-party Storybook without requiring a 
   invoke(stage, 'Review access');
   await settled();
   await settled();
-  assert.deepEqual(references, ['ghcr.io/husklet/husklet/extension-storybook:latest']);
-  assert.equal(
-    fieldValue(stage, 'registry.example/extension:version'),
-    'ghcr.io/husklet/husklet/extension-storybook:latest',
-  );
+  assert.deepEqual(references, [FIRST_PARTY_REFERENCE]);
+  assert.equal(fieldValue(stage, 'registry.example/extension:version'), FIRST_PARTY_REFERENCE);
 });
 
 test('large extension catalogues search and filter deterministic lifecycle projections', () => {
@@ -1490,7 +1506,7 @@ test('an installed catalogue extension exposes its update review without retypin
           },
           acquisition: async () => ({
             job: 'storybook-update',
-            reference: 'ghcr.io/husklet/husklet/extension-storybook:latest',
+            reference: FIRST_PARTY_REFERENCE,
             revision: 3,
             state: 'ready',
             progress: null,
@@ -1543,11 +1559,11 @@ test('an installed catalogue extension exposes its update review without retypin
 
   invokeInCard(stage, 'Component playground', 'Review update');
   invokeInCard(stage, 'Component playground', 'Review update');
-  assert.deepEqual(references, ['ghcr.io/husklet/husklet/extension-storybook:latest']);
+  assert.deepEqual(references, [FIRST_PARTY_REFERENCE]);
   releaseStart();
   await settled();
   await settled();
-  assert.deepEqual(references, ['ghcr.io/husklet/husklet/extension-storybook:latest']);
+  assert.deepEqual(references, [FIRST_PARTY_REFERENCE]);
   assert.ok(labelled(stage, `Image changes from ${compactDigest(digest)}; access has been reset.`));
   assert.ok(labelled(stage, 'Update with selected access'));
 });
@@ -1786,7 +1802,7 @@ test('reviewing an unchanged installed digest is an explicit no-op', async () =>
           startAcquisition: async () => ({ job: 'unchanged-update' }),
           acquisition: async () => ({
             job: 'unchanged-update',
-            reference: 'ghcr.io/husklet/husklet/extension-storybook:latest',
+            reference: FIRST_PARTY_REFERENCE,
             revision: 2,
             state: 'ready',
             progress: null,
@@ -1852,7 +1868,7 @@ test('catalogue does not advertise an update at the installed version', async ()
 test('installed management can detect a republished image at the same release version', async () => {
   const installedDigest = `sha256:${'a'.repeat(64)}`;
   const candidateDigest = `sha256:${'b'.repeat(64)}`;
-  const reference = 'ghcr.io/husklet/husklet/extension-storybook:latest';
+  const reference = FIRST_PARTY_REFERENCE;
   const references = [];
   const stage = host();
   stage.render(
@@ -2246,8 +2262,9 @@ test('extension inspection keeps invalid and failed references recoverable with 
   await settled();
   assert.ok(labelled(stage, 'Couldn’t inspect extension'));
   assert.deepEqual(taggedProperty(stage, 'Couldn’t inspect extension', 'CardHeader', 'Detail'), {
-    Text: 'registry.example/reviewed:1',
+    Text: 'Image inspection',
   });
+  assert.ok(labelled(stage, 'Source registry.example/reviewed:1'));
   assert.equal(labelled(stage, 'Image · registry.example/reviewed:1'), undefined);
   assert.ok(
     labelled(
