@@ -40,7 +40,7 @@ try {
         },
       );
       process.stdout.write(
-        `${JSON.stringify({ context: context.panes.map(({ pane, readable }) => ({ slot: pane.slot, kind: readable.kind, text: readable.text })), incomplete: contextIncomplete || !result.settled || (result.changed && result.after.kind === 'ui' && !result.after.complete), selected: { kind: 'terminal', before: observed.text, after: result.changed ? result.after.text : null, afterKind: result.changed ? result.after.kind : null, replacement: result.changed && result.after.snapshot.generation !== observed.snapshot.generation } })}\n`,
+        `${JSON.stringify({ context: context.panes.map(({ pane, readable }) => ({ slot: pane.slot, kind: readable.kind, text: readable.text })), incomplete: contextIncomplete || !result.settled || result.replaced || (result.changed && result.after.kind === 'ui' && !result.after.complete), selected: { kind: 'terminal', before: observed.text, after: result.changed ? result.after.text : null, afterKind: result.changed ? result.after.kind : null, replacement: result.replaced } })}\n`,
       );
     } finally {
       clearTimeout(deadline);

@@ -239,7 +239,11 @@ test('LLM terminal agent observes, writes, and follows replacement over the exte
   assert.match(run.result.selected.after, /Agent result healthy/);
   assert.equal(run.result.selected.afterKind, 'ui');
   assert.equal(run.result.selected.replacement, true);
-  assert.equal(run.result.incomplete, false);
+  assert.equal(
+    run.result.incomplete,
+    true,
+    'replacement UI is recovery context, not settled output from the terminal input',
+  );
   assert.match(run.result.context.find(({ kind }) => kind === 'ui').text, /Deployment healthy/);
 });
 

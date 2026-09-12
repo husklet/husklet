@@ -4063,11 +4063,14 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
       timeoutMs,
       signal,
     });
-    if (!first.changed) return { ...first, settled: false };
+    if (!first.changed) return { ...first, settled: false, replaced: false };
     let after = first.after;
+    if (after.snapshot.generation !== before.generation) {
+      return { ...first, after, settled: false, replaced: true };
+    }
     for (;;) {
       const remaining = deadline - Date.now();
-      if (remaining < 1) return { ...first, after, settled: false };
+      if (remaining < 1) return { ...first, after, settled: false, replaced: false };
       const window = Math.min(quietMs, remaining);
       const next = await api.terminal.waitForText(after.snapshot.slot, after.snapshot, {
         lines,
@@ -4075,9 +4078,12 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
         signal,
       });
       if (!next.changed) {
-        return { ...first, after, settled: window === quietMs };
+        return { ...first, after, settled: window === quietMs, replaced: false };
       }
       after = next.readable;
+      if (after.snapshot.generation !== before.generation) {
+        return { ...first, after, settled: false, replaced: true };
+      }
     }
   };
   api.terminal.spawnAndWait = async (

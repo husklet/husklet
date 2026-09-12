@@ -189,6 +189,11 @@ const written = await host.terminal.writeAndWait(
 if (written.changed) console.log(written.after.lines.join('\n'));
 ```
 
+For command-like interaction, `writeObservedAndWaitForQuietText` additionally
+waits for a bounded quiet window. Check both `settled` and `replaced`: replacement
+content is returned for recovery context but is never reported as settled output
+from bytes written to the previous occupant.
+
 Spawning exact argv has the same observable form. Success means the bounded
 terminal projection advanced; it does not claim that a silent command emitted
 particular text or reached application-specific readiness:
