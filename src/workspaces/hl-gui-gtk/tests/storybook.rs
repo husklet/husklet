@@ -455,9 +455,7 @@ mod unix {
             assert!(!disabled.is_sensitive());
             assert!(!disabled.grab_focus(), "disabled Button entered keyboard focus order");
             for (width, width_name) in [(600, "narrow"), (1_200, "wide")] {
-                realized_window.set_size_request(width, 1_500);
-                realized_window.set_default_size(width, 1_500);
-                settle_window_width(&realized_window, width);
+                allocate(&root, width, 1_500);
                 for (label, variant) in [
                     ("Focus filled", "filled"),
                     ("Focus outline", "outline"),
@@ -479,7 +477,11 @@ mod unix {
                     // `:focus-visible` chrome selector after asserting GTK's focus state.
                     chrome.add_css_class("hl-focus-visible-proof");
                     reveal_for_capture(&root, action.upcast_ref());
-                    capture_story(&realized_window, &format!("Button focused {variant} {width_name}"));
+                    capture_widget(
+                        &realized_window,
+                        &root,
+                        &format!("Button focused {variant} {width_name}"),
+                    );
                     chrome.remove_css_class("hl-focus-visible-proof");
                     action.unset_state_flags(gtk::StateFlags::FOCUSED | gtk::StateFlags::FOCUS_VISIBLE);
                 }
@@ -1195,9 +1197,6 @@ mod unix {
             assert_eq!(root.width(), width, "{story} did not accept the {width}px allocation");
             assert_contained(&root, story);
             if story == "InlineButton" {
-                realized_window.set_size_request(width, 800);
-                realized_window.set_default_size(width, 800);
-                settle_window_width(&realized_window, width);
                 let actions = descendants::<gtk::Button>(&root)
                     .into_iter()
                     .filter(|button| button.has_css_class("hl-inline-button"))
@@ -1245,8 +1244,9 @@ mod unix {
                     // emitted by the adapter.
                     chrome.add_css_class("hl-focus-visible-proof");
                     reveal_for_capture(&root, action.upcast_ref());
-                    capture_story(
+                    capture_widget(
                         &realized_window,
+                        &root,
                         &format!("InlineButton focused {variant} {width_name}"),
                     );
                     chrome.remove_css_class("hl-focus-visible-proof");
