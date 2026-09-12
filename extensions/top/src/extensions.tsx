@@ -16,6 +16,7 @@ import {
   Heading,
   IconButton,
   InlineMessage,
+  Progress,
   RecoveryState,
   Search,
   ResourceState,
@@ -1982,10 +1983,19 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                         <Text label={acquisitionLabel(acquisition)} wrap />
                       ) : (
                         <Row gap={1} width="fill" align="center" justify="stretch">
-                          <Row gap={1} align="center" wrap>
-                            <Spinner />
-                            <Text label={acquisitionLabel(acquisition)} wrap />
-                          </Row>
+                          <Column gap={1} grow>
+                            <Row gap={1} align="center" wrap>
+                              {acquisition.progress ? null : <Spinner />}
+                              <Text label={acquisitionLabel(acquisition)} wrap />
+                            </Row>
+                            {acquisition.progress ? (
+                              <Progress
+                                fraction={acquisitionProgressFraction(acquisition)}
+                                tooltip={acquisitionLabel(acquisition)}
+                                width="fill"
+                              />
+                            ) : null}
+                          </Column>
                           <Spacer />
                           <Button
                             label={busy === 'cancel' ? 'Cancelling…' : 'Cancel inspection'}
@@ -2416,6 +2426,22 @@ export function acquisitionLabel(acquisition: ExtensionAcquisitionStatus): strin
             Math.round((progress.current / Math.max(1, progress.total)) * 100),
           )}%)`;
   return `${progress.status}${progress.id ? ` · ${progress.id}` : ''}${amount}`.slice(0, 500);
+}
+
+export function acquisitionProgressFraction(
+  acquisition: ExtensionAcquisitionStatus,
+): number | undefined {
+  const current = acquisition.progress?.current;
+  const total = acquisition.progress?.total;
+  if (
+    current === null ||
+    current === undefined ||
+    total === null ||
+    total === undefined ||
+    total <= 0
+  )
+    return undefined;
+  return Math.min(1, Math.max(0, current / total));
 }
 
 export function acquisitionFailure(detail: string): string {

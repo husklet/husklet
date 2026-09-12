@@ -55,6 +55,7 @@ export {
   acquisitionFailure,
   acquisitionTechnicalDetail,
   acquisitionLabel,
+  acquisitionProgressFraction,
   capabilityLabel,
   catalogueTrust,
   catalogueCandidateMismatch,

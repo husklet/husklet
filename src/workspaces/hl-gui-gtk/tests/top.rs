@@ -2337,6 +2337,13 @@ mod unix {
         );
         let progress_root = surface.widget().clone().upcast::<gtk::Widget>();
         capture_update_surface(window, &progress_root, "update-progress");
+        let progress = find_progress(&progress_root)
+            .expect("numeric acquisition progress reaches a GTK progress bar");
+        assert_eq!(
+            progress.fraction(),
+            0.5,
+            "the GTK bar preserves host progress"
+        );
         let cancel = find_button(&progress_root, "Cancel inspection");
         assert!(cancel.has_css_class("size-small"));
         assert_eq!(cancel.height(), 28, "inspection cancellation stays compact");
@@ -4056,6 +4063,20 @@ mod unix {
             }
         }
         panic!("button {label:?} was not rendered");
+    }
+
+    fn find_progress(root: &gtk::Widget) -> Option<gtk::ProgressBar> {
+        if let Some(progress) = root.downcast_ref::<gtk::ProgressBar>() {
+            return Some(progress.clone());
+        }
+        let mut child = root.first_child();
+        while let Some(current) = child {
+            child = current.next_sibling();
+            if let Some(progress) = find_progress(&current) {
+                return Some(progress);
+            }
+        }
+        None
     }
 
     fn find_entry_placeholder(root: &gtk::Widget, placeholder: &str) -> gtk::Entry {

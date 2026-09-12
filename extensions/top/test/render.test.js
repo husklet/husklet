@@ -27,6 +27,7 @@ import {
   acquisitionFailure,
   acquisitionTechnicalDetail,
   acquisitionLabel,
+  acquisitionProgressFraction,
   catalogueTrust,
   catalogueCandidateMismatch,
   compactImageReference,
@@ -2339,6 +2340,21 @@ test('extension acquisition phases and failures remain actionable without raw en
   assert.match(acquisitionLabel(status('reading-manifest')), /validating the extension manifest/);
   assert.match(acquisitionLabel(status('committing')), /Saving the reviewed extension/);
   assert.match(acquisitionLabel(status('cancelled')), /No extension was installed/);
+  assert.equal(
+    acquisitionProgressFraction({
+      ...status('pulling'),
+      progress: { status: 'Downloading', id: 'manifest', current: 1, total: 2 },
+    }),
+    0.5,
+  );
+  assert.equal(
+    acquisitionProgressFraction({
+      ...status('pulling'),
+      progress: { status: 'Downloading', id: 'manifest', current: 0, total: 0 },
+    }),
+    undefined,
+    'a size-less transfer remains indeterminate rather than looking empty',
+  );
   assert.match(
     acquisitionFailure(
       'extension image sha256:a is linux/arm64, but this workspace requires linux/amd64',
