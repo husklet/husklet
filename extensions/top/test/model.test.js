@@ -183,14 +183,18 @@ test('execution metadata is revisioned and served through bounded windows', asyn
       container_id: 'c1',
       running: false,
       exit_code: 7,
+      result: { kind: 'code', value: 7 },
+      created_at_ms: 1_000,
+      started_at_ms: null,
+      finished_at_ms: 1_100,
       pid: 0,
       command: ['sh', '-c', 'false'],
       user: 'root',
     }),
-    6,
+    8,
   );
   assert.deepEqual(mutations, [
-    { Length: { source: EXECUTION_DETAIL_SOURCE, version: 1, rows: 6 } },
+    { Length: { source: EXECUTION_DETAIL_SOURCE, version: 1, rows: 8 } },
   ]);
   const window = source.answer({
     source: EXECUTION_DETAIL_SOURCE,

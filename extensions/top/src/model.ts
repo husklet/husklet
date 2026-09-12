@@ -422,7 +422,7 @@ export class ExecutionDetailsSource {
           ? `Stopped by signal ${result.value}`
           : result?.kind === 'fault'
             ? `Runtime fault (${result.value.reason.replaceAll('_', ' ')}, status ${result.value.status})`
-            : details && !details.running
+            : details && 'running' in details && !details.running && 'exit_code' in details
               ? `Exited with code ${details.exit_code}`
               : null;
     const instant = (value: number | null | undefined) =>

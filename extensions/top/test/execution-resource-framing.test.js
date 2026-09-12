@@ -26,6 +26,10 @@ test(
       container_id: containerId,
       running: true,
       exit_code: 0,
+      result: null,
+      created_at_ms: 1_000,
+      started_at_ms: 1_100,
+      finished_at_ms: null,
       pid: 42,
       command: ['sh', '-lc', 'printf ready'],
       user: '1000:1000',
@@ -108,6 +112,10 @@ test(
             container_id: containerId,
             running: true,
             exit_code: 0,
+            result: null,
+            created_at_ms: 1_000,
+            started_at_ms: 1_100,
+            finished_at_ms: null,
             pid: 42,
             command: ['sh', '-lc', 'printf ready'],
             user: '1000:1000',
@@ -126,7 +134,7 @@ test(
       invoke(stage, 'Details');
       await until(() => labelled(stage, 'Reading execution details…'));
       await until(() => lengths(mutations).length === 1);
-      assert.equal(lengths(mutations)[0].rows, 6);
+      assert.equal(lengths(mutations)[0].rows, 8);
 
       invoke(stage, 'Terminate');
       const refreshStart = stage.frames.length;
@@ -152,7 +160,7 @@ test(
       assert.deepEqual(lengths(mutations).at(-1), {
         source: EXECUTION_DETAIL_SOURCE,
         version: 2,
-        rows: 6,
+        rows: 8,
       });
 
       invoke(stage, 'Hide details');
@@ -161,7 +169,7 @@ test(
       assert.deepEqual(lengths(mutations).at(-1), {
         source: EXECUTION_DETAIL_SOURCE,
         version: 3,
-        rows: 6,
+        rows: 8,
       });
       assert.equal(inspectAttempts, 5);
       assert.ok(
