@@ -19,8 +19,8 @@ use hl_extension::port::{
     WorkspaceState,
 };
 use hl_extension::{
-    Authority, Capability, Coding, ExtensionName, Failure, Grant, Hello, PROTOCOL, RelativePath, Reply, Request,
-    Services, Session, Transit, Welcome, WorkspaceInfo, codec,
+    codec, Authority, Capability, Coding, ExtensionName, Failure, Grant, Hello, RelativePath, Reply, Request, Services,
+    Session, Transit, Welcome, WorkspaceInfo, PROTOCOL,
 };
 use hl_gui::{
     Align, Choice, Column as TableColumn, EventId, Length, NodeId, Patch, Prop, PropValue, RowWindow, Scale, SourceId,
@@ -1254,7 +1254,7 @@ fn container_name_boundaries_cross_the_real_socket_before_dispatch() {
         Grant::new([
             Capability::ContainerCreate,
             Capability::VolumeWrite,
-            Capability::NetworkWrite,
+            Capability::NetworkConnect,
         ]),
         Vec::new(),
     ))
@@ -1349,7 +1349,7 @@ fn legacy_and_maximal_network_alias_calls_cross_a_real_socket() {
     let host = Host::new();
     let mut session = Session::new(Authority::new(
         ExtensionName::new("networks").unwrap(),
-        Grant::new([Capability::NetworkWrite]),
+        Grant::new([Capability::NetworkConnect]),
         Vec::new(),
     ))
     .with_containers(hl_extension::ContainerGrant {
@@ -1388,12 +1388,48 @@ fn legacy_and_maximal_network_alias_calls_cross_a_real_socket() {
 }
 
 #[test]
-fn network_write_cannot_cross_an_ungranted_container_scope_over_a_real_socket() {
+fn network_connect_authority_cannot_remove_a_network_over_a_real_socket() {
+    let (host_end, extension_end) = connected_pair();
+    let host = Host::new();
+    let mut session = Session::new(Authority::new(
+        ExtensionName::new("postgres-inspector").unwrap(),
+        Grant::new([Capability::NetworkConnect]),
+        Vec::new(),
+    ))
+    .with_networks(hl_extension::NetworkGrant {
+        selectors: vec![hl_extension::NetworkSelector::Id { id: "a".repeat(32) }],
+        create: false,
+    });
+    let request = Request::NetworkRemove {
+        reference: "a".repeat(32),
+    };
+    let mut sender = hl_extension::Wire::new(extension_end);
+    let mut receiver = hl_extension::Wire::new(host_end);
+
+    sender
+        .send(&codec::request(&request).expect("request encodes"))
+        .expect("request sent");
+    let decoded = codec::read_request(&receiver.receive().expect("request arrives")).expect("request decodes");
+    let failure = session
+        .dispatch(&decoded, &services(&host))
+        .expect_err("connect-only authority must not remove a network");
+    receiver
+        .send(&codec::failure(&failure).expect("failure encodes"))
+        .expect("failure sent");
+
+    assert!(matches!(
+        codec::read_failure(&sender.receive().expect("failure arrives")),
+        Ok(Failure::Denied { capability, .. }) if capability == Capability::NetworkRemove.as_str()
+    ));
+}
+
+#[test]
+fn network_connect_cannot_cross_an_ungranted_container_scope_over_a_real_socket() {
     let (host_end, extension_end) = connected_pair();
     let host = Host::new();
     let mut session = Session::new(Authority::new(
         ExtensionName::new("networks").unwrap(),
-        Grant::new([Capability::NetworkWrite]),
+        Grant::new([Capability::NetworkConnect]),
         Vec::new(),
     ))
     .with_containers(hl_extension::ContainerGrant {
@@ -1423,7 +1459,7 @@ fn network_write_cannot_cross_an_ungranted_container_scope_over_a_real_socket() 
 
     assert!(matches!(
         codec::read_failure(&sender.receive().expect("failure reply")),
-        Ok(Failure::Denied { capability, .. }) if capability == Capability::NetworkWrite.as_str()
+        Ok(Failure::Denied { capability, .. }) if capability == Capability::NetworkConnect.as_str()
     ));
     assert!(
         host.network_aliases.borrow().is_empty(),

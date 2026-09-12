@@ -633,11 +633,9 @@ fn pane_semantic_read_and_control_are_separately_granted() {
         session(&[Capability::PaneSemanticRead], &[]).dispatch(&read, &services(&host)),
         Ok(Reply::Semantics(_))
     ));
-    assert!(
-        session(&[Capability::PaneSemanticRead], &[])
-            .dispatch(&action, &services(&host))
-            .is_err()
-    );
+    assert!(session(&[Capability::PaneSemanticRead], &[])
+        .dispatch(&action, &services(&host))
+        .is_err());
     session(&[Capability::PaneSemanticControl], &[])
         .dispatch(&action, &services(&host))
         .expect("controlled");
@@ -650,11 +648,9 @@ fn pane_semantic_read_and_control_are_separately_granted() {
 #[test]
 fn pane_discovery_requires_observation_without_content_authority() {
     let host = Host::new();
-    assert!(
-        session(&[], &[])
-            .dispatch(&Request::PaneList, &services(&host))
-            .is_err()
-    );
+    assert!(session(&[], &[])
+        .dispatch(&Request::PaneList, &services(&host))
+        .is_err());
     let reply = session(&[Capability::PaneObserve], &[])
         .dispatch(&Request::PaneList, &services(&host))
         .expect("pane observation grants bounded discovery");
@@ -2310,13 +2306,13 @@ fn all_calls() -> Vec<(Request, Capability)> {
         ),
         (
             Request::NetworkCreate { name: "private".into() },
-            Capability::NetworkWrite,
+            Capability::NetworkCreate,
         ),
         (
             Request::NetworkRemove {
                 reference: "private".into(),
             },
-            Capability::NetworkWrite,
+            Capability::NetworkRemove,
         ),
         (
             Request::NetworkConnect {
@@ -2324,14 +2320,14 @@ fn all_calls() -> Vec<(Request, Capability)> {
                 container: "c".repeat(64),
                 aliases: Vec::new(),
             },
-            Capability::NetworkWrite,
+            Capability::NetworkConnect,
         ),
         (
             Request::NetworkDisconnect {
                 reference: "private".into(),
                 container: "c".repeat(64),
             },
-            Capability::NetworkWrite,
+            Capability::NetworkDisconnect,
         ),
         (
             Request::TerminalReadPane {
@@ -2609,20 +2605,16 @@ fn workspace_mutations_require_a_complete_generation_before_host_authority() {
             ..workspace_configuration()
         },
     };
-    assert!(
-        session(&[Capability::WorkspaceConfigure], &[])
-            .dispatch(&update, &services(&host))
-            .is_err()
-    );
+    assert!(session(&[Capability::WorkspaceConfigure], &[])
+        .dispatch(&update, &services(&host))
+        .is_err());
     let delete = Request::WorkspaceDelete {
         name: "other".into(),
         generation: String::new(),
     };
-    assert!(
-        session(&[Capability::WorkspaceControl], &[])
-            .dispatch(&delete, &services(&host))
-            .is_err()
-    );
+    assert!(session(&[Capability::WorkspaceControl], &[])
+        .dispatch(&delete, &services(&host))
+        .is_err());
     assert!(host.ledger.reached().is_empty());
 }
 
@@ -2660,34 +2652,28 @@ fn workspace_settings_update_cannot_bypass_exact_environment_patch_authority() {
 fn extension_acquisition_identifiers_are_bounded_before_the_host() {
     let host = Host::new();
     let mut session = session(&[Capability::ExtensionInstall], &[]);
-    assert!(
-        session
-            .dispatch(
-                &Request::ExtensionAcquisitionStart {
-                    reference: "x".repeat(513)
-                },
-                &services(&host)
-            )
-            .is_err()
-    );
-    assert!(
-        session
-            .dispatch(
-                &Request::ExtensionAcquisitionStart {
-                    reference: "bad reference".into()
-                },
-                &services(&host)
-            )
-            .is_err()
-    );
-    assert!(
-        session
-            .dispatch(
-                &Request::ExtensionAcquisitionStatus { job: "x".repeat(129) },
-                &services(&host)
-            )
-            .is_err()
-    );
+    assert!(session
+        .dispatch(
+            &Request::ExtensionAcquisitionStart {
+                reference: "x".repeat(513)
+            },
+            &services(&host)
+        )
+        .is_err());
+    assert!(session
+        .dispatch(
+            &Request::ExtensionAcquisitionStart {
+                reference: "bad reference".into()
+            },
+            &services(&host)
+        )
+        .is_err());
+    assert!(session
+        .dispatch(
+            &Request::ExtensionAcquisitionStatus { job: "x".repeat(129) },
+            &services(&host)
+        )
+        .is_err());
     assert!(matches!(
         session.dispatch(
             &Request::ExtensionInstall {
@@ -2925,11 +2911,9 @@ fn pane_titles_are_utf8_bounded_and_refused_before_terminal_authority() {
 fn terminal_focus_grant_cannot_mutate_layout() {
     let host = Host::new();
     let mut session = session(&[Capability::TerminalFocus], &[]);
-    assert!(
-        session
-            .dispatch(&Request::TerminalFocusPane { slot: "s1".into() }, &services(&host))
-            .is_ok()
-    );
+    assert!(session
+        .dispatch(&Request::TerminalFocusPane { slot: "s1".into() }, &services(&host))
+        .is_ok());
     assert_eq!(host.ledger.reached(), ["terminal.focus"]);
     host.ledger.clear();
     assert!(matches!(
@@ -3018,7 +3002,8 @@ fn configured_container_creation_is_bounded_before_control_authority() {
         &[
             Capability::ContainerCreate,
             Capability::VolumeRead,
-            Capability::NetworkWrite,
+            Capability::NetworkConnect,
+            Capability::NetworkPublish,
         ],
         &[],
     )
@@ -3053,11 +3038,34 @@ fn configured_container_creation_is_bounded_before_control_authority() {
         cpus: Some(2),
         pids_limit: Some(128),
     };
+    let mut connect_only = session(
+        &[Capability::ContainerCreate, Capability::NetworkConnect],
+        &[],
+    )
+    .with_containers(hl_extension::ContainerGrant {
+        selectors: Vec::new(),
+        create: true,
+    })
+    .with_images(hl_extension::ImageGrant {
+        r#use: vec![hl_extension::ImageSelector::Reference {
+            reference: "docker.io/library/alpine:3.20".into(),
+        }],
+        ..hl_extension::ImageGrant::default()
+    });
+    let mut published = spec.clone();
+    published.mounts.clear();
+    published.network = None;
+    assert!(matches!(
+        connect_only.dispatch(&Request::ContainerCreate { spec: published }, &services(&host)),
+        Err(Failure::Denied { capability, .. }) if capability == Capability::NetworkPublish.as_str()
+    ));
+    assert!(host.ledger.reached().is_empty());
     let mut unscoped = session(
         &[
             Capability::ContainerCreate,
             Capability::VolumeRead,
-            Capability::NetworkWrite,
+            Capability::NetworkConnect,
+            Capability::NetworkPublish,
         ],
         &[],
     )
@@ -3537,7 +3545,14 @@ fn image_inventory_filters_every_alias_before_applying_the_bound() {
 #[test]
 fn network_mutations_refuse_names_prefixes_and_container_aliases_before_control_authority() {
     let host = Host::new();
-    let mut session = session(&[Capability::NetworkWrite], &[]);
+    let mut session = session(
+        &[
+            Capability::NetworkRemove,
+            Capability::NetworkConnect,
+            Capability::NetworkDisconnect,
+        ],
+        &[],
+    );
     for request in [
         Request::NetworkRemove {
             reference: "private".into(),
@@ -3603,7 +3618,7 @@ fn network_mutations_refuse_names_prefixes_and_container_aliases_before_control_
 #[test]
 fn network_endpoint_alias_boundaries_are_enforced_before_control_authority() {
     let host = Host::new();
-    let mut session = session(&[Capability::NetworkWrite], &[]);
+    let mut session = session(&[Capability::NetworkConnect], &[]);
     let request = |aliases| Request::NetworkConnect {
         reference: "a".repeat(32),
         container: "b".repeat(64),
@@ -3847,56 +3862,48 @@ fn holding_read_never_permits_the_matching_write() {
     let host = Host::new();
     let mut session = session(&[Capability::FilesystemRead, Capability::ContainerRead], &["logs"]);
 
-    assert!(
-        session
-            .dispatch(
-                &Request::FilesystemWrite {
-                    path: path("logs/app.log"),
-                    contents: b"x".to_vec()
-                },
-                &services(&host)
-            )
-            .is_err()
-    );
-    assert!(
-        session
-            .dispatch(
-                &Request::ContainerStop {
-                    id: "c1".into(),
-                    generation: 4,
-                },
-                &services(&host)
-            )
-            .is_err()
-    );
-    assert!(
-        session
-            .dispatch(
-                &Request::ContainerKill {
-                    id: "c1".into(),
-                    generation: 4,
-                    signal: "SIGKILL".into(),
-                },
-                &services(&host),
-            )
-            .is_err()
-    );
-    assert!(
-        session
-            .dispatch(
-                &Request::ContainerExec {
-                    environment: Vec::new(),
-                    id: "c1".into(),
-                    generation: 4,
-                    command: vec!["sh".into()],
-                    user: None,
-                    working_directory: None,
-                    stdin: false,
-                },
-                &services(&host),
-            )
-            .is_err()
-    );
+    assert!(session
+        .dispatch(
+            &Request::FilesystemWrite {
+                path: path("logs/app.log"),
+                contents: b"x".to_vec()
+            },
+            &services(&host)
+        )
+        .is_err());
+    assert!(session
+        .dispatch(
+            &Request::ContainerStop {
+                id: "c1".into(),
+                generation: 4,
+            },
+            &services(&host)
+        )
+        .is_err());
+    assert!(session
+        .dispatch(
+            &Request::ContainerKill {
+                id: "c1".into(),
+                generation: 4,
+                signal: "SIGKILL".into(),
+            },
+            &services(&host),
+        )
+        .is_err());
+    assert!(session
+        .dispatch(
+            &Request::ContainerExec {
+                environment: Vec::new(),
+                id: "c1".into(),
+                generation: 4,
+                command: vec!["sh".into()],
+                user: None,
+                working_directory: None,
+                stdin: false,
+            },
+            &services(&host),
+        )
+        .is_err());
     assert!(host.ledger.reached().is_empty());
 }
 
@@ -3925,27 +3932,23 @@ fn filesystem_read_and_write_scopes_are_independent_and_fail_before_the_service(
     assert_eq!(host.ledger.reached(), ["files.inventory"]);
     host.ledger.clear();
 
-    assert!(
-        session
-            .dispatch(
-                &Request::FilesystemRead {
-                    path: path("src/lib.rs")
-                },
-                &services(&host)
-            )
-            .is_ok()
-    );
-    assert!(
-        session
-            .dispatch(
-                &Request::FilesystemWrite {
-                    path: path("workspace.toml"),
-                    contents: b"x".to_vec()
-                },
-                &services(&host)
-            )
-            .is_ok()
-    );
+    assert!(session
+        .dispatch(
+            &Request::FilesystemRead {
+                path: path("src/lib.rs")
+            },
+            &services(&host)
+        )
+        .is_ok());
+    assert!(session
+        .dispatch(
+            &Request::FilesystemWrite {
+                path: path("workspace.toml"),
+                contents: b"x".to_vec()
+            },
+            &services(&host)
+        )
+        .is_ok());
     host.ledger.clear();
     assert!(matches!(
         session.dispatch(
@@ -4021,17 +4024,15 @@ fn one_file_write_consent_does_not_authorize_create_delete_or_rename() {
         ..hl_extension::FilesystemGrant::default()
     });
 
-    assert!(
-        session
-            .dispatch(
-                &Request::FilesystemWrite {
-                    path: file.clone(),
-                    contents: b"{}".to_vec(),
-                },
-                &services(&host),
-            )
-            .is_ok()
-    );
+    assert!(session
+        .dispatch(
+            &Request::FilesystemWrite {
+                path: file.clone(),
+                contents: b"{}".to_vec(),
+            },
+            &services(&host),
+        )
+        .is_ok());
     host.ledger.clear();
 
     for request in [
@@ -4178,17 +4179,15 @@ fn process_paging_rejects_malformed_snapshots_and_unbounded_limits_before_the_po
 fn execution_wait_rejects_unbounded_timeout_before_calling_host() {
     let host = Host::new();
     let mut session = session(&[Capability::ContainerRead], &[]);
-    assert!(
-        session
-            .dispatch(
-                &Request::ExecutionWait {
-                    id: "e".repeat(32),
-                    timeout_ms: 30_001
-                },
-                &services(&host)
-            )
-            .is_err()
-    );
+    assert!(session
+        .dispatch(
+            &Request::ExecutionWait {
+                id: "e".repeat(32),
+                timeout_ms: 30_001
+            },
+            &services(&host)
+        )
+        .is_err());
     assert!(!host.ledger.reached().contains(&"executions.wait"));
 }
 
@@ -4238,18 +4237,16 @@ fn execution_reads_refuse_names_and_prefixes_before_inventory_authority() {
 fn execution_logs_require_a_stream_before_calling_host() {
     let host = Host::new();
     let mut session = session(&[Capability::ContainerRead], &[]);
-    assert!(
-        session
-            .dispatch(
-                &Request::ExecutionLogs {
-                    id: "e".repeat(32),
-                    stdout: false,
-                    stderr: false
-                },
-                &services(&host)
-            )
-            .is_err()
-    );
+    assert!(session
+        .dispatch(
+            &Request::ExecutionLogs {
+                id: "e".repeat(32),
+                stdout: false,
+                stderr: false
+            },
+            &services(&host)
+        )
+        .is_err());
     assert!(!host.ledger.reached().contains(&"executions.logs"));
 }
 
@@ -4674,7 +4671,15 @@ fn volume_and_network_reads_and_safe_controls_use_distinct_grants() {
         Err(Failure::Denied { .. })
     ));
 
-    let mut write = session(&[Capability::VolumeWrite, Capability::NetworkWrite], &[]);
+    let mut write = session(
+        &[
+            Capability::VolumeWrite,
+            Capability::NetworkCreate,
+            Capability::NetworkConnect,
+            Capability::NetworkDisconnect,
+        ],
+        &[],
+    );
     assert!(
         matches!(write.dispatch(&Request::VolumeCreate { name: "cache".into() }, &services(&host)), Ok(Reply::Volume(value)) if value.name == "cache")
     );
@@ -4712,11 +4717,12 @@ fn volume_and_network_reads_and_safe_controls_use_distinct_grants() {
 #[test]
 fn exact_network_scope_filters_inventory_and_denies_unrelated_inspection_and_creation() {
     let host = Host::new();
-    let mut scoped =
-        session(&[Capability::NetworkRead, Capability::NetworkWrite], &[]).with_networks(hl_extension::NetworkGrant {
+    let mut scoped = session(&[Capability::NetworkRead, Capability::NetworkConnect], &[]).with_networks(
+        hl_extension::NetworkGrant {
             selectors: vec![hl_extension::NetworkSelector::Name { name: "private".into() }],
             create: false,
-        });
+        },
+    );
     let Reply::Networks(inventory) = scoped.dispatch(&Request::NetworkList, &services(&host)).unwrap() else {
         panic!("network inventory reply");
     };
@@ -4849,11 +4855,9 @@ fn a_topic_cannot_be_followed_without_its_namespace_capability() {
     let host = Host::new();
     let mut session = session(&[Capability::ContainerRead], &[]);
 
-    assert!(
-        session
-            .dispatch(&Request::EventSubscribe { topic: Topic::Terminal }, &services(&host))
-            .is_err()
-    );
+    assert!(session
+        .dispatch(&Request::EventSubscribe { topic: Topic::Terminal }, &services(&host))
+        .is_err());
     assert!(!session.may_emit(Topic::Terminal));
 }
 

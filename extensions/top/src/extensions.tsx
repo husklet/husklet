@@ -1643,7 +1643,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                                       create: false,
                                     }));
                                   }
-                                  if (!enabled && capability === 'networks:write')
+                                  if (!enabled && capability === 'networks:create')
                                     setGrantedNetworks((current) => ({
                                       ...current,
                                       create: false,
@@ -1839,7 +1839,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                                 onToggle={(event: Change) => {
                                   const enabled = Boolean(event.value);
                                   setGranted((current) =>
-                                    withCapability(current, 'networks:write', enabled),
+                                    withCapability(current, 'networks:create', enabled),
                                   );
                                   setGrantedNetworks((current) => ({
                                     ...current,
@@ -2645,7 +2645,11 @@ export function capabilityLabel(capability: ExtensionCapability): string {
     'volumes:read': 'View volumes',
     'volumes:write': 'Create and remove volumes',
     'networks:read': 'View networks',
-    'networks:write': 'Create and modify networks',
+    'networks:create': 'Create networks',
+    'networks:remove': 'Permanently remove networks',
+    'networks:connect': 'Attach containers to networks',
+    'networks:disconnect': 'Detach containers from networks',
+    'networks:publish': 'Publish container ports on the host',
     'terminals:read': 'View terminal tabs and panes',
     'terminals:input': 'Type into terminal panes',
     'terminals:focus': 'Move keyboard focus between terminal panes',

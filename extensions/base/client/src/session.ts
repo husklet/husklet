@@ -1123,10 +1123,19 @@ export class Session {
       throw new TypeError('host greeting discloses image use selectors without containers:create');
     if (resources.images.prune_all_unused && !holds('images:prune'))
       throw new TypeError('host greeting discloses image pruning without images:prune');
-    if (resources.networks.selectors.length > 0 && !any(['networks:read', 'networks:write']))
+    if (
+      resources.networks.selectors.length > 0 &&
+      !any([
+        'networks:read',
+        'networks:create',
+        'networks:remove',
+        'networks:connect',
+        'networks:disconnect',
+      ])
+    )
       throw new TypeError('host greeting discloses network selectors without network authority');
-    if (resources.networks.create && !holds('networks:write'))
-      throw new TypeError('host greeting discloses network creation without networks:write');
+    if (resources.networks.create && !holds('networks:create'))
+      throw new TypeError('host greeting discloses network creation without networks:create');
     if (resources.volumes.selectors.length > 0 && !any(['volumes:read', 'volumes:write']))
       throw new TypeError('host greeting discloses volume selectors without volume authority');
     if (resources.volumes.create && !holds('volumes:write'))

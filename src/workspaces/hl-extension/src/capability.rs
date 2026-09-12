@@ -66,8 +66,18 @@ pub enum Capability {
     VolumeWrite,
     #[serde(rename = "networks:read")]
     NetworkRead,
-    #[serde(rename = "networks:write")]
-    NetworkWrite,
+    #[serde(rename = "networks:create")]
+    NetworkCreate,
+    #[serde(rename = "networks:remove")]
+    NetworkRemove,
+    #[serde(rename = "networks:connect")]
+    NetworkConnect,
+    #[serde(rename = "networks:disconnect")]
+    NetworkDisconnect,
+    /// Publishes a container port on the workspace host. This is independent
+    /// from attaching that container to a workspace-local network.
+    #[serde(rename = "networks:publish")]
+    NetworkPublish,
     #[serde(rename = "terminals:read")]
     TerminalRead,
     /// Injecting bytes into an existing terminal pane.
@@ -165,7 +175,11 @@ impl Capability {
             Self::VolumeRead => "volumes:read",
             Self::VolumeWrite => "volumes:write",
             Self::NetworkRead => "networks:read",
-            Self::NetworkWrite => "networks:write",
+            Self::NetworkCreate => "networks:create",
+            Self::NetworkRemove => "networks:remove",
+            Self::NetworkConnect => "networks:connect",
+            Self::NetworkDisconnect => "networks:disconnect",
+            Self::NetworkPublish => "networks:publish",
             Self::TerminalRead => "terminals:read",
             Self::TerminalInput => "terminals:input",
             Self::TerminalFocus => "terminals:focus",
@@ -212,7 +226,11 @@ impl Capability {
                 | Self::ImageRemove
                 | Self::ImagePrune
                 | Self::VolumeWrite
-                | Self::NetworkWrite
+                | Self::NetworkCreate
+                | Self::NetworkRemove
+                | Self::NetworkConnect
+                | Self::NetworkDisconnect
+                | Self::NetworkPublish
                 | Self::TerminalInput
                 | Self::TerminalFocus
                 | Self::TerminalLayoutControl
@@ -267,7 +285,11 @@ impl Capability {
         Self::VolumeRead,
         Self::VolumeWrite,
         Self::NetworkRead,
-        Self::NetworkWrite,
+        Self::NetworkCreate,
+        Self::NetworkRemove,
+        Self::NetworkConnect,
+        Self::NetworkDisconnect,
+        Self::NetworkPublish,
         Self::TerminalRead,
         Self::TerminalInput,
         Self::TerminalFocus,

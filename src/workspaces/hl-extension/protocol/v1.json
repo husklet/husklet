@@ -117,7 +117,27 @@
     {
       "executes": false,
       "mutates": true,
-      "wire": "networks:write"
+      "wire": "networks:create"
+    },
+    {
+      "executes": false,
+      "mutates": true,
+      "wire": "networks:remove"
+    },
+    {
+      "executes": false,
+      "mutates": true,
+      "wire": "networks:connect"
+    },
+    {
+      "executes": false,
+      "mutates": true,
+      "wire": "networks:disconnect"
+    },
+    {
+      "executes": false,
+      "mutates": true,
+      "wire": "networks:publish"
     },
     {
       "executes": false,
@@ -424,7 +444,31 @@
           }
         },
         {
-          "name": "networks:write",
+          "name": "networks:create",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "networks:remove",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "networks:connect",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "networks:disconnect",
+          "payload": {
+            "kind": "unit"
+          }
+        },
+        {
+          "name": "networks:publish",
           "payload": {
             "kind": "unit"
           }
@@ -8676,19 +8720,19 @@
       "request": "network_inspect"
     },
     {
-      "capability": "networks:write",
+      "capability": "networks:create",
       "request": "network_create"
     },
     {
-      "capability": "networks:write",
+      "capability": "networks:remove",
       "request": "network_remove"
     },
     {
-      "capability": "networks:write",
+      "capability": "networks:connect",
       "request": "network_connect"
     },
     {
-      "capability": "networks:write",
+      "capability": "networks:disconnect",
       "request": "network_disconnect"
     },
     {
@@ -14733,7 +14777,7 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:45606818f3186543",
+  "source_fingerprint": "fnv1a64:3fd5259d294bda95",
   "specification_version": 1,
   "topics": [
     {

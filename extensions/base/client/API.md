@@ -249,10 +249,10 @@ order; the JavaScript client's checks are never treated as a security boundary.
 
 - `host.networks.list(...)` — `network_list`, requires `networks:read`.
 - `host.networks.inspect(...)` — `network_inspect`, requires `networks:read`.
-- `host.networks.create(...)` — `network_create`, requires `networks:write`.
-- `host.networks.remove(...)` — `network_remove`, requires `networks:write`.
-- `host.networks.connect(...)` — `network_connect`, requires `networks:write`.
-- `host.networks.disconnect(...)` — `network_disconnect`, requires `networks:write`.
+- `host.networks.create(...)` — `network_create`, requires `networks:create`.
+- `host.networks.remove(...)` — `network_remove`, requires `networks:remove`.
+- `host.networks.connect(...)` — `network_connect`, requires `networks:connect`.
+- `host.networks.disconnect(...)` — `network_disconnect`, requires `networks:disconnect`.
 
 ## Volumes
 

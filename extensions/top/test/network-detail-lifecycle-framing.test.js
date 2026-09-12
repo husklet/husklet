@@ -29,7 +29,14 @@ test(
           payload: {
             protocol: 1,
             extension: 'network-detail-lifecycle-test',
-            granted: ['networks:read', 'networks:write'],
+            granted: [
+              'networks:read',
+              'networks:create',
+              'networks:remove',
+              'networks:connect',
+              'networks:disconnect',
+              'networks:publish',
+            ],
           },
         }),
       );

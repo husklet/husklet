@@ -110,10 +110,19 @@ impl Record {
             self.containers.create = false;
             self.images.r#use.clear();
         }
-        if !holds(Capability::NetworkRead) && !holds(Capability::NetworkWrite) {
+        if ![
+            Capability::NetworkRead,
+            Capability::NetworkCreate,
+            Capability::NetworkRemove,
+            Capability::NetworkConnect,
+            Capability::NetworkDisconnect,
+        ]
+        .into_iter()
+        .any(holds)
+        {
             self.networks.selectors.clear();
         }
-        if !holds(Capability::NetworkWrite) {
+        if !holds(Capability::NetworkCreate) {
             self.networks.create = false;
         }
         if !holds(Capability::VolumeRead) && !holds(Capability::VolumeWrite) {
@@ -428,10 +437,19 @@ impl Installation {
         if !granted.holds(Capability::ContainerCreate) {
             containers.create = false;
         }
-        if !granted.holds(Capability::NetworkRead) && !granted.holds(Capability::NetworkWrite) {
+        if ![
+            Capability::NetworkRead,
+            Capability::NetworkCreate,
+            Capability::NetworkRemove,
+            Capability::NetworkConnect,
+            Capability::NetworkDisconnect,
+        ]
+        .into_iter()
+        .any(|capability| granted.holds(capability))
+        {
             networks.selectors.clear();
         }
-        if !granted.holds(Capability::NetworkWrite) {
+        if !granted.holds(Capability::NetworkCreate) {
             networks.create = false;
         }
         if !granted.holds(Capability::VolumeRead) && !granted.holds(Capability::VolumeWrite) {
@@ -801,7 +819,8 @@ impl Summary {
         }
     }
 
-    pub const EXECUTION_NOTICE: &'static str = "This extension can run programs inside this workspace. It is isolated from the rest of \
+    pub const EXECUTION_NOTICE: &'static str =
+        "This extension can run programs inside this workspace. It is isolated from the rest of \
          your machine by the workspace, not from the workspace itself.";
 }
 
@@ -858,7 +877,7 @@ mod tests {
     #[test]
     fn network_authority_records_only_the_manifest_and_consent_intersection() {
         let mut installation = Installation::new();
-        let mut asked = manifest(&[Capability::NetworkRead, Capability::NetworkWrite]);
+        let mut asked = manifest(&[Capability::NetworkRead, Capability::NetworkCreate]);
         asked.networks = crate::NetworkGrant {
             selectors: vec![
                 crate::NetworkSelector::Name {
@@ -950,7 +969,7 @@ mod tests {
             Capability::ContainerRead,
             Capability::ContainerCreate,
             Capability::NetworkRead,
-            Capability::NetworkWrite,
+            Capability::NetworkCreate,
             Capability::VolumeRead,
             Capability::VolumeWrite,
         ]);
@@ -1111,11 +1130,9 @@ mod tests {
             .install(&manifest, "sha256:a", &manifest.capabilities, 10)
             .expect("installed");
 
-        assert!(
-            installation
-                .install(&manifest, "sha256:b", &manifest.capabilities, 20)
-                .is_err()
-        );
+        assert!(installation
+            .install(&manifest, "sha256:b", &manifest.capabilities, 20)
+            .is_err());
     }
 
     #[test]
@@ -1150,7 +1167,9 @@ mod tests {
         assert_ne!(disabled, enabled);
 
         first_manifest.version = "2.0.0".to_owned();
-        let update = installation.prepare_update(&first_manifest, "sha256:second").expect("update");
+        let update = installation
+            .prepare_update(&first_manifest, "sha256:second")
+            .expect("update");
         let updated = installation
             .commit_update(update, &first_manifest.capabilities, 2, |_, _| Ok::<_, ()>(()))
             .expect("committed")

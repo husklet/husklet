@@ -1,5 +1,5 @@
 // Generated from Rust hl-extension protocol/v1.json. Do not edit.
-// Protocol artifact fnv1a64:d52fb8dcd8a0314f
+// Protocol artifact fnv1a64:da33a0b68c89b52d
 export const PROTOCOL_SPECIFICATION_VERSION = 1;
 export const PROTOCOL_VERSION = 1;
 export const PROTOCOL_BOUNDS = Object.freeze({
@@ -120,7 +120,27 @@ export const PROTOCOL_CAPABILITIES = Object.freeze([
   {
     "executes": false,
     "mutates": true,
-    "wire": "networks:write"
+    "wire": "networks:create"
+  },
+  {
+    "executes": false,
+    "mutates": true,
+    "wire": "networks:remove"
+  },
+  {
+    "executes": false,
+    "mutates": true,
+    "wire": "networks:connect"
+  },
+  {
+    "executes": false,
+    "mutates": true,
+    "wire": "networks:disconnect"
+  },
+  {
+    "executes": false,
+    "mutates": true,
+    "wire": "networks:publish"
   },
   {
     "executes": false,
@@ -516,10 +536,10 @@ export const PROTOCOL_REQUEST_CAPABILITIES = Object.freeze({
   "volume_remove": "volumes:write",
   "network_list": "networks:read",
   "network_inspect": "networks:read",
-  "network_create": "networks:write",
-  "network_remove": "networks:write",
-  "network_connect": "networks:write",
-  "network_disconnect": "networks:write",
+  "network_create": "networks:create",
+  "network_remove": "networks:remove",
+  "network_connect": "networks:connect",
+  "network_disconnect": "networks:disconnect",
   "terminal_tabs": "terminals:read",
   "terminal_topology": "terminals:read",
   "pane_list": "panes:observe",
@@ -773,7 +793,31 @@ const definitions = {
         }
       },
       {
-        "name": "networks:write",
+        "name": "networks:create",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
+        "name": "networks:remove",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
+        "name": "networks:connect",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
+        "name": "networks:disconnect",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
+        "name": "networks:publish",
         "payload": {
           "kind": "unit"
         }

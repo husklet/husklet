@@ -29,7 +29,14 @@ test(
           payload: {
             protocol: 1,
             extension: 'network-list-resource-test',
-            granted: ['networks:read', 'networks:write'],
+            granted: [
+              'networks:read',
+              'networks:create',
+              'networks:remove',
+              'networks:connect',
+              'networks:disconnect',
+              'networks:publish',
+            ],
           },
         }),
       );

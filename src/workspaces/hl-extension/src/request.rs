@@ -670,18 +670,18 @@ impl Request {
             Self::VolumeList | Self::VolumeInspect { .. } => Capability::VolumeRead,
             Self::VolumeCreate { .. } | Self::VolumeRemove { .. } => Capability::VolumeWrite,
             Self::NetworkList | Self::NetworkInspect { .. } => Capability::NetworkRead,
-            Self::NetworkCreate { .. }
-            | Self::NetworkRemove { .. }
-            | Self::NetworkConnect { .. }
-            | Self::NetworkDisconnect { .. } => Capability::NetworkWrite,
+            Self::NetworkCreate { .. } => Capability::NetworkCreate,
+            Self::NetworkRemove { .. } => Capability::NetworkRemove,
+            Self::NetworkConnect { .. } => Capability::NetworkConnect,
+            Self::NetworkDisconnect { .. } => Capability::NetworkDisconnect,
             Self::TerminalTabs | Self::TerminalTopology => Capability::TerminalRead,
             Self::PaneList => Capability::PaneObserve,
             Self::TerminalWritePane { .. }
             | Self::TerminalCommandWrite { .. }
             | Self::TerminalCommandCloseInput { .. } => Capability::TerminalInput,
-            Self::TerminalFocusTab { .. }
-            | Self::TerminalFocusPane { .. }
-            | Self::TerminalFocusPaneObserved { .. } => Capability::TerminalFocus,
+            Self::TerminalFocusTab { .. } | Self::TerminalFocusPane { .. } | Self::TerminalFocusPaneObserved { .. } => {
+                Capability::TerminalFocus
+            }
             Self::TerminalSpawn { .. }
             | Self::TerminalSpawnObserved { .. }
             | Self::TerminalCommandStart { .. }

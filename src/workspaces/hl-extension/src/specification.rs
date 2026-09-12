@@ -2,10 +2,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use syn::{Attribute, Fields, GenericArgument, Item, PathArguments, Type};
 
-use crate::{Capability, Frame, Kind, PROTOCOL, Topic};
+use crate::{Capability, Frame, Kind, Topic, PROTOCOL};
 
 const SOURCES: &[(&str, &str)] = &[
     ("src/lib.rs", include_str!("lib.rs")),
@@ -225,7 +225,10 @@ fn request_capability(request: &str) -> Capability {
         "volume_list" | "volume_inspect" => Capability::VolumeRead,
         "volume_create" | "volume_remove" => Capability::VolumeWrite,
         "network_list" | "network_inspect" => Capability::NetworkRead,
-        "network_create" | "network_remove" | "network_connect" | "network_disconnect" => Capability::NetworkWrite,
+        "network_create" => Capability::NetworkCreate,
+        "network_remove" => Capability::NetworkRemove,
+        "network_connect" => Capability::NetworkConnect,
+        "network_disconnect" => Capability::NetworkDisconnect,
         "terminal_tabs" | "terminal_topology" => Capability::TerminalRead,
         "pane_list" => Capability::PaneObserve,
         "terminal_read_pane" | "terminal_command_inspect" | "terminal_command_output" | "terminal_command_wait" => {

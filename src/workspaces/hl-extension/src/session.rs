@@ -9,9 +9,9 @@ use hl_rpc::Authority;
 
 use crate::capability::Capability;
 use crate::port::{
-    ContainerControl, ContainerInventory, Division, ExtensionStateStore, ExtensionStore, GridSize, ImageStore,
-    NetworkStore, NotificationSink, PANE_GRID_EDGE, PANE_INPUT_BYTES, TerminalSurface, VolumeStore,
-    WorkspaceConfiguration, WorkspaceControl, WorkspaceFiles, WorkspaceInventory, pane_lines,
+    pane_lines, ContainerControl, ContainerInventory, Division, ExtensionStateStore, ExtensionStore, GridSize,
+    ImageStore, NetworkStore, NotificationSink, TerminalSurface, VolumeStore, WorkspaceConfiguration, WorkspaceControl,
+    WorkspaceFiles, WorkspaceInventory, PANE_GRID_EDGE, PANE_INPUT_BYTES,
 };
 use crate::request::{Failure, Reply, Request, Topic, WorkspaceInfo};
 use crate::{ContainerGrant, ContainerSelector, FilesystemGrant};
@@ -1002,11 +1002,14 @@ impl Session {
                     },
                 )?;
             }
-            if spec.network.is_some() || spec.ports.iter().any(|port| port.host.is_some()) {
-                self.peer.authority().permit(Capability::NetworkWrite)?;
+            if spec.network.is_some() {
+                self.peer.authority().permit(Capability::NetworkConnect)?;
+            }
+            if spec.ports.iter().any(|port| port.host.is_some()) {
+                self.peer.authority().permit(Capability::NetworkPublish)?;
             }
             if let Some(network) = &spec.network {
-                self.permit_network_reference(network, Capability::NetworkWrite)?;
+                self.permit_network_reference(network, Capability::NetworkConnect)?;
             }
         }
         let port = self.peer.authority().port(request.capability(), services.control)?;
@@ -1341,7 +1344,7 @@ impl Session {
                 self.permit_network_reference(reference, capability)?;
                 let network = port.inspect(reference)?;
                 self.permit_network(&network, capability)?;
-                let target = self.resolve_container_for(container, services.containers, Capability::NetworkWrite)?;
+                let target = self.resolve_container_for(container, services.containers, Capability::NetworkConnect)?;
                 port.connect_with_aliases(reference, &target.id, aliases)
                     .map(|()| Reply::Done)
                     .map_err(Failure::from)
@@ -1352,7 +1355,8 @@ impl Session {
                 self.permit_network_reference(reference, capability)?;
                 let network = port.inspect(reference)?;
                 self.permit_network(&network, capability)?;
-                let target = self.resolve_container_for(container, services.containers, Capability::NetworkWrite)?;
+                let target =
+                    self.resolve_container_for(container, services.containers, Capability::NetworkDisconnect)?;
                 port.disconnect(reference, &target.id)
                     .map(|()| Reply::Done)
                     .map_err(Failure::from)

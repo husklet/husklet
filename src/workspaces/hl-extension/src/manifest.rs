@@ -639,7 +639,11 @@ impl Resources {
         if value == 0 {
             return ceiling;
         }
-        if value > ceiling { ceiling } else { value }
+        if value > ceiling {
+            ceiling
+        } else {
+            value
+        }
     }
 }
 
@@ -851,12 +855,15 @@ impl Manifest {
             return Err(Invalid::Undeclared(Capability::ContainerRead));
         }
         manifest.networks.validate()?;
-        if manifest.networks.create && !manifest.capabilities.holds(Capability::NetworkWrite) {
-            return Err(Invalid::Undeclared(Capability::NetworkWrite));
+        if manifest.networks.create && !manifest.capabilities.holds(Capability::NetworkCreate) {
+            return Err(Invalid::Undeclared(Capability::NetworkCreate));
         }
         if !manifest.networks.selectors.is_empty()
             && !manifest.capabilities.holds(Capability::NetworkRead)
-            && !manifest.capabilities.holds(Capability::NetworkWrite)
+            && !manifest.capabilities.holds(Capability::NetworkCreate)
+            && !manifest.capabilities.holds(Capability::NetworkRemove)
+            && !manifest.capabilities.holds(Capability::NetworkConnect)
+            && !manifest.capabilities.holds(Capability::NetworkDisconnect)
         {
             return Err(Invalid::Undeclared(Capability::NetworkRead));
         }
@@ -949,7 +956,7 @@ mod tests {
         ContainerGrant, ContainerSelector, FilesystemGrant, FilesystemSelector, ImageGrant, ImageSelector, Manifest,
         NetworkGrant, NetworkSelector, VolumeGrant, VolumeSelector,
     };
-    use crate::{Capability, Grant, PROTOCOL, RelativePath};
+    use crate::{Capability, Grant, RelativePath, PROTOCOL};
 
     fn document(extra: &str) -> String {
         format!(
