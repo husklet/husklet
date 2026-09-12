@@ -1676,6 +1676,14 @@ mod tests {
                 terminal: hl_extension::WorkspaceTerminal::default(),
             })
         }
+
+        fn create(
+            &self,
+            configuration: &hl_extension::WorkspaceConfiguration,
+        ) -> Result<hl_extension::WorkspaceConfiguration, HostError> {
+            self.ledger.note("workspace.create");
+            Ok(configuration.clone())
+        }
     }
 
     struct LifecycleHost(Vec<hl_extension::WorkspaceLifecycleChange>);
@@ -2302,6 +2310,22 @@ mod tests {
                 hl_extension::FilesystemGrant::default(),
                 grant,
             )?;
+            conversation.greet()?;
+            conversation.serve(&services(&host))
+        });
+        (theirs, served)
+    }
+
+    fn workspace_control_host(ledger: Arc<Ledger>) -> (UnixStream, JoinHandle<Result<(), Fault>>) {
+        let (ours, theirs) = UnixStream::pair().expect("socket pair");
+        let served = std::thread::spawn(move || {
+            let host = Host { ledger };
+            let authority = Authority::new(
+                ExtensionName::new("sample").unwrap(),
+                Grant::new([Capability::WorkspaceControl]),
+                Vec::new(),
+            );
+            let mut conversation = Conversation::new(ours, authority, "dev", Queue::new())?;
             conversation.greet()?;
             conversation.serve(&services(&host))
         });
@@ -2983,6 +3007,41 @@ mod tests {
             vec![("DATABASE_PASSWORD".into(), "cycle19-socket-secret".into())]
         );
         assert!(!configuration.environment_redacted);
+        drop(wire);
+        assert_eq!(served.join().unwrap(), Ok(()));
+    }
+
+    #[test]
+    fn workspace_control_cannot_inject_environment_across_the_real_unix_socket() {
+        let ledger = Arc::new(Ledger::default());
+        let (theirs, served) = workspace_control_host(Arc::clone(&ledger));
+        let mut wire = Wire::new(theirs);
+        shake(&mut wire, PROTOCOL);
+        let answer = ask(&mut wire, &Request::WorkspaceCreate {
+            configuration: hl_extension::WorkspaceConfiguration {
+                generation: "0123456789abcdef0123456789abcdef".into(),
+                configuration_revision: "abcdef0123456789abcdef0123456789".into(),
+                name: "agent-created".into(),
+                image: "alpine:3.20".into(),
+                architecture: "arm64".into(),
+                storage: None,
+                shell: None,
+                cpus: None,
+                memory_mb: None,
+                environment: vec![("TOKEN".into(), "must-not-cross".into())],
+                environment_redacted: false,
+                mounts: Vec::new(),
+                docker_socket: false,
+                scrollback: None,
+                vpn: None,
+                execution_lifetime: "persisted".into(),
+                terminal: hl_extension::WorkspaceTerminal::default(),
+            },
+        });
+        assert!(matches!(codec::read_failure(&answer), Ok(Failure::Denied { ref capability, .. })
+            if capability == Capability::WorkspaceEnvironmentWrite.as_str()));
+        assert!(ledger.reached().is_empty(), "the host create callback was reached");
+        assert!(!answer.payload.windows(b"must-not-cross".len()).any(|part| part == b"must-not-cross"));
         drop(wire);
         assert_eq!(served.join().unwrap(), Ok(()));
     }

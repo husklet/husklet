@@ -1421,6 +1421,53 @@ fn workspace_environment_grant_filters_by_exact_workspace_and_name() {
     assert!(configuration.environment_redacted);
 }
 
+#[test]
+fn workspace_creation_cannot_bypass_environment_write_consent() {
+    let host = Host::new();
+    let request = Request::WorkspaceCreate {
+        configuration: workspace_configuration(),
+    };
+    let failure = session(&[Capability::WorkspaceControl], &[])
+        .dispatch(&request, &services(&host))
+        .expect_err("lifecycle control does not grant environment injection");
+    assert!(matches!(failure, Failure::Denied { ref capability, .. }
+        if capability == Capability::WorkspaceEnvironmentWrite.as_str()));
+    assert!(host.ledger.reached().is_empty(), "denial must precede creation");
+
+    let authority = || Authority::new(
+        ExtensionName::new("sample").unwrap(),
+        Grant::new([Capability::WorkspaceControl, Capability::WorkspaceEnvironmentWrite]),
+        Vec::new(),
+    );
+    let mut wrong_workspace = Session::new(authority()).with_workspace_environment(
+        hl_extension::WorkspaceEnvironmentGrant {
+            read: Vec::new(),
+            write: vec![hl_extension::WorkspaceEnvironmentSelector::Exact {
+                workspace: "sibling".into(),
+                name: "DATABASE_PASSWORD".into(),
+            }],
+        },
+    );
+    assert!(matches!(wrong_workspace.dispatch(&request, &services(&host)), Err(Failure::Denied { .. })));
+    assert!(host.ledger.reached().is_empty(), "wrong selector must precede creation");
+
+    let mut scoped = Session::new(authority()).with_workspace_environment(
+        hl_extension::WorkspaceEnvironmentGrant {
+            read: Vec::new(),
+            write: vec![hl_extension::WorkspaceEnvironmentSelector::Exact {
+                workspace: "other".into(),
+                name: "DATABASE_PASSWORD".into(),
+            }],
+        },
+    );
+    let Reply::WorkspaceConfiguration(created) = scoped
+        .dispatch(&request, &services(&host))
+        .expect("independently consented initial environment") else { panic!("unexpected reply") };
+    assert_eq!(host.ledger.reached(), vec!["workspace.create"]);
+    assert!(created.environment.is_empty(), "write authority must not imply secret readback");
+    assert!(created.environment_redacted);
+}
+
 /// Every call, paired with the capability that must permit it.
 fn calls() -> Vec<(Request, Capability)> {
     vec![
@@ -1432,7 +1479,10 @@ fn calls() -> Vec<(Request, Capability)> {
         ),
         (
             Request::WorkspaceCreate {
-                configuration: workspace_configuration(),
+                configuration: WorkspaceConfiguration {
+                    environment: Vec::new(),
+                    ..workspace_configuration()
+                },
             },
             Capability::WorkspaceControl,
         ),

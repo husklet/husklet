@@ -1401,9 +1401,35 @@ impl Session {
             Request::WorkspaceInspect { name } => Ok(Reply::WorkspaceConfiguration(
                 self.visible_workspace_for(name, port.inspect(name)?),
             )),
-            Request::WorkspaceCreate { configuration } => Ok(Reply::WorkspaceConfiguration(
-                self.visible_workspace(port.create(configuration)?),
-            )),
+            Request::WorkspaceCreate { configuration } => {
+                // Lifecycle control does not imply authority to inject process
+                // environment. Creation has no prior record to preserve, so
+                // initial values need the same bounded, exact selector grant as a patch.
+                if !configuration.environment.is_empty() {
+                    workspace_environment_patch(&crate::port::WorkspaceEnvironmentPatch {
+                        set: configuration.environment.clone(),
+                        remove: Vec::new(),
+                    })?;
+                    let permitted = self
+                        .peer
+                        .authority()
+                        .granted::<Capability>()
+                        .holds(Capability::WorkspaceEnvironmentWrite);
+                    if !permitted
+                        || configuration.environment.iter().any(|(variable, _)| {
+                            !self.workspace_environment.permits_write(&configuration.name, variable)
+                        })
+                    {
+                        return Err(Failure::Denied {
+                            capability: Capability::WorkspaceEnvironmentWrite.as_str().into(),
+                            detail: "initial workspace environment is outside the consented write scope".into(),
+                        });
+                    }
+                }
+                Ok(Reply::WorkspaceConfiguration(
+                    self.visible_workspace(port.create(configuration)?),
+                ))
+            }
             Request::WorkspaceUpdate {
                 name,
                 generation,
