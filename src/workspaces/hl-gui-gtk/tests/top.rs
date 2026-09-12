@@ -415,6 +415,27 @@ mod unix {
                 }
                 let refresh = find_tooltip_button(&root, "Refresh installed extensions");
                 assert_eq!(refresh.icon_name().as_deref(), Some("view-refresh-symbolic"));
+                assert!(refresh.has_css_class("size-small"));
+                assert_eq!(refresh.height(), 28, "{width_name} refresh uses the compact tier");
+                let refresh_bounds = refresh
+                    .compute_bounds(&root)
+                    .expect("installed refresh belongs to Top root");
+                let toolbar = refresh.parent().expect("refresh remains in the installed toolbar");
+                let toolbar_bounds = toolbar
+                    .compute_bounds(&root)
+                    .expect("installed toolbar belongs to Top root");
+                assert!(
+                    toolbar_bounds.width() >= if width == 600 { 550.0 } else { 600.0 },
+                    "{width_name} installed toolbar collapsed around its labels: {toolbar_bounds:?}"
+                );
+                assert!(
+                    (refresh_bounds.x() + refresh_bounds.width()
+                        - toolbar_bounds.x()
+                        - toolbar_bounds.width())
+                        .abs()
+                        <= 1.0,
+                    "{width_name} refresh is stranded beside the count instead of anchoring the toolbar: refresh={refresh_bounds:?}, toolbar={toolbar_bounds:?}"
+                );
             }
             if fixture == "error" && name == "networks" {
                 for label in [

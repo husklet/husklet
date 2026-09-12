@@ -22,6 +22,7 @@ import {
   Scroll,
   Select,
   Separator,
+  Spacer,
   Spinner,
   Switch,
   Text,
@@ -1963,14 +1964,23 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
             </Column>
           ) : (
             <Column gap={2} width="fill" height="content">
-              <Row gap={1} width="fill" align="center" justify="start" wrap>
-                <Heading label="Installed extensions" scale="caption" grow={false} align="start" />
-                {inventoryState !== 'loading' ? (
-                  <Badge label={countLabel(installed.length, 'extension')} />
-                ) : null}
+              <Row gap={1} width="fill" align="center" justify="stretch">
+                <Row gap={1} align="center" wrap>
+                  <Heading
+                    label="Installed extensions"
+                    scale="caption"
+                    grow={false}
+                    align="start"
+                  />
+                  {inventoryState !== 'loading' ? (
+                    <Badge label={countLabel(installed.length, 'extension')} />
+                  ) : null}
+                </Row>
+                <Spacer />
                 <IconButton
                   label="Refresh installed extensions"
                   icon="view-refresh-symbolic"
+                  size="small"
                   variant="ghost"
                   enabled={!busy && inventoryState !== 'loading'}
                   onInvoke={reload}

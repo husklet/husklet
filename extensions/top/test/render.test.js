@@ -804,9 +804,12 @@ test('Top owns workspace settings and extension management in the same tab', asy
   assert.deepEqual(ancestorTags(stage, 'Discover').slice(0, 3), ['Row', 'Column', 'Column']);
   assert.deepEqual(ancestorTags(stage, 'Installed extensions').slice(0, 3), [
     'Row',
-    'Column',
+    'Row',
     'Column',
   ]);
+  assert.deepEqual(property(stage, 'Refresh installed extensions', 'Size'), {
+    ControlSize: 'Small',
+  });
   assert.deepEqual(
     ancestorProperty(stage, 'Discover', 'Column', 'Width'),
     { Length: 'Fill' },
