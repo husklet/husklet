@@ -2073,7 +2073,8 @@ test('streaming execution applies callback backpressure and cancels callback fai
     (error) =>
       error.name === 'ExecutionOperationError' &&
       error.executionId === 'e'.repeat(32) &&
-      error.phase === 'output',
+      error.phase === 'output' &&
+      error.after === 1,
   );
   assert.deepEqual(calls, [
     ['page', 1],

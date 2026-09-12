@@ -1489,6 +1489,7 @@ export function workspace(session, { signal } = {}) {
                         stdin: input !== undefined,
                     });
                 let phase = 'output';
+                let acknowledged = 0;
                 const streaming = new AbortController();
                 const inputStreaming = new AbortController();
                 const deadline = deadlineMs === undefined
@@ -1520,6 +1521,7 @@ export function workspace(session, { signal } = {}) {
                                 signal: streaming.signal,
                             })) {
                                 await outputStep(() => onPage(page), streaming.signal);
+                                acknowledged = page.next;
                             }
                             complete = true;
                         }
@@ -1574,7 +1576,7 @@ export function workspace(session, { signal } = {}) {
                     await api.containers
                         .cancelExecution(executionId, { signal: cancelSignal, timeoutMs: cancelTimeoutMs })
                         .catch(() => { });
-                    throw new ExecutionOperationError(executionId, phase, cause);
+                    throw new ExecutionOperationError(executionId, phase, cause, undefined, acknowledged);
                 }
                 finally {
                     if (deadline !== undefined)

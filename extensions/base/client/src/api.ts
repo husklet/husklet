@@ -727,11 +727,11 @@ export declare class RowRequestUnavailableError extends Error {
 
 export declare class ExecutionOperationError extends Error {
   readonly executionId: string;
-  readonly phase: 'wait' | 'logs' | 'output' | 'inspect';
+  readonly phase: 'wait' | 'logs' | 'input' | 'output' | 'inspect';
   readonly cause: unknown;
   /** The authoritative completed summary when waiting succeeded and output retrieval failed. */
   readonly execution?: ExecutionSummary;
-  /** Last output sequence fully acknowledged by a resumed stream consumer. */
+  /** Last output sequence fully acknowledged by a stream consumer. */
   readonly after?: number;
 }
 
