@@ -1494,14 +1494,24 @@ mod unix {
                     let third_card_bounds = third_card
                         .compute_bounds(&discover_root)
                         .expect("third Discover card belongs to Top root");
+                    assert_eq!(
+                        third_card_bounds.y(), review_card_bounds.y(),
+                        "wide Discover wastes a second row although three compact catalogue cards fit: first={review_card_bounds:?} third={third_card_bounds:?}"
+                    );
                     assert!(
-                        third_card_bounds.y() >= review_card_bounds.y() + review_card_bounds.height(),
-                        "wide Discover packed three cramped cards into one row: first={review_card_bounds:?} third={third_card_bounds:?}"
+                        review_card.width() >= 300 && review_card.width() <= 340,
+                        "wide Discover catalogue columns are not a readable compact width: {}px",
+                        review_card.width()
+                    );
+                    assert!(
+                        review_card.height() <= 232,
+                        "wide Discover catalogue row stretched to {}px",
+                        review_card.height()
                     );
                 } else {
                     let heights = [review_card.height(), access_card.height()];
                     assert!(
-                        heights.iter().all(|height| *height <= 240),
+                        heights.iter().all(|height| *height <= 200),
                         "narrow Discover cards stretched sparse content into {heights:?}px panels"
                     );
                     assert_eq!(

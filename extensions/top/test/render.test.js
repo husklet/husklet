@@ -876,7 +876,7 @@ test('Top owns workspace settings and extension management in the same tab', asy
     'extension cards fill their responsive column instead of overriding width with start alignment',
   );
   assert.deepEqual(ancestorProperty(stage, 'Component playground', 'Card', 'Width'), {
-    Bounds: { minimum: { Chars: 62 }, maximum: 'Fill' },
+    Bounds: { minimum: { Chars: 38 }, maximum: 'Fill' },
   });
   assert.deepEqual(
     taggedProperty(stage, 'Refresh installed extensions', 'IconButton', 'Icon'),
@@ -1651,7 +1651,14 @@ test('an up-to-date built-in is hidden by default and available through the inst
   assert.ok(labelled(stage, 'Component playground'));
   assert.ok(labelled(stage, 'Installed · up to date'));
   assert.ok(labelled(stage, '1 extension · all installed'));
-  assert.ok(labelled(stage, 'Installed image'));
+  assert.ok(
+    labelled(stage, `Installed image · Enabled · sha256:${'a'.repeat(12)}…${'a'.repeat(8)}`),
+  );
+  assert.equal(
+    labelled(stage, 'Installed image'),
+    undefined,
+    'installed provenance shares the trust disclosure instead of adding a second card row',
+  );
   assert.equal(labelled(stage, 'View installed details'), undefined);
   assert.equal(labelled(stage, 'Review access'), undefined);
   assert.equal(labelled(stage, 'Review update'), undefined);

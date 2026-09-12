@@ -1227,7 +1227,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                         return (
                           <Card
                             key={entry.id}
-                            width={{ minimum: { chars: 62 }, maximum: 'fill' }}
+                            width={{ minimum: { chars: 38 }, maximum: 'fill' }}
                             variant="outline"
                           >
                             <CardHeader
@@ -1288,18 +1288,16 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                                     color="text-dim"
                                     wrap
                                   />
+                                  {installedExtension ? (
+                                    <Text
+                                      label={`Installed image · ${capitalize(extensionState(installedExtension))} · ${compactDigest(installedExtension.image_digest)}`}
+                                      color="text-dim"
+                                      tooltip={installedExtension.image_digest}
+                                      wrap
+                                    />
+                                  ) : null}
                                 </Column>
                               </Expander>
-                              {installedExtension ? (
-                                <Expander label="Installed image" expanded={false}>
-                                  <Text
-                                    label={`${capitalize(extensionState(installedExtension))} · ${compactDigest(installedExtension.image_digest)}`}
-                                    color="text-dim"
-                                    tooltip={installedExtension.image_digest}
-                                    wrap
-                                  />
-                                </Expander>
-                              ) : null}
                             </CardContent>
                             <CardActions gap={1} align="start" justify="start" width="fill">
                               {updateAvailable ? (
