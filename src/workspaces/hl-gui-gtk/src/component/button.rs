@@ -29,7 +29,10 @@ pub(crate) fn widget(tag: Tag) -> gtk::Widget {
 
 fn standard() -> gtk::Button {
     let widget = sized(action());
+    widget.add_css_class("hl-button");
     let content = axis::row(0);
+    content.add_css_class("hl-button-chrome");
+    content.set_valign(gtk::Align::Center);
     content.append(&slot::emblem_image());
     content.append(&slot::activity_spinner());
     content.append(&slot::caption_label());

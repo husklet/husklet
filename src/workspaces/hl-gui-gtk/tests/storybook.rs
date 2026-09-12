@@ -323,15 +323,19 @@ mod unix {
                     );
                 }
                 for (class, expected) in [("size-small", 28), ("size-medium", 36), ("size-large", 44)] {
-                    let heights = descendants::<gtk::Button>(&root)
+                    let buttons = descendants::<gtk::Button>(&root)
                         .into_iter()
-                        .filter(|button| button.has_css_class(class) && !button.has_css_class("hl-listitembutton"))
-                        .map(|button| button.height())
+                        .filter(|button| button.has_css_class(class) && button.has_css_class("hl-button"))
+                        .collect::<Vec<_>>();
+                    let heights = buttons
+                        .iter()
+                        .map(|button| button.child().expect("Button owns chrome").height())
                         .collect::<Vec<_>>();
                     assert!(
                         heights.iter().all(|height| *height == expected),
-                        "narrow Button {class} specimens allocated {heights:?}, expected {expected}px"
+                        "narrow Button {class} chrome allocated {heights:?}, expected {expected}px"
                     );
+                    assert!(buttons.iter().all(|button| button.height() >= 44));
                 }
                 capture_story(&realized_window, "Button narrow top");
                 let vertical = document.vadjustment();
@@ -428,16 +432,24 @@ mod unix {
             assert!(activity.is_spinning(), "busy Button activity is not running");
             assert!(activity.is_visible(), "busy Button activity is not visible");
             for (class, expected) in [("size-small", 28), ("size-medium", 36), ("size-large", 44)] {
-                let heights = descendants::<gtk::Button>(&root)
+                let buttons = descendants::<gtk::Button>(&root)
                     .into_iter()
-                    .filter(|button| button.has_css_class(class) && !button.has_css_class("hl-listitembutton"))
-                    .map(|button| button.height())
+                    .filter(|button| button.has_css_class(class) && button.has_css_class("hl-button"))
+                    .collect::<Vec<_>>();
+                let heights = buttons
+                    .iter()
+                    .map(|button| button.child().expect("Button owns chrome").height())
                     .collect::<Vec<_>>();
                 assert!(!heights.is_empty(), "Button has no {class} specimens");
                 assert!(
                     heights.iter().all(|height| *height == expected),
-                    "Button {class} specimens allocated {heights:?}, expected {expected}px"
+                    "Button {class} chrome allocated {heights:?}, expected {expected}px"
                 );
+                assert!(buttons.iter().all(|button| {
+                    button.height() >= 44
+                        && button.is_focusable()
+                        && button.accessible_role() == gtk::AccessibleRole::Button
+                }));
             }
         }
         if story == "IconButton" {
@@ -487,10 +499,11 @@ mod unix {
             ] {
                 let action = find::<gtk::Button>(&root, |button| button_caption(button).as_deref() == Some(label));
                 assert!(action.has_css_class(class), "{label} ConfirmAction lost {class}");
+                assert!(action.height() >= 44, "{label} ConfirmAction retains its target");
                 assert_eq!(
-                    action.height(),
+                    action.child().expect("ConfirmAction owns chrome").height(),
                     expected,
-                    "{label} ConfirmAction uses its semantic height"
+                    "{label} ConfirmAction uses its semantic chrome height"
                 );
                 assert!(action.is_focusable(), "{label} ConfirmAction is keyboard reachable");
             }
@@ -1428,7 +1441,9 @@ mod unix {
             let editors = descendants::<gtk::Entry>(view.upcast_ref());
             assert!(!editors.is_empty(), "editable DataTable column realizes native editors");
             assert!(
-                editors.iter().all(|entry| entry.has_css_class("hl-table-editor") && !entry.has_frame()),
+                editors
+                    .iter()
+                    .all(|entry| entry.has_css_class("hl-table-editor") && !entry.has_frame()),
                 "editable cells use quiet borderless table chrome at rest"
             );
             assert!(
@@ -1615,7 +1630,12 @@ mod unix {
                 assert!(
                     descendants::<gtk::Button>(actions.upcast_ref())
                         .iter()
-                        .all(|button| (28..=36).contains(&button.height())),
+                        .all(|button| {
+                            button.height() >= 44
+                                && button
+                                    .child()
+                                    .is_some_and(|chrome| (28..=36).contains(&chrome.height()))
+                        }),
                     "Card actions are not compact controls"
                 );
             }
@@ -1652,7 +1672,12 @@ mod unix {
                 let action = find::<gtk::Button>(management.upcast_ref(), |button| {
                     button_caption(button).as_deref() == Some(label)
                 });
-                assert_eq!(action.height(), 28, "{label} does not use the compact action tier");
+                assert!(action.height() >= 44, "{label} does not retain its interaction target");
+                assert_eq!(
+                    action.child().expect("Card action owns chrome").height(),
+                    28,
+                    "{label} does not use compact chrome"
+                );
                 assert!(action.is_focusable(), "{label} is not keyboard reachable");
             }
             assert!(inventory.hexpands(), "inventory Card must retain native fill authority");
@@ -1699,10 +1724,11 @@ mod unix {
                 .filter(|button| button.has_css_class("size-small"))
                 .collect::<Vec<_>>();
             assert!(buttons.len() >= 10, "CardActions omitted its compact controls");
+            assert!(buttons.iter().all(|button| button.height() >= 44));
             assert!(
-                buttons.iter().all(|button| button.height() == 28),
-                "CardActions stretched a compact control: {:?}",
-                buttons.iter().map(|button| button.height()).collect::<Vec<_>>()
+                buttons
+                    .iter()
+                    .all(|button| button.child().is_some_and(|chrome| chrome.height() == 28))
             );
             for button in &buttons {
                 assert!(button.is_focusable(), "CardActions contains an unreachable command");
@@ -1714,8 +1740,9 @@ mod unix {
             settle_window_width(&realized_window, 600);
             assert_contained(&root, "CardActions narrow");
             assert!(
-                buttons.iter().all(|button| button.height() == 28),
-                "CardActions stretched a compact control after resize"
+                buttons
+                    .iter()
+                    .all(|button| button.child().is_some_and(|chrome| chrome.height() == 28))
             );
             capture_story(&realized_window, "CardActions narrow");
             let (status, stderr) = child.stop();
@@ -2808,7 +2835,12 @@ mod unix {
         assert_eq!(retry.accessible_role(), gtk::AccessibleRole::Button);
         assert!(retry.is_focusable(), "{case} RecoveryState retry is keyboard reachable");
         assert!(retry.has_css_class("size-small"));
-        assert_eq!(retry.height(), 28, "{case} RecoveryState retry control height");
+        assert!(retry.height() >= 44, "{case} RecoveryState retry interaction target");
+        assert_eq!(
+            retry.child().expect("RecoveryState retry owns chrome").height(),
+            28,
+            "{case} RecoveryState retry chrome height"
+        );
         let disclosure = find::<gtk::Expander>(root, |expander| {
             expander.label().as_deref() == Some("Technical details")
         });

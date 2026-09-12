@@ -70,8 +70,21 @@ test('Button keeps its overview code and every size row bounded to the document 
   const source = await readFile(new URL('../src/button.tsx', import.meta.url), 'utf8');
   assert.match(source, /<Code\s+width="fill"[\s\S]*?wrap/);
   assert.match(source, /<Row gap=\{2\} wrap width="fill">/);
-  assert.match(source, /label=\{`\$\{title\(controlSize\)\} · \$\{height\(controlSize\)\}px`\}/);
+  assert.match(
+    source,
+    /label=\{`\$\{title\(controlSize\)\} · \$\{height\(controlSize\)\}px visible chrome · ≥44px target`\}/,
+  );
   assert.match(source, /label=\{title\(emphasis\)\}/);
+});
+
+test('Button distinguishes compact visible chrome from its accessible target', () => {
+  const frame = host().render(h(ButtonWorkbench));
+  const copy = propsFor(frame.patches, 'Text').map((props) => props.Label?.Text ?? '');
+  assert(copy.some((label) => label.includes('28px, 36px, and 44px chrome')));
+  assert(copy.some((label) => label.includes('at least 44px high')));
+  for (const size of ['Small', 'Medium', 'Large']) {
+    assert(copy.some((label) => label.startsWith(`${size} ·`) && label.includes('≥44px target')));
+  }
 });
 
 test('Button documents a compact reset beside the value it affects', () => {

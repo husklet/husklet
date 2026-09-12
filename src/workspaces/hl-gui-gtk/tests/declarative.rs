@@ -248,7 +248,12 @@ fn button_sizes_allocate_their_semantic_metrics() {
         }
         let widget = session.tagged(Tag::Button).unwrap();
         assert!(widget.has_css_class(class), "{class} is attached");
-        assert_eq!(widget.height(), expected, "{class} allocation");
+        assert!(widget.height() >= 44, "{class} retains its interaction target");
+        let chrome = widget.first_child().expect("standard button owns visual chrome");
+        assert!(chrome.has_css_class("hl-button-chrome"));
+        assert_eq!(chrome.height(), expected, "{class} visual chrome");
+        assert_eq!(widget.accessible_role(), gtk::AccessibleRole::Button);
+        assert!(widget.is_focusable());
         window.close();
     }
 }

@@ -16,10 +16,10 @@ mod unix {
         NetworkEndpointInventory, NetworkInventory, NetworkKind, NetworkSummary,
     };
     use hl_extension::{
-        codec, Capability, ChannelId, ExtensionName, ExtensionPreferences, ExtensionSummary, FilesystemGrant,
-        FilesystemSelector, Frame, Grant, Hello, ImageGrant, ImageSelector, PaneProvider, PreferenceValue,
+        Capability, ChannelId, ExtensionName, ExtensionPreferences, ExtensionSummary, FilesystemGrant,
+        FilesystemSelector, Frame, Grant, Hello, ImageGrant, ImageSelector, PROTOCOL, PaneProvider, PreferenceValue,
         RelativePath, Reply, Request, Snapshot, VolumeGrant, Welcome, Wire, WorkspaceConfiguration,
-        WorkspaceEnvironmentGrant, WorkspaceEnvironmentSelector, WorkspaceInfo, WorkspaceTerminal, PROTOCOL,
+        WorkspaceEnvironmentGrant, WorkspaceEnvironmentSelector, WorkspaceInfo, WorkspaceTerminal, codec,
     };
     use hl_gui::{Renderer as _, SourceMutation, Theme, Tree};
     use hl_gui_gtk::Surface;
@@ -428,7 +428,7 @@ mod unix {
                 let create = find_button(&root, "Create a container");
                 assert!(create.has_css_class("variant-outline"));
                 assert!(create.has_css_class("size-small"));
-                assert_eq!(create.height(), 28, "{width_name} create action is not compact");
+                assert_standard_action(&create, width_name, "container create", 28);
                 assert!(matches!(
                     create.tooltip_text().as_deref(),
                     Some("Configure a new container")
@@ -463,7 +463,7 @@ mod unix {
                 );
                 let submit = find_button(&root, "Create and start");
                 assert!(submit.has_css_class("size-small"));
-                assert!(submit.height() <= 32);
+                assert_standard_action(&submit, width_name, "container submit", 28);
                 assert!(!submit.is_sensitive(), "missing required fields disable submission");
                 for placeholder in ["Image reference", "Container name"] {
                     let field = find_entry_placeholder(&root, placeholder);
@@ -545,6 +545,7 @@ mod unix {
             if fixture == "populated" && name == "images" {
                 let reference = find_entry_placeholder(&root, "registry/image:tag");
                 let pull = find_button(&root, "Pull");
+                assert_standard_action(&pull, width_name, "image pull", 36);
                 let refresh = find_tooltip_button(&root, "Refresh images");
                 let reference_bounds = reference
                     .compute_bounds(&root)
@@ -583,19 +584,14 @@ mod unix {
                 let cards = widgets_with_class(&root, "hl-card");
                 if width == 600 {
                     assert!(
-                        cards
-                            .windows(2)
-                            .all(|pair| {
-                                pair[0].compute_bounds(&root).expect("card belongs to root").y()
-                                    != pair[1].compute_bounds(&root).expect("card belongs to root").y()
-                            }),
+                        cards.windows(2).all(|pair| {
+                            pair[0].compute_bounds(&root).expect("card belongs to root").y()
+                                != pair[1].compute_bounds(&root).expect("card belongs to root").y()
+                        }),
                         "600px Installed cards did not form one full-width row each"
                     );
                 } else {
-                    let healthy = cards
-                        .iter()
-                        .filter(|card| card.width() < width / 2)
-                        .collect::<Vec<_>>();
+                    let healthy = cards.iter().filter(|card| card.width() < width / 2).collect::<Vec<_>>();
                     let first_y = healthy
                         .first()
                         .expect("Installed renders healthy cards")
@@ -606,8 +602,7 @@ mod unix {
                         healthy
                             .iter()
                             .take_while(|card| {
-                                card.compute_bounds(&root).expect("healthy card belongs to root").y()
-                                    == first_y
+                                card.compute_bounds(&root).expect("healthy card belongs to root").y() == first_y
                             })
                             .count(),
                         3,
@@ -615,7 +610,10 @@ mod unix {
                         healthy
                             .iter()
                             .take(6)
-                            .map(|card| (card.width(), card.compute_bounds(&root).map(|bounds| (bounds.x(), bounds.y()))))
+                            .map(|card| (
+                                card.width(),
+                                card.compute_bounds(&root).map(|bounds| (bounds.x(), bounds.y()))
+                            ))
                             .collect::<Vec<_>>()
                     );
                 }
@@ -658,6 +656,7 @@ mod unix {
                 assert_eq!(title.accessible_role(), gtk::AccessibleRole::Heading);
                 let entry = find_entry_placeholder(&root, "Network name");
                 let create = find_button(&root, "Create");
+                assert_standard_action(&create, width_name, "network create", 36);
                 let refresh = find_tooltip_button(&root, "Refresh networks");
                 let manage = find_button(&root, "Manage connections");
                 assert_eq!(refresh.icon_name().as_deref(), Some("view-refresh-symbolic"));
@@ -731,7 +730,7 @@ mod unix {
                     settle_frame();
                     let remove = find_button(&network_card, "Remove");
                     assert!(remove.has_css_class("size-small"));
-                    assert_eq!(remove.height(), 28, "expanded network removal stays compact");
+                    assert_standard_action(&remove, width_name, "network removal", 28);
                     assert!(remove.grab_focus(), "expanded network removal is keyboard reachable");
                     capture_stable(&window, "network-danger-wide", width, 800);
                     assert!(
@@ -812,7 +811,7 @@ mod unix {
                     find_mapped_labelled(&card, "Removing this volume permanently deletes its stored data.");
                     let remove = find_button(&card, "Remove");
                     assert!(remove.has_css_class("size-small"));
-                    assert_eq!(remove.height(), 28, "expanded volume removal stays compact");
+                    assert_standard_action(&remove, width_name, "volume removal", 28);
                     assert!(remove.grab_focus(), "expanded volume removal is keyboard reachable");
                     capture(&window, "volume-danger-wide", width, 800);
                     assert!(
@@ -885,7 +884,7 @@ mod unix {
                     settle_frame();
                     let remove = find_button(&card, "Remove");
                     assert!(remove.has_css_class("size-small"));
-                    assert_eq!(remove.height(), 28, "expanded image removal stays compact");
+                    assert_standard_action(&remove, width_name, "image removal", 28);
                     assert!(remove.grab_focus(), "expanded image removal is keyboard reachable");
                     capture_stable(&window, "image-danger-wide", width, 800);
                     assert!(
@@ -1378,9 +1377,9 @@ mod unix {
                 assert_eq!(check.accessible_role(), gtk::AccessibleRole::Button);
                 assert!(has_label(open.upcast_ref(), "Open"));
                 assert!(open.has_css_class("size-small"));
-                assert_eq!(open.height(), 28, "{width_name} provider action uses the compact tier");
+                assert_standard_action(&open, width_name, "provider open", 28);
                 assert!(check.has_css_class("size-small"));
-                assert_eq!(check.height(), 28, "{width_name} image check uses the compact tier");
+                assert_standard_action(&check, width_name, "image check", 28);
                 assert!(check.is_focusable(), "{width_name} image check is keyboard reachable");
                 assert!(!permissions.is_expanded(), "permissions start collapsed");
                 let provider_group = ancestor_with_class(open.upcast_ref(), "hl-row")
@@ -1421,7 +1420,7 @@ mod unix {
                         action.has_css_class("size-small"),
                         "{width_name} {label} uses the compact tier"
                     );
-                    assert_eq!(action.height(), 28, "{width_name} {label} is 28px high");
+                    assert_standard_action(&action, width_name, label, 28);
                     assert!(action.is_focusable(), "{width_name} {label} is keyboard reachable");
                     assert!(
                         action.ancestor(gtk::Expander::static_type()).is_none(),
@@ -1471,11 +1470,8 @@ mod unix {
                 review_access.has_css_class("variant-outline"),
                 "new extension access review uses the quieter outlined hierarchy"
             );
-            let available = ancestor_with_class(
-                &find_mapped_labelled(&access_card, "Available"),
-                "hl-badge",
-            )
-            .expect("available state belongs to a badge");
+            let available = ancestor_with_class(&find_mapped_labelled(&access_card, "Available"), "hl-badge")
+                .expect("available state belongs to a badge");
             assert!(
                 available.has_css_class("tone-neutral"),
                 "plain availability does not compete with updates for accent emphasis"
@@ -1498,11 +1494,7 @@ mod unix {
                 settle_frame();
                 assert_contained(&discover_root, &format!("discover/extensions/{width_name}"));
                 for (label, action) in [("update", &review), ("access", &review_access)] {
-                    assert_eq!(
-                        action.height(),
-                        28,
-                        "{width_name} Discover {label} action control height"
-                    );
+                    assert_standard_action(action, width_name, &format!("Discover {label}"), 28);
                 }
                 let description = find_mapped_labelled(&review_card, "A bounded daily developer workflow for task 01.");
                 let description_bounds = description
@@ -1564,14 +1556,14 @@ mod unix {
                         review_card.width()
                     );
                     assert!(
-                        review_card.height() <= 232,
+                        review_card.height() <= 240,
                         "wide Discover catalogue row stretched to {}px",
                         review_card.height()
                     );
                 } else {
                     let heights = [review_card.height(), access_card.height()];
                     assert!(
-                        heights.iter().all(|height| *height <= 200),
+                        heights.iter().all(|height| *height <= 204),
                         "narrow Discover cards stretched sparse content into {heights:?}px panels"
                     );
                     assert_eq!(
@@ -2258,7 +2250,7 @@ mod unix {
                     "{width_name} volume creation controls split across rows: {tops:?}"
                 );
                 assert!(create.has_css_class("size-small"));
-                assert!(create.height() <= 32);
+                assert_standard_action(&create, width_name, "volume create", 28);
                 let entry_bounds = entry
                     .compute_bounds(&recovery_root)
                     .expect("volume name entry belongs to the Top root");
@@ -2273,11 +2265,7 @@ mod unix {
                 assert!(entry.grab_focus());
                 assert!(refresh.grab_focus());
                 assert!(open.has_css_class("size-small"));
-                assert!(
-                    open.height() <= 32,
-                    "{width_name} access recovery action exceeded 32px: {}",
-                    open.height()
-                );
+                assert_standard_action(&open, width_name, "access recovery", 28);
                 if width == 1_200 {
                     for (last_item, next_group) in [("Extensions", "Resources"), ("Networks", "Interface")] {
                         let item = find_labelled(&recovery_root, last_item);
@@ -2460,9 +2448,13 @@ mod unix {
             window.queue_draw();
             settle_frame();
             assert_contained(&failure_root, &format!("extension-acquisition-failure/{width_name}"));
-            let retry_bounds = retry
+            let retry_chrome = widgets_with_class(retry.upcast_ref(), "hl-button-chrome")
+                .into_iter()
+                .next()
+                .expect("Retry owns visible chrome");
+            let retry_bounds = retry_chrome
                 .compute_bounds(&failure_root)
-                .expect("retry belongs to failure card");
+                .expect("retry chrome belongs to failure card");
             let detail_bounds = technical
                 .compute_bounds(&failure_root)
                 .expect("details belong to failure card");
@@ -2536,7 +2528,7 @@ mod unix {
         assert_eq!(progress.fraction(), 0.5, "the GTK bar preserves host progress");
         let cancel = find_button(&progress_root, "Cancel inspection");
         assert!(cancel.has_css_class("size-small"));
-        assert_eq!(cancel.height(), 28, "inspection cancellation stays compact");
+        assert_standard_action(&cancel, "inspection", "cancellation", 28);
         let cancel_bounds = cancel
             .compute_bounds(&progress_root)
             .expect("cancel action belongs to the progress surface");
@@ -3146,11 +3138,7 @@ mod unix {
             assert_contained(root, &format!("extensions/{state}/{width_name}"));
             if state == "update-required" {
                 let required = find_button(root, "Select required access");
-                assert_eq!(
-                    required.height(),
-                    28,
-                    "{width_name} required-access shortcut stays compact"
-                );
+                assert_standard_action(&required, width_name, "required-access shortcut", 28);
             }
             if state == "update-review" {
                 let update = find_button(root, "Update with selected access");
@@ -3179,10 +3167,8 @@ mod unix {
                     root.width() as f32 - clear_bounds.x() - clear_bounds.width() <= 40.0,
                     "{width_name} product reset floated away from the review edge: {clear_bounds:?}"
                 );
-                assert!(
-                    clear.has_css_class("size-small") && clear.height() <= 38,
-                    "{width_name} product reset stays compact: {clear_bounds:?}"
-                );
+                assert!(clear.has_css_class("size-small"));
+                assert_standard_action(&clear, width_name, "product reset", 28);
                 let environment = find_label(root, "Read selected workspace environment values")
                     .mnemonic_widget()
                     .and_then(|widget| widget.downcast::<gtk::Switch>().ok())
@@ -3599,6 +3585,25 @@ mod unix {
         );
     }
 
+    fn assert_standard_action(button: &gtk::Button, width: &str, purpose: &str, expected_chrome: i32) {
+        assert!(
+            button.has_css_class("hl-button"),
+            "{width} {purpose} omitted standard Button chrome"
+        );
+        assert_eq!(button.accessible_role(), gtk::AccessibleRole::Button);
+        assert!(button.is_focusable(), "{width} {purpose} action is not focusable");
+        assert!(
+            button.height() >= 44,
+            "{width} {purpose} hit target is only {}px",
+            button.height()
+        );
+        let chrome = widgets_with_class(button.upcast_ref(), "hl-button-chrome")
+            .into_iter()
+            .next()
+            .expect("standard action owns visual chrome");
+        assert_eq!(chrome.height(), expected_chrome, "{width} {purpose} chrome");
+    }
+
     fn assert_overview_recovery(root: &gtk::Widget, width: i32, case: &str) {
         let summary = "Workspace inventory lost its connection. No change was assumed.";
         let message = find_inline_message(root, summary).expect("overview recovery uses InlineMessage");
@@ -3607,7 +3612,7 @@ mod unix {
         assert_eq!(retry.accessible_role(), gtk::AccessibleRole::Button);
         assert!(retry.is_focusable(), "{case} overview retry is keyboard reachable");
         assert!(retry.has_css_class("size-small"));
-        assert_eq!(retry.height(), 28, "{case} overview retry control height");
+        assert_standard_action(&retry, case, "overview retry", 28);
         let disclosure = find_expander(root, "Technical details");
         assert_eq!(disclosure.accessible_role(), gtk::AccessibleRole::Button);
         assert!(
@@ -3697,14 +3702,9 @@ mod unix {
                 );
             }
             assert!(
-                [
-                    resources.width(),
-                    terminal.width(),
-                    environment.width(),
-                    mounts.width()
-                ]
-                .into_iter()
-                .all(|group| group >= 480.0),
+                [resources.width(), terminal.width(), environment.width(), mounts.width()]
+                    .into_iter()
+                    .all(|group| group >= 480.0),
                 "{case} compact settings summaries must retain the usable page width"
             );
         } else {
@@ -3839,8 +3839,14 @@ mod unix {
             vertical_end(root, &first) <= 780,
             "{case} first installed card was not completely visible in the 800px viewport"
         );
-        assert!(has_label(root, "Needs attention"), "{case} omitted the attention section");
-        assert!(has_label(root, "Healthy extensions"), "{case} omitted the healthy section");
+        assert!(
+            has_label(root, "Needs attention"),
+            "{case} omitted the attention section"
+        );
+        assert!(
+            has_label(root, "Healthy extensions"),
+            "{case} omitted the healthy section"
+        );
         let healthy = ancestor_with_class(&find_mapped_labelled(root, "disabled-linter"), "hl-card")
             .expect("healthy installed extension belongs to a card");
         let mut attention_cards = vec![("fault", first.clone())];
@@ -3874,7 +3880,7 @@ mod unix {
                 action.has_css_class("size-small"),
                 "{case} {label} action uses the compact card tier"
             );
-            assert_eq!(action.height(), 28, "{case} {label} action control height");
+            assert_standard_action(&action, case, label, 28);
         }
         if width > 600 {
             assert!(
@@ -3913,7 +3919,10 @@ mod unix {
                 .filter(|card| vertical_end(root, card) - card.height() == first_row_y)
                 .map(|card| card.height())
                 .collect::<Vec<_>>();
-            assert!(first_row_heights.len() >= 3, "{case} healthy grid did not fill its first row");
+            assert!(
+                first_row_heights.len() >= 3,
+                "{case} healthy grid did not fill its first row"
+            );
             assert!(
                 first_row_heights.iter().all(|height| *height == first_row_heights[0]),
                 "{case} healthy first-row cards are not uniform: {first_row_heights:?}"

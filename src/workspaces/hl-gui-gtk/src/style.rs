@@ -19,6 +19,7 @@ pub fn sheet(theme: &Theme) -> String {
     variants(&mut css, theme);
     scales(&mut css, theme);
     control_sizes(&mut css);
+    standard_buttons(&mut css, theme);
     inline_buttons(&mut css, theme);
     spacing(&mut css, theme);
     components(&mut css, theme);
@@ -226,17 +227,61 @@ fn scales(css: &mut String, theme: &Theme) {
 
 fn control_sizes(css: &mut String) {
     css.push_str(
-        "button.size-small { min-height: 28px; padding: 4px 8px; font-size: 12px; border-radius: 6px; }\n\
-         button.size-medium { min-height: 36px; padding: 8px 12px; font-size: 14px; border-radius: 6px; }\n\
-         button.size-large { min-height: 44px; padding: 12px 16px; font-size: 16px; border-radius: 8px; }\n\
-         button.size-small > box { border-spacing: 6px; } button.size-small image { -gtk-icon-size: 14px; }\n\
-         button.size-medium > box { border-spacing: 8px; } button.size-medium image { -gtk-icon-size: 18px; }\n\
-         button.size-large > box { border-spacing: 8px; } button.size-large image { -gtk-icon-size: 20px; }\n\
+        "button.hl-button { min-height: 44px; padding: 0; background: transparent; border-color: transparent; box-shadow: none; }\n\
+         button.hl-button.size-small > .hl-button-chrome { min-height: 28px; padding: 0 8px; font-size: 12px; border-radius: 6px; }\n\
+         button.hl-button.size-medium > .hl-button-chrome { min-height: 36px; padding: 0 12px; font-size: 14px; border-radius: 6px; }\n\
+         button.hl-button.size-large > .hl-button-chrome { min-height: 44px; padding: 0 16px; font-size: 16px; border-radius: 8px; }\n\
+         button.hl-button.size-small > .hl-button-chrome { border-spacing: 6px; } button.size-small image { -gtk-icon-size: 14px; }\n\
+         button.hl-button.size-medium > .hl-button-chrome { border-spacing: 8px; } button.size-medium image { -gtk-icon-size: 18px; }\n\
+         button.hl-button.size-large > .hl-button-chrome { border-spacing: 8px; } button.size-large image { -gtk-icon-size: 20px; }\n\
          button.hl-iconbutton.size-small { min-width: 28px; min-height: 28px; padding: 0; }\n\
          button.hl-iconbutton.size-medium { min-width: 36px; min-height: 36px; padding: 0; }\n\
          button.hl-iconbutton.size-large { min-width: 44px; min-height: 44px; padding: 0; }\n\
          button.hl-inline-button { min-height: 44px; padding: 0; background: transparent; border-color: transparent; box-shadow: none; }\n\
          button.hl-inline-button > .hl-inline-button-chrome { min-height: 18px; padding: 4px 8px; border: 1px solid transparent; border-radius: 6px; font-size: 12px; }\n",
+    );
+}
+
+fn standard_buttons(css: &mut String, theme: &Theme) {
+    for variant in Variant::ALL {
+        for tone in Tone::ALL {
+            let color = theme.color(token(*tone)).hex();
+            let rule = match variant {
+                Variant::Filled => format!(
+                    "background: {color}; color: {on}; border: 1px solid {color};",
+                    on = theme.color(Token::Ground).hex()
+                ),
+                Variant::Outline => format!("background: transparent; border: 1px solid {color}; color: {color};"),
+                Variant::Ghost => format!("background: transparent; border: 1px solid transparent; color: {color};"),
+                Variant::Plain => format!("background: transparent; border: 1px solid transparent; color: {color};"),
+            };
+            let _ = writeln!(
+                css,
+                "button.hl-button.variant-{variant}.tone-{tone} > .hl-button-chrome {{ {rule} }}",
+                variant = variant.as_str(),
+                tone = tone.as_str(),
+            );
+        }
+    }
+    let _ = writeln!(
+        css,
+        "button.hl-button, button.hl-button:hover, button.hl-button:active {{ background: transparent; border-color: transparent; box-shadow: none; }}\n\
+         button.hl-button.variant-plain > .hl-button-chrome {{ background: transparent; color: {text}; border: 1px solid transparent; }}\n\
+         button.hl-button.variant-filled > .hl-button-chrome {{ background: {text}; color: {ground}; border: 1px solid {text}; }}\n\
+         button.hl-button.variant-outline > .hl-button-chrome {{ background: transparent; color: {text}; border: 1px solid {line}; }}\n\
+         button.hl-button.variant-ghost > .hl-button-chrome {{ background: transparent; color: {dim}; border: 1px solid transparent; }}\n\
+         button.hl-button.variant-outline:hover > .hl-button-chrome, button.hl-button.variant-ghost:hover > .hl-button-chrome {{ background: {raised}; color: {text}; border-color: {line}; }}\n\
+         button.hl-button.variant-filled:hover > .hl-button-chrome {{ box-shadow: inset 0 0 0 999px rgba(255,255,255,.10); }}\n\
+         button.hl-button.variant-filled:active > .hl-button-chrome {{ box-shadow: inset 0 0 0 999px rgba(0,0,0,.14); }}\n\
+         button.hl-button:disabled > .hl-button-chrome {{ color: {faint}; background: {surface}; border-color: {line}; box-shadow: none; }}\n\
+         button.hl-button.variant-ghost:disabled > .hl-button-chrome, button.hl-button.variant-plain:disabled > .hl-button-chrome {{ background: transparent; border-color: transparent; }}",
+        raised = theme.color(Token::Raised).hex(),
+        text = theme.color(Token::Text).hex(),
+        ground = theme.color(Token::Ground).hex(),
+        dim = theme.color(Token::TextDim).hex(),
+        surface = theme.color(Token::Surface).hex(),
+        faint = theme.color(Token::TextFaint).hex(),
+        line = theme.color(Token::Line).hex(),
     );
 }
 
@@ -493,15 +538,16 @@ mod tests {
         let css = super::sheet(&Theme::dark());
         assert!(
             css.contains(
-                "button.size-small { min-height: 28px; padding: 4px 8px; font-size: 12px; border-radius: 6px;"
+                "button.hl-button.size-small > .hl-button-chrome { min-height: 28px; padding: 0 8px; font-size: 12px; border-radius: 6px;"
             )
         );
         assert!(css.contains(
-            "button.size-medium { min-height: 36px; padding: 8px 12px; font-size: 14px; border-radius: 6px;"
+            "button.hl-button.size-medium > .hl-button-chrome { min-height: 36px; padding: 0 12px; font-size: 14px; border-radius: 6px;"
         ));
         assert!(css.contains(
-            "button.size-large { min-height: 44px; padding: 12px 16px; font-size: 16px; border-radius: 8px;"
+            "button.hl-button.size-large > .hl-button-chrome { min-height: 44px; padding: 0 16px; font-size: 16px; border-radius: 8px;"
         ));
+        assert!(css.contains("button.hl-button { min-height: 44px; padding: 0;"));
         assert!(css.contains("button.hl-iconbutton.size-large { min-width: 44px; min-height: 44px; padding: 0;"));
     }
 
@@ -509,12 +555,12 @@ mod tests {
     fn inline_buttons_separate_hit_target_from_visual_chrome() {
         let css = super::sheet(&Theme::dark());
         assert!(css.contains("button.hl-inline-button { min-height: 44px; padding: 0;"));
-        assert!(css.contains(
-            "button.hl-inline-button > .hl-inline-button-chrome { min-height: 18px; padding: 4px 8px;"
-        ));
-        assert!(css.contains(
-            "button.hl-inline-button.variant-outline > .hl-inline-button-chrome { border-color: #323843;"
-        ));
+        assert!(
+            css.contains("button.hl-inline-button > .hl-inline-button-chrome { min-height: 18px; padding: 4px 8px;")
+        );
+        assert!(
+            css.contains("button.hl-inline-button.variant-outline > .hl-inline-button-chrome { border-color: #323843;")
+        );
     }
 
     #[test]
@@ -569,9 +615,7 @@ mod tests {
         assert!(css.contains(
             "columnview entry.hl-table-editor { min-height: 24px; padding: 1px 8px; margin: 2px 0; background: transparent; border-color: transparent; box-shadow: none;"
         ));
-        assert!(css.contains(
-            "columnview entry.hl-table-editor:hover { background: #21252d; border-color: #323843;"
-        ));
+        assert!(css.contains("columnview entry.hl-table-editor:hover { background: #21252d; border-color: #323843;"));
         assert!(css.contains(
             "columnview entry.hl-table-editor:focus-within { background: #171a20; border-color: #559df7; box-shadow: inset 0 0 0 1px #559df7;"
         ));
@@ -584,9 +628,7 @@ mod tests {
         assert!(css.contains(
             ".hl-select-option { min-height: 22px; min-width: 120px; padding: 2px 10px; background: transparent; color: #bec5cf; border: 1px solid transparent; border-radius: 8px; box-shadow: none;"
         ));
-        assert!(css.contains(
-            ".hl-select-option:hover { background: #21252d; color: #f0f2f5; border-color: #323843;"
-        ));
+        assert!(css.contains(".hl-select-option:hover { background: #21252d; color: #f0f2f5; border-color: #323843;"));
         assert!(css.contains(
             ".hl-select-option:focus, .hl-select-option:focus-visible { outline: none; background: #21252d; color: #f0f2f5; border-color: #559df7; box-shadow: inset 0 0 0 1px #559df7;"
         ));

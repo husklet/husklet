@@ -88,9 +88,17 @@ export function ButtonWorkbench() {
         </SectionBlock>
       </SpecimenGrid>
       <SectionBlock title="Sizes">
+        <Text
+          label="Small, medium, and large draw 28px, 36px, and 44px chrome. Every size remains inside a native target at least 44px high, so compact layout does not reduce pointer or keyboard access."
+          color="text-dim"
+          wrap
+        />
         {(['small', 'medium', 'large'] as const).map((controlSize) => (
           <Column key={controlSize} gap={1} width="fill">
-            <Text label={`${title(controlSize)} · ${height(controlSize)}px`} color="text-dim" />
+            <Text
+              label={`${title(controlSize)} · ${height(controlSize)}px visible chrome · ≥44px target`}
+              color="text-dim"
+            />
             <Row gap={2} wrap width="fill">
               {(['filled', 'outline', 'ghost', 'plain'] as const).map((emphasis) => (
                 <Button
