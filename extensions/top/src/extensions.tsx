@@ -1465,15 +1465,31 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                       ) : null}
                       <Heading label="Review permissions" scale="caption" />
                       <RequestedPermissionSummary groups={requestedPermissionGroups} />
-                      <InlineMessage
+                      <Text
                         label="All access is off. Expand exact grants and enable only what this extension needs."
-                        tone="warning"
+                        color="text-dim"
+                        wrap
                       />
                       {missingRequiredCapabilities.length > 0 ? (
-                        <InlineMessage
-                          label={`Required to keep this extension available after the update: ${missingRequiredCapabilities.map(capabilityLabel).join(', ')}. Select ${missingRequiredCapabilities.length === 1 ? 'it' : 'them'} below to continue.`}
-                          tone="warning"
-                        />
+                        <Column gap={1} align="start">
+                          <InlineMessage
+                            label={`${countLabel(missingRequiredCapabilities.length, 'required permission')} ${missingRequiredCapabilities.length === 1 ? 'is' : 'are'} off: ${missingRequiredCapabilities.map(capabilityLabel).join(', ')}. Optional access stays off.`}
+                            tone="warning"
+                          />
+                          <Button
+                            label="Select required access"
+                            tooltip="Enable only the permissions required for this extension to remain available"
+                            size="small"
+                            variant="outline"
+                            tone="accent"
+                            enabled={!busy}
+                            onInvoke={() =>
+                              setGranted((current) => [
+                                ...new Set([...current, ...requiredCapabilities]),
+                              ])
+                            }
+                          />
+                        </Column>
                       ) : null}
                       {privilegedAccessWarning ? (
                         <InlineMessage label={privilegedAccessWarning} tone="warning" />

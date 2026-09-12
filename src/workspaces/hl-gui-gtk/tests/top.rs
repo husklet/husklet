@@ -2466,20 +2466,22 @@ mod unix {
         ));
         assert!(has_label(
             &review_root,
-            "Required to keep this extension available after the update: Render this extension interface. Select it below to continue."
+            "1 required permission is off: Render this extension interface. Optional access stays off."
         ));
         let update = find_button(&review_root, "Update with selected access");
         assert!(!update.is_sensitive(), "mandatory consent cannot be omitted");
-        let interface = find_label(&review_root, "Render this extension interface · Required")
-            .mnemonic_widget()
-            .and_then(|widget| widget.downcast::<gtk::Switch>().ok())
-            .expect("required capability label names its native switch");
+        let required = find_button(&review_root, "Select required access");
+        assert!(required.has_css_class("size-small"));
+        assert_eq!(
+            required.tooltip_text().as_deref(),
+            Some("Enable only the permissions required for this extension to remain available")
+        );
+        capture_update_surface(window, &review_root, "update-required");
         let _ = surface.reports().drain();
-        let _: bool = interface.emit_by_name("state-set", &[&true]);
-        interface.set_active(true);
+        required.emit_clicked();
         settle_toolkit();
         send_report(surface, wire, 102, |event| {
-            matches!(event, hl_gui::Event::Toggle { .. })
+            matches!(event, hl_gui::Event::Invoke { .. })
         });
         apply_extension_update_until(
             wire,
@@ -2945,6 +2947,14 @@ mod unix {
             capture_window.present();
             settle_toolkit();
             assert_contained(root, &format!("extensions/{state}/{width_name}"));
+            if state == "update-required" {
+                let required = find_button(root, "Select required access");
+                assert_eq!(
+                    required.height(),
+                    28,
+                    "{width_name} required-access shortcut stays compact"
+                );
+            }
             if state == "update-review" {
                 let update = find_button(root, "Update with selected access");
                 assert!(
@@ -2955,7 +2965,7 @@ mod unix {
                     .into_iter()
                     .filter(|message| message.has_css_class("tone-warning"))
                     .count();
-                assert_eq!(warnings, 3, "{width_name} review repeats risk chrome");
+                assert_eq!(warnings, 2, "{width_name} review repeats risk chrome");
                 let product = find_label(root, "Product access · 5/6");
                 let clear = find_button(root, "Clear product access");
                 let product_bounds = product

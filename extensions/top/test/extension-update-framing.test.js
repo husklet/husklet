@@ -120,9 +120,14 @@ test('digest-pinned same-version review rejects a substituted image over real Un
     await until(() =>
       labelled(
         stage,
-        'Required to keep this extension available after the update: Render this extension interface. Select it below to continue.',
+        '1 required permission is off: Render this extension interface. Optional access stays off.',
       ),
     );
+    assert.ok(labelled(stage, 'Select required access'));
+    invokeByLabel(stage, 'Select required access');
+    await until(() => labelled(stage, 'Review decision · 1/1 selected'));
+    assert.deepEqual(latestSwitchValues(stage), [true]);
+    assert.equal(enabledByLabel(stage, 'Update with selected access'), false);
     assert.deepEqual(
       calls.filter(({ call }) => call.startsWith('extension_acquisition')),
       [
@@ -194,6 +199,32 @@ function invokeByTooltip(stage, tooltip) {
     nodes.some((node) =>
       stage.surface.dispatch({ trigger: 'Invoke', node, id: `${node}:Invoke`, value: null }),
     ),
+  );
+}
+
+function invokeByLabel(stage, label) {
+  const nodes = stage.frames
+    .flatMap((frame) => frame.patches)
+    .filter((patch) => patch.SetProp?.prop === 'Label' && patch.SetProp.value?.Text === label)
+    .map((patch) => patch.SetProp.id)
+    .reverse();
+  assert.ok(
+    nodes.some((node) =>
+      stage.surface.dispatch({ trigger: 'Invoke', node, id: `${node}:Invoke`, value: null }),
+    ),
+  );
+}
+
+function latestSwitchValues(stage) {
+  const patches = stage.frames.flatMap((frame) => frame.patches);
+  const switches = new Set(
+    patches.filter((patch) => patch.Create?.tag === 'Switch').map((patch) => patch.Create.id),
+  );
+  return [...switches].map(
+    (node) =>
+      patches
+        .filter((patch) => patch.SetProp?.id === node && patch.SetProp.prop === 'Checked')
+        .at(-1)?.SetProp.value?.Flag,
   );
 }
 
