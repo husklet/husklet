@@ -1362,6 +1362,45 @@ mod focus_ownership_tests {
         }
     }
 
+    #[test]
+    fn extension_focus_selects_the_hidden_tab_named_by_the_pane_slot() {
+        let ran = crate::test_support::on_the_toolkit_thread(|| {
+            let workspace = WorkspaceConfig::new("extension-focus-test", "alpine:3.20", hl_ws::Arch::Amd64);
+            let tw = Window::bench(&workspace);
+            let root = tw.stack.root().unwrap().downcast::<gtk::Window>().unwrap();
+            root.present();
+
+            let (first, _first_slave) = terminal_with_pty();
+            let first_slot = Slots::new(&tw).allocate();
+            Slots::new(&tw).hold(&first, first_slot);
+            PaneFocus::wire(&tw, &first);
+            let first_page = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            first_page.append(&PaneChrome::wrap(&tw, &first));
+            let first_tab = Tabs::new(&tw).add("first", None, &first_page, true);
+
+            let (target, _target_slave) = terminal_with_pty();
+            let target_slot = Slots::new(&tw).allocate();
+            Slots::new(&tw).hold(&target, target_slot.clone());
+            PaneFocus::wire(&tw, &target);
+            let target_page = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            target_page.append(&PaneChrome::wrap(&tw, &target));
+            let target_tab = Tabs::new(&tw).add("target", None, &target_page, true);
+
+            Page::new(&tw, &first_tab).select_and_focus();
+            await_focus(&tw, &first);
+            assert_ne!(tw.stack.visible_child_name().as_deref(), Some(target_tab.as_str()));
+
+            assert!(Panes::focus(&tw, &target_slot));
+            await_focus(&tw, &target);
+            assert_eq!(tw.stack.visible_child_name().as_deref(), Some(target_tab.as_str()));
+            assert!(target.has_focus());
+            tw.closing.set(true);
+        });
+        if !ran {
+            println!("skipped: no display connection");
+        }
+    }
+
     fn terminal_with_pty() -> (vte4::Terminal, std::os::fd::OwnedFd) {
         let mut master = -1;
         let mut slave = -1;

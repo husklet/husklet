@@ -1743,6 +1743,7 @@ export interface WorkspaceApi {
                 revision: number;
             };
         }>;
+        /** Select the tab containing this window-wide pane slot and move keyboard focus to it. */
         focus(slot: string): Promise<void>;
         focusObserved(slot: string, generation: number, revision: number): Promise<void>;
         /** Arm pane changes before CAS focus and verify the same pane is focused at an advanced revision. */

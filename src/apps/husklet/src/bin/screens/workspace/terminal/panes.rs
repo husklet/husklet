@@ -107,6 +107,15 @@ impl Panes {
         let Some(pane) = Self::at(window, slot) else {
             return false;
         };
+        // A slot is window-wide, not scoped to the visible tab. Selecting the
+        // containing page first makes an automation focus request mean the
+        // same thing as a person selecting that tab and pane. GTK refuses to
+        // focus a child of the stack's hidden page, which previously made
+        // perfectly live panes look absent to extensions.
+        let Some(page) = Page::of(window, &pane.widget) else {
+            return false;
+        };
+        page.select();
         pane.content.grab_focus()
     }
 

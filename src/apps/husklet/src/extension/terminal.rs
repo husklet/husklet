@@ -104,7 +104,7 @@ pub enum Request {
         /// The pane being closed.
         slot: String,
     },
-    /// Keyboard focus, moved to the named pane.
+    /// The named pane's tab selected and keyboard focus moved to the pane.
     Focus {
         /// The pane being focused.
         slot: String,

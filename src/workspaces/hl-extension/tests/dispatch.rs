@@ -558,6 +558,7 @@ impl TerminalSurface for Host {
     }
 
     fn focus(&self, _slot: &str) -> Result<(), HostError> {
+        self.ledger.note("terminal.focus");
         Ok(())
     }
 
@@ -2708,12 +2709,11 @@ fn pane_titles_are_utf8_bounded_and_refused_before_terminal_authority() {
 fn terminal_focus_grant_cannot_mutate_layout() {
     let host = Host::new();
     let mut session = session(&[Capability::TerminalFocus], &[]);
-    assert!(
-        session
-            .dispatch(&Request::TerminalFocusPane { slot: "s1".into() }, &services(&host))
-            .is_ok()
-    );
-    assert!(host.ledger.reached().is_empty());
+    assert!(session
+        .dispatch(&Request::TerminalFocusPane { slot: "s1".into() }, &services(&host))
+        .is_ok());
+    assert_eq!(host.ledger.reached(), ["terminal.focus"]);
+    host.ledger.clear();
     assert!(matches!(
         session.dispatch(&Request::TerminalClosePane { slot: "s1".into() }, &services(&host)),
         Err(Failure::Denied { capability, .. }) if capability == "terminals:layout-control"

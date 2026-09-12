@@ -1411,7 +1411,11 @@ pub trait TerminalSurface {
     /// Returns `HostError::Absent` when no pane is open under the slot.
     fn close(&self, slot: &str) -> Result<(), HostError>;
 
-    /// Moves keyboard focus to one pane.
+    /// Selects the tab containing one pane and moves keyboard focus to it.
+    ///
+    /// Pane identities are window-wide. Implementations must not report a
+    /// live pane as absent merely because its containing tab is not currently
+    /// visible.
     ///
     /// # Errors
     /// Returns `HostError::Absent` when no pane is open under the slot.
