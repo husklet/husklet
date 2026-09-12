@@ -10,9 +10,9 @@ mod unix {
 
     use gtk::prelude::*;
     use hl_extension::{
-        Capability, ChannelId, ExtensionName, Frame, Grant, Hello, Kind, PROTOCOL, Reply, Request, Welcome, Wire, codec,
+        codec, Capability, ChannelId, ExtensionName, Frame, Grant, Hello, Kind, Reply, Request, Welcome, Wire, PROTOCOL,
     };
-    use hl_gui::{LOG_VIEW_CHARACTER_LIMIT, Renderer as _, SourceMutation, Theme, Tree};
+    use hl_gui::{Renderer as _, SourceMutation, Theme, Tree, LOG_VIEW_CHARACTER_LIMIT};
     use hl_gui_gtk::Surface;
 
     const STORIES: &[&str] = &[
@@ -468,18 +468,18 @@ mod unix {
                     let chrome = action.child().expect("focused Button owns chrome");
                     assert!(chrome.has_css_class("hl-button-chrome"));
                     action.set_state_flags(gtk::StateFlags::FOCUSED | gtk::StateFlags::FOCUS_VISIBLE, false);
-                    assert!(
-                        action
-                            .state_flags()
-                            .contains(gtk::StateFlags::FOCUSED | gtk::StateFlags::FOCUS_VISIBLE)
-                    );
+                    assert!(action
+                        .state_flags()
+                        .contains(gtk::StateFlags::FOCUSED | gtk::StateFlags::FOCUS_VISIBLE));
                     // Xvfb cannot originate keyboard modality. Mirror the production
                     // `:focus-visible` chrome selector after asserting GTK's focus state.
                     chrome.add_css_class("hl-focus-visible-proof");
                     reveal_for_capture(&root, action.upcast_ref());
-                    capture_widget(
+                    capture_focused_widget(
                         &realized_window,
                         &root,
+                        action.upcast_ref(),
+                        width,
                         &format!("Button focused {variant} {width_name}"),
                     );
                     chrome.remove_css_class("hl-focus-visible-proof");
@@ -1233,20 +1233,20 @@ mod unix {
                     assert!(action.grab_focus());
                     assert!(action.has_focus());
                     action.set_state_flags(gtk::StateFlags::FOCUSED | gtk::StateFlags::FOCUS_VISIBLE, false);
-                    assert!(
-                        action
-                            .state_flags()
-                            .contains(gtk::StateFlags::FOCUSED | gtk::StateFlags::FOCUS_VISIBLE)
-                    );
+                    assert!(action
+                        .state_flags()
+                        .contains(gtk::StateFlags::FOCUSED | gtk::StateFlags::FOCUS_VISIBLE));
                     let chrome = action.child().expect("focused InlineButton owns chrome");
                     assert!(chrome.has_css_class("hl-inline-button-chrome"));
                     // See the Button proof above: this class is test-only and is never
                     // emitted by the adapter.
                     chrome.add_css_class("hl-focus-visible-proof");
                     reveal_for_capture(&root, action.upcast_ref());
-                    capture_widget(
+                    capture_focused_widget(
                         &realized_window,
                         &root,
+                        action.upcast_ref(),
+                        width,
                         &format!("InlineButton focused {variant} {width_name}"),
                     );
                     chrome.remove_css_class("hl-focus-visible-proof");
@@ -1656,11 +1656,9 @@ mod unix {
                 7,
                 "Card workbench must render seven bounded live specimens"
             );
-            assert!(
-                cards
-                    .iter()
-                    .all(|card| card.accessible_role() != gtk::AccessibleRole::Generic)
-            );
+            assert!(cards
+                .iter()
+                .all(|card| card.accessible_role() != gtk::AccessibleRole::Generic));
             for card in &cards {
                 let header = card
                     .label_widget()
@@ -1785,11 +1783,9 @@ mod unix {
                 .collect::<Vec<_>>();
             assert!(buttons.len() >= 10, "CardActions omitted its compact controls");
             assert!(buttons.iter().all(|button| button.height() >= 44));
-            assert!(
-                buttons
-                    .iter()
-                    .all(|button| button.child().is_some_and(|chrome| chrome.height() == 28))
-            );
+            assert!(buttons
+                .iter()
+                .all(|button| button.child().is_some_and(|chrome| chrome.height() == 28)));
             for button in &buttons {
                 assert!(button.is_focusable(), "CardActions contains an unreachable command");
             }
@@ -1799,11 +1795,9 @@ mod unix {
             realized_window.set_default_size(600, 800);
             settle_window_width(&realized_window, 600);
             assert_contained(&root, "CardActions narrow");
-            assert!(
-                buttons
-                    .iter()
-                    .all(|button| button.child().is_some_and(|chrome| chrome.height() == 28))
-            );
+            assert!(buttons
+                .iter()
+                .all(|button| button.child().is_some_and(|chrome| chrome.height() == 28)));
             capture_story(&realized_window, "CardActions narrow");
             let (status, stderr) = child.stop();
             assert!(stderr.is_empty(), "{story} wrote warnings/errors: {stderr}");
@@ -2369,6 +2363,44 @@ mod unix {
         capture_widget(window, window.upcast_ref::<gtk::Widget>(), story);
     }
 
+    fn capture_focused_widget(
+        window: &gtk::Window,
+        root: &gtk::Widget,
+        target: &gtk::Widget,
+        expected_width: i32,
+        story: &str,
+    ) {
+        gtk::prelude::RootExt::set_focus(window, None::<&gtk::Widget>);
+        settle_toolkit();
+        window.set_child(None::<&gtk::Widget>);
+        let capture_window = gtk::Window::new();
+        capture_window.set_child(Some(root));
+        capture_window.set_size_request(expected_width, 1_500);
+        capture_window.set_default_size(expected_width, 1_500);
+        capture_window.present();
+        settle_window_width(&capture_window, expected_width);
+        reveal_for_capture(root, target);
+        assert_eq!(root.width(), expected_width, "{story} capture width drifted");
+        let bounds = target
+            .compute_bounds(root)
+            .expect("focused specimen belongs to capture root");
+        assert!(
+            bounds.x() < root.width() as f32
+                && bounds.y() < root.height() as f32
+                && bounds.x() + bounds.width() > 0.0
+                && bounds.y() + bounds.height() > 0.0,
+            "{story} focused specimen is outside the captured frame: {bounds:?} in {}x{}",
+            root.width(),
+            root.height()
+        );
+        capture_widget(&capture_window, root, story);
+        capture_window.set_child(None::<&gtk::Widget>);
+        capture_window.close();
+        window.set_child(Some(root));
+        window.present();
+        settle_toolkit();
+    }
+
     fn reveal_for_capture(root: &gtk::Widget, target: &gtk::Widget) {
         let Some(bounds) = target.compute_bounds(root) else {
             return;
@@ -2420,8 +2452,18 @@ mod unix {
             })
             .expect("Storybook window produces a render node");
         let renderer = window.renderer().expect("Storybook window has a renderer");
-        renderer
-            .render_texture(&node, None)
+        let texture = renderer.render_texture(&node, None);
+        assert_eq!(
+            texture.width(),
+            widget.width(),
+            "{story} PNG width differs from its capture root"
+        );
+        assert_eq!(
+            texture.height(),
+            widget.height(),
+            "{story} PNG height differs from its capture root"
+        );
+        texture
             .save_to_png(directory.join(format!("{name}.png")))
             .expect("Storybook screenshot is written");
     }

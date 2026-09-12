@@ -266,7 +266,7 @@ fn standard_buttons(css: &mut String, theme: &Theme) {
     let _ = writeln!(
         css,
         "button.hl-button, button.hl-button:hover, button.hl-button:active {{ background: transparent; border-color: transparent; box-shadow: none; }}\n\
-         button.hl-button:focus-visible {{ outline: none; }}\n\
+         button.hl-button:focus, button.hl-button:focus-visible {{ outline: none; }}\n\
          button.hl-button.variant-plain > .hl-button-chrome {{ background: transparent; color: {text}; border: 1px solid transparent; }}\n\
          button.hl-button.variant-filled > .hl-button-chrome {{ background: {text}; color: {ground}; border: 1px solid {text}; }}\n\
          button.hl-button.variant-outline > .hl-button-chrome {{ background: transparent; color: {text}; border: 1px solid {line}; }}\n\
@@ -276,8 +276,9 @@ fn standard_buttons(css: &mut String, theme: &Theme) {
          button.hl-button.variant-filled:active > .hl-button-chrome {{ box-shadow: inset 0 0 0 999px rgba(0,0,0,.14); }}\n\
          button.hl-button:disabled > .hl-button-chrome {{ color: {faint}; background: {surface}; border-color: {line}; box-shadow: none; }}\n\
          button.hl-button.variant-ghost:disabled > .hl-button-chrome, button.hl-button.variant-plain:disabled > .hl-button-chrome {{ background: transparent; border-color: transparent; }}\n\
-         button.hl-button:focus-visible > .hl-button-chrome, button.hl-button > .hl-button-chrome.hl-focus-visible-proof {{ outline: none; box-shadow: inset 0 0 0 2px {accent}; }}\n\
-         button.hl-button.variant-filled:focus-visible > .hl-button-chrome, button.hl-button.variant-filled > .hl-button-chrome.hl-focus-visible-proof {{ box-shadow: inset 0 0 0 2px {ground}; }}",
+         button.hl-button:focus > .hl-button-chrome, button.hl-button:focus-visible > .hl-button-chrome, button.hl-button > .hl-button-chrome.hl-focus-visible-proof {{ outline: none; box-shadow: inset 0 0 0 2px {accent}; }}\n\
+         button.hl-button.variant-outline:focus > .hl-button-chrome, button.hl-button.variant-outline:focus-visible > .hl-button-chrome, button.hl-button.variant-outline > .hl-button-chrome.hl-focus-visible-proof {{ border-color: transparent; box-shadow: none; outline: 2px solid {accent}; outline-offset: -2px; }}\n\
+         button.hl-button.variant-filled:focus > .hl-button-chrome, button.hl-button.variant-filled:focus-visible > .hl-button-chrome, button.hl-button.variant-filled > .hl-button-chrome.hl-focus-visible-proof {{ box-shadow: inset 0 0 0 2px {ground}; }}",
         raised = theme.color(Token::Raised).hex(),
         text = theme.color(Token::Text).hex(),
         ground = theme.color(Token::Ground).hex(),
@@ -293,15 +294,16 @@ fn inline_buttons(css: &mut String, theme: &Theme) {
     let _ = writeln!(
         css,
         "button.hl-inline-button, button.hl-inline-button:hover, button.hl-inline-button:active {{ background: transparent; border-color: transparent; box-shadow: none; }}\n\
-         button.hl-inline-button:focus-visible {{ outline: none; }}\n\
+         button.hl-inline-button:focus, button.hl-inline-button:focus-visible {{ outline: none; }}\n\
          button.hl-inline-button > .hl-inline-button-chrome {{ background: transparent; color: {text}; border-color: transparent; }}\n\
          button.hl-inline-button.variant-outline > .hl-inline-button-chrome {{ border-color: {line}; }}\n\
          button.hl-inline-button.variant-filled > .hl-inline-button-chrome {{ background: {text}; color: {ground}; border-color: {text}; }}\n\
          button.hl-inline-button.variant-filled.tone-accent > .hl-inline-button-chrome {{ background: {accent}; color: {ground}; border-color: {accent}; }}\n\
          button.hl-inline-button:hover > .hl-inline-button-chrome {{ background: {raised}; color: {text}; border-color: {accent}; }}\n\
          button.hl-inline-button:disabled > .hl-inline-button-chrome {{ background: transparent; color: {faint}; border-color: {line}; }}\n\
-         button.hl-inline-button:focus-visible > .hl-inline-button-chrome, button.hl-inline-button > .hl-inline-button-chrome.hl-focus-visible-proof {{ outline: none; box-shadow: inset 0 0 0 2px {accent}; }}\n\
-         button.hl-inline-button.variant-filled:focus-visible > .hl-inline-button-chrome, button.hl-inline-button.variant-filled > .hl-inline-button-chrome.hl-focus-visible-proof {{ box-shadow: inset 0 0 0 2px {ground}; }}",
+         button.hl-inline-button:focus > .hl-inline-button-chrome, button.hl-inline-button:focus-visible > .hl-inline-button-chrome, button.hl-inline-button > .hl-inline-button-chrome.hl-focus-visible-proof {{ outline: none; box-shadow: inset 0 0 0 2px {accent}; }}\n\
+         button.hl-inline-button.variant-outline:focus > .hl-inline-button-chrome, button.hl-inline-button.variant-outline:focus-visible > .hl-inline-button-chrome, button.hl-inline-button.variant-outline > .hl-inline-button-chrome.hl-focus-visible-proof {{ border-color: transparent; box-shadow: none; outline: 2px solid {accent}; outline-offset: -2px; }}\n\
+         button.hl-inline-button.variant-filled:focus > .hl-inline-button-chrome, button.hl-inline-button.variant-filled:focus-visible > .hl-inline-button-chrome, button.hl-inline-button.variant-filled > .hl-inline-button-chrome.hl-focus-visible-proof {{ box-shadow: inset 0 0 0 2px {ground}; }}",
         text = theme.color(Token::Text).hex(),
         ground = theme.color(Token::Ground).hex(),
         line = theme.color(Token::Line).hex(),
@@ -568,18 +570,24 @@ mod tests {
         assert!(
             css.contains("button.hl-inline-button.variant-outline > .hl-inline-button-chrome { border-color: #323843;")
         );
-        assert!(css.contains("button.hl-inline-button:focus-visible { outline: none; }"));
+        assert!(css.contains("button.hl-inline-button:focus, button.hl-inline-button:focus-visible { outline: none; }"));
         assert!(css.contains(
-            "button.hl-inline-button:focus-visible > .hl-inline-button-chrome, button.hl-inline-button > .hl-inline-button-chrome.hl-focus-visible-proof { outline: none; box-shadow: inset 0 0 0 2px #559df7; }"
+            "button.hl-inline-button:focus > .hl-inline-button-chrome, button.hl-inline-button:focus-visible > .hl-inline-button-chrome, button.hl-inline-button > .hl-inline-button-chrome.hl-focus-visible-proof { outline: none; box-shadow: inset 0 0 0 2px #559df7; }"
+        ));
+        assert!(css.contains(
+            "button.hl-inline-button.variant-outline:focus > .hl-inline-button-chrome, button.hl-inline-button.variant-outline:focus-visible > .hl-inline-button-chrome, button.hl-inline-button.variant-outline > .hl-inline-button-chrome.hl-focus-visible-proof { border-color: transparent; box-shadow: none; outline: 2px solid #559df7; outline-offset: -2px; }"
         ));
     }
 
     #[test]
     fn standard_button_focus_paints_only_its_visual_chrome() {
         let css = super::sheet(&Theme::dark());
-        assert!(css.contains("button.hl-button:focus-visible { outline: none; }"));
+        assert!(css.contains("button.hl-button:focus, button.hl-button:focus-visible { outline: none; }"));
         assert!(css.contains(
-            "button.hl-button:focus-visible > .hl-button-chrome, button.hl-button > .hl-button-chrome.hl-focus-visible-proof { outline: none; box-shadow: inset 0 0 0 2px #559df7; }"
+            "button.hl-button:focus > .hl-button-chrome, button.hl-button:focus-visible > .hl-button-chrome, button.hl-button > .hl-button-chrome.hl-focus-visible-proof { outline: none; box-shadow: inset 0 0 0 2px #559df7; }"
+        ));
+        assert!(css.contains(
+            "button.hl-button.variant-outline:focus > .hl-button-chrome, button.hl-button.variant-outline:focus-visible > .hl-button-chrome, button.hl-button.variant-outline > .hl-button-chrome.hl-focus-visible-proof { border-color: transparent; box-shadow: none; outline: 2px solid #559df7; outline-offset: -2px; }"
         ));
         assert!(
             css.contains("button:focus-visible { outline: 2px"),
@@ -675,11 +683,8 @@ mod tests {
         assert!(css.contains(
             ".hl-menu-item:focus, .hl-menu-item:focus-visible { outline: none; background: #21252d; border-color: #559df7; box-shadow: inset 0 0 0 1px #559df7;"
         ));
-        assert!(
-            css.contains(
-                ".hl-menu-item:disabled { background: transparent; color: #a9b0bc; border-color: transparent;"
-            )
-        );
+        assert!(css
+            .contains(".hl-menu-item:disabled { background: transparent; color: #a9b0bc; border-color: transparent;"));
     }
 
     #[test]
