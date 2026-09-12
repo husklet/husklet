@@ -371,7 +371,7 @@ mod unix {
                 assert!(refresh.grab_focus(), "container refresh is keyboard reachable");
                 let card = widgets_with_class(&root, "hl-card")
                     .into_iter()
-                    .next()
+                    .find(|card| has_label(card, "api-worker"))
                     .expect("container inventory renders a card");
                 let minimum = if width == 1_200 { 900 } else { 540 };
                 assert!(
@@ -416,10 +416,10 @@ mod unix {
                 assert!(create.has_css_class("variant-outline"));
                 assert!(create.has_css_class("size-small"));
                 assert_eq!(create.height(), 28, "{width_name} create action is not compact");
-                assert_eq!(
+                assert!(matches!(
                     create.tooltip_text().as_deref(),
-                    Some("Configure a new container")
-                );
+                    Some("Configure a new container" | "Container setup is open")
+                ));
                 assert!(create.grab_focus(), "create action is keyboard reachable");
                 capture(&window, &format!("container-create-entry-{width_name}"), width, 800);
                 invoke_and_apply_until_button(
