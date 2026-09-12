@@ -1,7 +1,7 @@
 # A framework-neutral extension with no React or browser runtime.
 ARG NODE_IMAGE=node:22-alpine@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32
 FROM ${NODE_IMAGE}
-ARG HUSKLET_PROTOCOL_FINGERPRINT=da33a0b68c89b52d
+ARG HUSKLET_PROTOCOL_FINGERPRINT=bc006945bf30a625
 
 WORKDIR /app
 COPY --chown=node:node package.json ./
