@@ -177,6 +177,10 @@ impl Interface {
         let surface = self.panes.get(slot).map_or(&self.surface, |pane| &pane.surface);
         let mut root = Self::semantic_node(tree, surface, hl_gui::NodeId::ROOT, 0, &mut count, &mut truncated)?;
         if self.banner.is_visible() {
+            let diagnostic = self.banner.text();
+            if diagnostic.chars().count() > hl_extension::port::SEMANTIC_TEXT_LIMIT {
+                truncated = true;
+            }
             if count >= hl_extension::port::SEMANTIC_NODE_LIMIT {
                 root.children.pop();
                 truncated = true;
@@ -188,8 +192,7 @@ impl Interface {
                     role: "alert".into(),
                     label: Some(self.banner.title()),
                     value: Some(
-                        self.banner
-                            .text()
+                        diagnostic
                             .chars()
                             .take(hl_extension::port::SEMANTIC_TEXT_LIMIT)
                             .collect(),

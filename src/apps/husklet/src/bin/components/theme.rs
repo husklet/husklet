@@ -121,6 +121,9 @@ stack.pages {{ background-color:{BG2}; }}
 .hl-extension-banner-detail {{ color:{DIM}; font-family:'SF Mono',ui-monospace,monospace; font-size:10.5px; }}
 .hl-extension-retry {{ color:{TXT}; background-color:{BG2}; border:1px solid {CONTROL_LINE}; border-radius:6px; padding:4px 10px; min-height:0; font-size:11.5px; font-weight:600; }}
 .hl-extension-retry:hover {{ background-color:{BG3}; border-color:{DIM}; }}
+.hl-extension-copy {{ color:{DIM}; background-color:transparent; border:0; padding:4px 7px; min-height:0; font-size:11px; }}
+.hl-extension-copy:hover {{ color:{TXT}; background-color:{BG3}; }}
+.hl-extension-copied {{ color:#72d49b; font-size:10.5px; margin-left:2px; }}
 .dashtitle {{ font-size:16px; font-weight:700; letter-spacing:-.01em; }}
 .workspace-settings {{ background-color:{BG2}; }}
 .settings-identity, .settings-card {{ background-color:{BG1}; border:1px solid {CONTROL_LINE}; border-radius:11px; padding:16px; }}

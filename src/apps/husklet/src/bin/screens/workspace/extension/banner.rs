@@ -10,7 +10,7 @@ use super::sink::{Signal, Sink};
 /// nested causes. The banner is a recovery surface, not a log viewer, so keep
 /// enough context to identify the failure without letting hostile diagnostics
 /// dictate the window's minimum width or retain an unbounded string in GTK.
-const DIAGNOSTIC_LIMIT: usize = hl_extension::port::SEMANTIC_TEXT_LIMIT;
+const DIAGNOSTIC_LIMIT: usize = 16 * 1024;
 
 /// A hidden-by-default strip above the extension's surface.
 ///
@@ -23,6 +23,7 @@ pub struct Banner {
     summary: gtk::Label,
     reason: gtk::Label,
     retry: gtk::Button,
+    copied: gtk::Label,
 }
 
 impl Banner {
@@ -62,6 +63,7 @@ impl Banner {
         details.set_child(Some(&reason));
         details.set_hexpand(true);
         widget.append(&details);
+        let actions = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         let retry = gtk::Button::with_label("Retry");
         retry.add_css_class("hl-extension-retry");
         retry.set_halign(gtk::Align::Start);
@@ -72,7 +74,25 @@ impl Banner {
                 sink.accept(Signal::Retry);
             }
         });
-        widget.append(&retry);
+        actions.append(&retry);
+        let copy = gtk::Button::with_label("Copy");
+        copy.add_css_class("hl-extension-copy");
+        copy.set_tooltip_text(Some("Copy the complete diagnostic for support or debugging"));
+        copy.update_property(&[gtk::accessible::Property::Label("Copy technical details")]);
+        let copied = gtk::Label::new(Some("Copied"));
+        copied.add_css_class("hl-extension-copied");
+        copied.set_visible(false);
+        let detail = reason.clone();
+        let confirmation = copied.clone();
+        copy.connect_clicked(move |_| {
+            if let Some(display) = gtk::gdk::Display::default() {
+                display.clipboard().set_text(&detail.text());
+                confirmation.set_visible(true);
+            }
+        });
+        actions.append(&copy);
+        actions.append(&copied);
+        widget.append(&actions);
         widget.update_relation(&[
             gtk::accessible::Relation::LabelledBy(&[title.upcast_ref()]),
             gtk::accessible::Relation::DescribedBy(&[summary.upcast_ref()]),
@@ -83,6 +103,7 @@ impl Banner {
             summary,
             reason,
             retry,
+            copied,
         }
     }
 
@@ -96,6 +117,7 @@ impl Banner {
     pub fn show(&self, reason: &str) {
         self.summary.set_text(recovery_message(reason));
         self.reason.set_text(&bounded_diagnostic(reason));
+        self.copied.set_visible(false);
         self.retry.set_sensitive(true);
         self.widget.set_visible(true);
     }
@@ -133,19 +155,40 @@ impl Banner {
 fn recovery_message(reason: &str) -> &'static str {
     let normalized = reason.to_ascii_lowercase();
     if normalized.contains("expected frame") || normalized.contains("received frame") {
-        "The extension connection became inconsistent. No change was assumed."
+        "The extension sent an inconsistent update. Retry to reconnect without applying it."
+    } else if normalized.contains("unknown variant")
+        || normalized.contains("record state/extensions/")
+        || normalized.contains("protocol") && normalized.contains("speaks")
+    {
+        "This installation is incompatible with the current Husklet build. Reinstall it from Extensions."
+    } else if normalized.contains("permission denied")
+        || normalized.contains("not granted")
+        || normalized.contains("capability") && normalized.contains("required")
+    {
+        "This extension needs access it does not currently have. Review its permissions in Extensions."
+    } else if normalized.contains("http 409")
+        || normalized.contains("expected running")
+        || normalized.contains("nativefailed")
+        || normalized.contains("nativerunfailed")
+    {
+        "The workspace runtime stopped before the extension connected. Restart the workspace, then retry."
+    } else if normalized.contains("image")
+        && (normalized.contains("not found") || normalized.contains("manifest") || normalized.contains("pull"))
+    {
+        "The extension image is unavailable or invalid. Check its source and reinstall it."
     } else if normalized.contains("timed out") || normalized.contains("timeout") {
-        "The extension did not respond in time."
+        "The extension did not respond in time. Retry the connection."
     } else {
-        "The extension connection stopped. No change was assumed."
+        "The extension connection stopped. Retry to reconnect; the last successful view remains below."
     }
 }
 
 /// Produces the compact diagnostic shown beneath the stable recovery heading.
 fn bounded_diagnostic(reason: &str) -> String {
-    let mut diagnostic: String = reason.trim().chars().take(DIAGNOSTIC_LIMIT + 1).collect();
-    if diagnostic.chars().count() > DIAGNOSTIC_LIMIT {
-        diagnostic.pop();
+    let reason = reason.trim();
+    let truncated = reason.chars().count() > DIAGNOSTIC_LIMIT;
+    let mut diagnostic: String = reason.chars().take(DIAGNOSTIC_LIMIT).collect();
+    if truncated {
         diagnostic.pop();
         diagnostic.push('…');
     }
@@ -165,7 +208,7 @@ mod tests {
         let raw = "expected frame 8, received frame 10";
         assert_eq!(
             recovery_message(raw),
-            "The extension connection became inconsistent. No change was assumed."
+            "The extension sent an inconsistent update. Retry to reconnect without applying it."
         );
         assert_eq!(bounded_diagnostic(raw), raw);
     }
@@ -173,5 +216,21 @@ mod tests {
     #[test]
     fn technical_diagnostics_are_bounded() {
         assert!(bounded_diagnostic(&"x".repeat(DIAGNOSTIC_LIMIT * 2)).chars().count() <= DIAGNOSTIC_LIMIT);
+    }
+
+    #[test]
+    fn raw_runtime_and_state_failures_become_actionable_summaries() {
+        assert_eq!(
+            recovery_message("extension record state/extensions/top is unreadable: unknown variant `old:scope`"),
+            "This installation is incompatible with the current Husklet build. Reinstall it from Extensions."
+        );
+        assert_eq!(
+            recovery_message("Docker API returned HTTP 409 Conflict: container is Exited, expected running"),
+            "The workspace runtime stopped before the extension connected. Restart the workspace, then retry."
+        );
+        assert_eq!(
+            recovery_message("capability containers:write is required but not granted"),
+            "This extension needs access it does not currently have. Review its permissions in Extensions."
+        );
     }
 }

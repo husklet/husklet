@@ -8,7 +8,7 @@ use std::rc::Rc;
 use gtk::prelude::*;
 use hl_gui::{Element, Event, EventId, Reconciliation, Tag};
 
-use super::{channel, Delivery, Interface, Post, Signal, DRAIN};
+use super::{DRAIN, Delivery, Interface, Post, Signal, channel};
 
 /// Everything the sink was handed, in order.
 type Record = Rc<RefCell<Vec<Signal>>>;
@@ -253,16 +253,20 @@ fn semantic_labels(node: &hl_extension::SemanticNode) -> Vec<String> {
 
 fn startup_is_visible_until_the_first_valid_frame() {
     let mut fixture = Fixture::new();
-    assert!(visible_labels(&fixture)
-        .iter()
-        .any(|label| label == "Starting extension…"));
+    assert!(
+        visible_labels(&fixture)
+            .iter()
+            .any(|label| label == "Starting extension…")
+    );
 
     fixture.describe(&panel("Ready"));
     fixture.page.tick();
 
-    assert!(!visible_labels(&fixture)
-        .iter()
-        .any(|label| label == "Starting extension…"));
+    assert!(
+        !visible_labels(&fixture)
+            .iter()
+            .any(|label| label == "Starting extension…")
+    );
 }
 
 fn a_new_generation_restarts_at_frame_one_without_a_sequence_fault() {
@@ -306,7 +310,7 @@ fn visible_labels(fixture: &Fixture) -> Vec<String> {
 
 fn a_long_fault_is_bounded_wrapped_and_accessible() {
     let fixture = Fixture::new();
-    let diagnostic = format!("registry refused image sha256:{}", "a".repeat(4_096));
+    let diagnostic = format!("registry refused image sha256:{}", "a".repeat(32_768));
     fixture.page.banner().show(&diagnostic);
 
     let banner = fixture.page.banner().widget();
@@ -331,8 +335,9 @@ fn a_long_fault_is_bounded_wrapped_and_accessible() {
         .expect("the disclosure has diagnostic detail");
     assert!(detail.wraps());
     assert_eq!(detail.wrap_mode(), gtk::pango::WrapMode::WordChar);
+    assert!(detail.is_selectable(), "technical evidence can be selected directly");
     assert!(detail.text().ends_with('…'));
-    assert!(detail.text().chars().count() <= hl_extension::port::SEMANTIC_TEXT_LIMIT);
+    assert!(detail.text().chars().count() <= 16 * 1024);
 
     let (minimum, _, _, _) = banner.measure(gtk::Orientation::Horizontal, -1);
     assert!(
@@ -344,7 +349,30 @@ fn a_long_fault_is_bounded_wrapped_and_accessible() {
     let fault = &semantics.root.children[0];
     assert_eq!(fault.role, "alert");
     assert_eq!(fault.label.as_deref(), Some("Extension unavailable"));
-    assert_eq!(fault.value.as_deref(), Some(detail.text().as_str()));
+    assert_eq!(
+        fault.value.as_deref(),
+        Some(
+            detail
+                .text()
+                .chars()
+                .take(hl_extension::port::SEMANTIC_TEXT_LIMIT)
+                .collect::<String>()
+                .as_str()
+        )
+    );
+    assert!(
+        semantics.truncated,
+        "the machine-readable projection reports its bounded diagnostic"
+    );
+    let copy = descendants(&banner.clone().upcast())
+        .into_iter()
+        .filter_map(|widget| widget.downcast::<gtk::Button>().ok())
+        .find(|button| button.label().as_deref() == Some("Copy"))
+        .expect("the complete visible diagnostic has an explicit copy action");
+    assert_eq!(
+        copy.tooltip_text().as_deref(),
+        Some("Copy the complete diagnostic for support or debugging")
+    );
     assert_eq!(fault.actions, [hl_extension::SemanticActionKind::Invoke]);
 }
 
@@ -1070,10 +1098,12 @@ fn a_stopped_extension_keeps_its_widgets_and_says_so() {
         .iter()
         .find(|node| node.label.as_deref() == Some("Extension unavailable"))
         .expect("the visible fault has a semantic projection");
-    assert!(fault
-        .value
-        .as_deref()
-        .is_some_and(|value| value.contains("socket closed")));
+    assert!(
+        fault
+            .value
+            .as_deref()
+            .is_some_and(|value| value.contains("socket closed"))
+    );
     assert_eq!(fault.actions, vec![hl_extension::SemanticActionKind::Invoke]);
     fixture
         .page
