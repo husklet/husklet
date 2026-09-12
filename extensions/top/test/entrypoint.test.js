@@ -656,6 +656,21 @@ test(
         generation: 7,
         name: 'api-renamed',
       });
+      const beforeCreateSetup = requests.filter(
+        (request) => request.call === 'interface_render_at',
+      ).length;
+      peer.write(
+        encode({
+          channel: 25,
+          kind: KIND.event,
+          payload: invocation(requests, 'Create a container'),
+        }),
+      );
+      await until(
+        () =>
+          requests.filter((request) => request.call === 'interface_render_at').length >
+          beforeCreateSetup,
+      );
       peer.write(
         encode({
           channel: 26,

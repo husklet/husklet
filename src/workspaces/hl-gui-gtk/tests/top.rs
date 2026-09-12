@@ -420,6 +420,60 @@ mod unix {
                     Some("Rename, restart, pause, stop, or remove this container")
                 );
                 assert!(secondary.grab_focus(), "More actions remains keyboard reachable");
+                let create = find_button(&root, "Create a container");
+                assert!(create.has_css_class("variant-outline"));
+                assert!(create.has_css_class("size-small"));
+                assert_eq!(create.height(), 28, "{width_name} create action is not compact");
+                assert_eq!(
+                    create.tooltip_text().as_deref(),
+                    Some("Configure a new container")
+                );
+                assert!(create.grab_focus(), "create action is keyboard reachable");
+                capture(&window, &format!("container-create-entry-{width_name}"), width, 800);
+                invoke_and_apply_until_button(
+                    &mut wire,
+                    &mut tree,
+                    &mut surface,
+                    &root,
+                    "Create a container",
+                    "Cancel",
+                    if width == 1_200 { 500 } else { 502 },
+                );
+                root.measure(gtk::Orientation::Horizontal, -1);
+                root.measure(gtk::Orientation::Vertical, width);
+                root.allocate(width, 1_600, -1, None);
+                settle_frame();
+                let card = widgets_with_class(&root, "hl-card")
+                    .into_iter()
+                    .find(|card| has_label(card, "New container"))
+                    .expect("expanded setup renders a dedicated card");
+                assert!(
+                    card.width() >= if width == 1_200 { 900 } else { 540 },
+                    "expanded setup used {}px instead of the available width",
+                    card.width()
+                );
+                let submit = find_button(&root, "Create and start");
+                assert!(submit.has_css_class("size-small"));
+                assert!(submit.height() <= 32);
+                assert!(!submit.is_sensitive(), "missing required fields disable submission");
+                for placeholder in ["Image reference", "Container name"] {
+                    let field = find_entry_placeholder(&root, placeholder);
+                    assert_eq!(field.accessible_role(), gtk::AccessibleRole::TextBox);
+                    assert!(field.is_sensitive(), "{placeholder} remains editable");
+                }
+                assert_contained(&root, &format!("container-create/expanded/{width_name}"));
+                capture(&window, &format!("container-create-form-{width_name}"), width, 800);
+                if width == 1_200 {
+                    invoke_and_apply_until_button(
+                        &mut wire,
+                        &mut tree,
+                        &mut surface,
+                        &root,
+                        "Cancel",
+                        "Create a container",
+                        501,
+                    );
+                }
             }
             if fixture == "populated" && name == "settings" {
                 let label = find_label(&root, "Execution lifetime");
@@ -3511,6 +3565,39 @@ mod unix {
             }
         }
         assert!(has_label(surface.widget().upcast_ref::<gtk::Widget>(), wanted));
+    }
+
+    fn invoke_and_apply_until_button(
+        wire: &mut Wire<UnixStream>,
+        tree: &mut Tree,
+        surface: &mut Surface,
+        root: &gtk::Widget,
+        action: &str,
+        wanted: &str,
+        channel: u32,
+    ) {
+        find_button(root, action).emit_clicked();
+        settle_toolkit();
+        send_report(surface, wire, channel, |event| {
+            matches!(event, hl_gui::Event::Invoke { .. })
+        });
+        let deadline = Instant::now() + DEADLINE;
+        while find_button_optional(root, wanted).is_none() {
+            let frame = receive_until(wire, deadline).expect("form action rerenders");
+            if frame.kind == hl_extension::Kind::Credit {
+                continue;
+            }
+            let request = codec::read_request(&frame).expect("form action request decodes");
+            let reply = match request {
+                Request::InterfaceRender { frame } | Request::InterfaceRenderAt { frame, .. } => {
+                    tree.apply(&frame, surface).expect("form action frame applies");
+                    Reply::Done
+                }
+                other => panic!("unexpected form action call: {other:?}"),
+            };
+            wire.send(&codec::reply(&reply).expect("form action reply encodes"))
+                .expect("form action reply sends");
+        }
     }
 
     fn assert_contained(parent: &gtk::Widget, case: &str) {

@@ -3733,7 +3733,8 @@ test('every empty operational page explains what is absent and how to proceed', 
         'the first-container action stays with the empty-state explanation',
       );
       invoke(stage, 'Create first container');
-      assert.ok(labelled(stage, 'Container setup'), 'the primary action reveals container setup');
+      await settled();
+      assert.ok(labelled(stage, 'New container'), 'the compact disclosure reveals container setup');
     }
     if (section === 'Networks') {
       assert.deepEqual(
@@ -5695,23 +5696,29 @@ test('container rename validates locally, retries failure, and preserves immutab
   assert.ok(labelled(stage, 'api'), 'success notice does not forge an inventory update');
 });
 
-test('container creation groups its compact form and uses a human label editor', () => {
+test('container creation groups its compact form and uses a human label editor', async () => {
   const stage = host();
-  const frame = stage.render(
+  stage.render(
     h(Containers, {
       api,
       resource: { data: [], loading: false, error: null, reload: async () => {} },
     }),
   );
-  assert.equal(
-    taggedProperty(stage, 'Container setup', 'Expander', 'Expanded')?.Flag,
-    false,
-    'empty container creation is controlled by the prominent action',
-  );
+  assert.deepEqual(taggedProperty(stage, 'Create first container', 'Button', 'Variant'), {
+    Variant: 'Outline',
+  });
+  assert.deepEqual(taggedProperty(stage, 'Create first container', 'Button', 'Size'), {
+    ControlSize: 'Small',
+  });
+  assert.deepEqual(taggedProperty(stage, 'Create first container', 'Button', 'Tooltip'), {
+    Text: 'Configure a new container',
+  });
+  invoke(stage, 'Create first container');
+  await settled();
   for (const label of [
-    'Identity and image',
+    'Required',
     'Process overrides',
-    'Resources and connectivity',
+    'Resources and networking',
     'Mounts accept named volumes only. Published host ports may be left automatic.',
   ])
     assert.ok(labelled(stage, label), `${label} is available in the semantic tree`);
@@ -5727,7 +5734,8 @@ test('container creation groups its compact form and uses a human label editor',
     ),
     'process terminology is explained before it is requested',
   );
-  const placeholders = frame.patches
+  const placeholders = stage.frames
+    .flatMap((render) => render.patches)
     .filter((patch) => patch.SetProp?.prop === 'Placeholder')
     .map((patch) => patch.SetProp.value.Text);
   assert.deepEqual(placeholders.slice(0, 2), ['Image reference', 'Container name']);
@@ -5743,19 +5751,24 @@ test('container creation groups its compact form and uses a human label editor',
     'Labels',
   ])
     assert.ok(labelled(stage, label), `${label} remains visible independently of input content`);
-  assert.ok(labelled(stage, 'Required: image and name.'));
+  assert.ok(labelled(stage, 'Add image and name.'));
   assert.equal(
     ancestorTags(stage, 'Create and start')[0],
-    'Row',
-    'the primary action stays beside the required-field status',
+    'CardActions',
+    'the primary action has a dedicated compact card footer',
   );
+  assert.deepEqual(taggedProperty(stage, 'Create and start', 'Button', 'Size'), {
+    ControlSize: 'Small',
+  });
+  assert.ok(labelled(stage, 'For example alpine:3.20 or a locally imported image.'));
+  assert.ok(labelled(stage, 'A stable name used by terminal and management extensions.'));
   assert.ok(
     placeholderProperty(stage, 'Working directory (optional)', 'Width'),
     'the working-directory control has an explicit readable width',
   );
-  const wrappingRows = frame.patches.filter(
-    (patch) => patch.SetProp?.prop === 'Wrap' && patch.SetProp.value?.Flag === true,
-  );
+  const wrappingRows = stage.frames
+    .flatMap((render) => render.patches)
+    .filter((patch) => patch.SetProp?.prop === 'Wrap' && patch.SetProp.value?.Flag === true);
   assert.equal(wrappingRows.length >= 3, true, 'every field group can wrap at compact width');
 });
 
@@ -5784,6 +5797,8 @@ test('container creation retains exact identity and retries only start after a p
   };
   const stage = host();
   stage.render(h(Containers, { api: controlled, resource }));
+  invoke(stage, 'Create first container');
+  await settled();
   change(stage, 'Image reference', 'alpine:3.20');
   change(stage, 'Container name', 'worker');
   change(stage, 'Working directory (optional)', '/workspace/../secret');
@@ -5798,6 +5813,8 @@ test('container creation retains exact identity and retries only start after a p
   invoke(stage, 'Create and start');
   await settled();
   await settled();
+  assert.ok(labelled(stage, 'Starting container could not be completed.'));
+  assert.ok(labelled(stage, 'Technical details'));
   assert.ok(labelled(stage, 'runtime temporarily unavailable'));
   assert.ok(labelled(stage, 'Retry start'), 'the exact created container remains recoverable');
   invoke(stage, 'Retry start');
@@ -5835,6 +5852,8 @@ test('native process editors preserve ordered argv and environment wire types', 
       resource: { data: [], loading: false, error: null, reload: async () => {} },
     }),
   );
+  invoke(stage, 'Create first container');
+  await settled();
   change(stage, 'Image reference', 'alpine:3.20');
   change(stage, 'Container name', 'native');
   for (const argument of ['sh', '-lc', 'printf ready']) {
@@ -5888,6 +5907,8 @@ test('container creation refuses to start when inspection returns a different im
       resource: { data: [], loading: false, error: null, reload: async () => {} },
     }),
   );
+  invoke(stage, 'Create first container');
+  await settled();
   change(stage, 'Image reference', 'alpine:3.20');
   change(stage, 'Container name', 'worker');
   invoke(stage, 'Create and start');
@@ -5922,6 +5943,8 @@ test('container creation validates exact resource bounds and retains them until 
   };
   const stage = host();
   stage.render(h(Containers, { api: controlled, resource }));
+  invoke(stage, 'Create first container');
+  await settled();
   change(stage, 'Image reference', 'alpine:3.20');
   change(stage, 'Container name', 'limited');
   for (const [placeholder, maximum, label] of [
@@ -6223,6 +6246,8 @@ test('container creation validates runtime identity and retains it until success
   };
   const stage = host();
   stage.render(h(Containers, { api: controlled, resource }));
+  invoke(stage, 'Create first container');
+  await settled();
   change(stage, 'Image reference', 'alpine:3.20');
   change(stage, 'Container name', 'identity');
   const hostnameError =
@@ -6496,6 +6521,8 @@ test('container creation validates an initial network reference and retains it u
   };
   const stage = host();
   stage.render(h(Containers, { api: controlled, resource }));
+  invoke(stage, 'Create first container');
+  await settled();
   change(stage, 'Image reference', 'alpine:3.20');
   change(stage, 'Container name', 'networked');
   const placeholder = 'Initial network (optional)';

@@ -2,6 +2,7 @@ import React from 'react';
 import {
   Button,
   Card,
+  CardActions,
   CardContent,
   CardHeader,
   Column,
@@ -10,6 +11,8 @@ import {
   FormControl,
   FormLabel,
   Heading,
+  InlineMessage,
+  RecoveryState,
   Row,
   Select,
   Spinner,
@@ -29,6 +32,7 @@ function EntryField({
   placeholder,
   enabled,
   width = { chars: 32 },
+  helper,
   onChange,
 }: {
   label: string;
@@ -36,6 +40,7 @@ function EntryField({
   placeholder?: string;
   enabled: boolean;
   width?: { chars: number } | 'fill';
+  helper?: string;
   onChange: (value: string) => void;
 }) {
   return (
@@ -48,6 +53,7 @@ function EntryField({
         width="fill"
         onChange={(event) => onChange(String(event.value ?? ''))}
       />
+      {helper ? <Text label={helper} color="text-dim" wrap /> : null}
     </FormControl>
   );
 }
@@ -138,6 +144,8 @@ function EnvironmentEditor({
         />
         <Button
           label={addLabel}
+          size="small"
+          variant="outline"
           enabled={enabled && Boolean(name) && !name.includes('=')}
           onInvoke={add}
         />
@@ -302,6 +310,8 @@ function MountEditor({
         </FormControl>
         <Button
           label="Add mount"
+          size="small"
+          variant="outline"
           enabled={enabled && Boolean(volume) && Boolean(target)}
           onInvoke={add}
         />
@@ -370,7 +380,13 @@ function PortEditor({
           enabled={enabled}
           onChange={(event) => setProtocol(String(event.value ?? 'tcp'))}
         />
-        <Button label="Publish port" enabled={enabled && validDraft} onInvoke={add} />
+        <Button
+          label="Publish port"
+          size="small"
+          variant="outline"
+          enabled={enabled && validDraft}
+          onInvoke={add}
+        />
       </Row>
       <Row gap={1} wrap>
         {value.map((entry, index) => (
@@ -596,7 +612,6 @@ export function ContainerCreate({
   api,
   blocked,
   label = 'Create a container',
-  prominent = false,
   onBusyChange,
   reload,
 }: ContainerCreateProps) {
@@ -618,7 +633,7 @@ export function ContainerCreate({
   const requirements = configurationError
     ? configurationError
     : missingRequired.length > 0
-      ? `Required: ${missingRequired.join(' and ')}.`
+      ? `Add ${missingRequired.join(' and ')}.`
       : 'Ready to create and start.';
   const update = <K extends keyof ContainerCreateDraft>(
     field: K,
@@ -661,75 +676,46 @@ export function ContainerCreate({
   const editable = !created && !blocked;
   return (
     <Column gap={1}>
-      {prominent && !expanded ? (
+      {!expanded ? (
         <Row gap={1} justify="start">
-          <Button label={label} onInvoke={() => setExpanded(true)} />
+          <Button
+            label={label}
+            size="small"
+            variant="outline"
+            tooltip="Configure a new container"
+            onInvoke={() => setExpanded(true)}
+          />
         </Row>
-      ) : null}
-      <Expander
-        label={prominent ? 'Container setup' : label}
-        expanded={prominent ? expanded : undefined}
-        visible={!prominent || expanded}
-        variant="outline"
-        width="content"
-        align="start"
-        tooltip="Configure and start a new container"
-        onExpand={(event) => setExpanded(Boolean(event.value))}
-      >
-        <Card variant={'outline'}>
+      ) : (
+        <Card variant="outline" width="fill">
           <CardHeader
-            label={'New container'}
-            detail={'Uses a local image and starts it after durable creation.'}
+            label="New container"
+            detail="Choose an image and name. Husklet verifies creation before starting it."
             align="start"
             width="fill"
           />
           <CardContent gap={1}>
-            <Heading label={'Identity and image'} scale={'body'} />
-            <Row gap={1} wrap={true}>
+            <Heading label="Required" scale="body" />
+            <Row gap={2} wrap={true}>
               <EntryField
                 label="Image reference · required"
                 value={draft.image}
-                placeholder={'Image reference'}
+                placeholder="Image reference"
+                helper="For example alpine:3.20 or a locally imported image."
                 enabled={editable}
                 onChange={(value) => update('image', value)}
               />
               <EntryField
                 label="Container name · required"
                 value={draft.name}
-                placeholder={'Container name'}
+                placeholder="Container name"
+                helper="A stable name used by terminal and management extensions."
                 enabled={editable}
                 onChange={(value) => update('name', value)}
               />
             </Row>
-            <Row gap={1} wrap align="center" justify="start">
-              {blocked ? <Spinner /> : null}
-              <Button
-                label={created ? 'Retry start' : blocked ? 'Creating…' : 'Create and start'}
-                enabled={
-                  !blocked &&
-                  (created !== null || (missingRequired.length === 0 && !configurationError))
-                }
-                onInvoke={createAndStart}
-              />
-              <Text
-                label={
-                  created
-                    ? `Container ${created.name} was created; start can be retried.`
-                    : requirements
-                }
-                color={
-                  configurationError
-                    ? 'danger'
-                    : missingRequired.length > 0
-                      ? 'text-dim'
-                      : 'positive'
-                }
-                wrap
-              />
-            </Row>
-            {error ? <Text label={boundedMessage(error)} color={'danger'} wrap={true} /> : null}
-            {notice ? <Text label={notice} color={'positive'} wrap={true} /> : null}
-            <Expander label="Advanced identity">
+            {configurationError ? <InlineMessage label={configurationError} tone="danger" /> : null}
+            <Expander label="Identity and metadata" expanded={false} width="fill">
               <Column gap={1}>
                 <Row gap={1} wrap>
                   <EntryField
@@ -794,9 +780,8 @@ export function ContainerCreate({
                 />
               </Column>
             </Expander>
-            <Expander label="Advanced resources and networking">
+            <Expander label="Resources and networking" expanded={false} width="fill">
               <Column gap={1}>
-                <Heading label={'Resources and connectivity'} scale={'body'} />
                 <Row gap={1} wrap={true}>
                   <EntryField
                     label="Memory limit"
@@ -826,17 +811,17 @@ export function ContainerCreate({
                     enabled={editable}
                     onChange={(value) => update('network', value)}
                   />
-                  <MountEditor
-                    value={draft.mounts}
-                    enabled={editable}
-                    onChange={(value) => update('mounts', value)}
-                  />
-                  <PortEditor
-                    value={draft.ports}
-                    enabled={editable}
-                    onChange={(value) => update('ports', value)}
-                  />
                 </Row>
+                <MountEditor
+                  value={draft.mounts}
+                  enabled={editable}
+                  onChange={(value) => update('mounts', value)}
+                />
+                <PortEditor
+                  value={draft.ports}
+                  enabled={editable}
+                  onChange={(value) => update('ports', value)}
+                />
                 <Text
                   label="Mounts accept named volumes only. Published host ports may be left automatic."
                   color="text-dim"
@@ -844,9 +829,53 @@ export function ContainerCreate({
                 />
               </Column>
             </Expander>
+            {!configurationError ? (
+              <InlineMessage
+                label={
+                  created ? `Created ${created.name}; start can be retried safely.` : requirements
+                }
+                tone={missingRequired.length > 0 ? 'neutral' : 'positive'}
+              />
+            ) : null}
           </CardContent>
+          <CardActions gap={1} align="center" justify="start" width="fill">
+            {blocked ? <Spinner /> : null}
+            <Button
+              label={created ? 'Retry start' : blocked ? 'Creating…' : 'Create and start'}
+              size="small"
+              enabled={
+                !blocked &&
+                (created !== null || (missingRequired.length === 0 && !configurationError))
+              }
+              onInvoke={createAndStart}
+            />
+            {!created && !blocked ? (
+              <Button
+                label="Cancel"
+                size="small"
+                variant="ghost"
+                onInvoke={() => {
+                  setExpanded(false);
+                  setError(null);
+                }}
+              />
+            ) : null}
+          </CardActions>
+          {error ? (
+            <CardContent gap={1}>
+              <RecoveryState
+                operation={created ? 'Starting container' : 'Creating container'}
+                error={error}
+              />
+            </CardContent>
+          ) : null}
+          {notice ? (
+            <CardContent gap={1}>
+              <InlineMessage label={notice} tone="positive" />
+            </CardContent>
+          ) : null}
         </Card>
-      </Expander>
+      )}
     </Column>
   );
 }
