@@ -937,9 +937,8 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
         <Row gap={1} align="center" wrap>
           {active ? <Spinner /> : null}
           <Button
-            label={
-              active ? 'Opening…' : failure?.retry ? 'Retry opening' : `Open ${provider.title}`
-            }
+            label={active ? 'Opening…' : failure?.retry ? 'Retry opening' : 'Open'}
+            tooltip={`Open ${provider.title}`}
             size="small"
             variant="filled"
             tone="accent"
@@ -2165,8 +2164,36 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                                 }
                               />
                             </Row>
-                            {hasCardAction ? (
-                              <Row gap={1} align="center" justify="start" width="fill" wrap>
+                            <ExtensionFault extension={extension} />
+                            {updateCompatibility ? (
+                              <Text
+                                label={
+                                  update
+                                    ? updateCompatibility.compatible === true
+                                      ? `Update available · Version ${update.version}`
+                                      : `Update to Version ${update.version} · ${updateCompatibility.label}`
+                                    : `Update · ${updateCompatibility.label}`
+                                }
+                                color={
+                                  updateCompatibility.compatible === false ? 'warning' : 'text-dim'
+                                }
+                                wrap
+                              />
+                            ) : null}
+                            <LifecycleFeedback
+                              extensionName={extension.name}
+                              pending={pendingLifecycle}
+                              failure={lifecycleFailure}
+                            />
+                            {extension.name === 'top' ? (
+                              <InstalledPermissionSummary extension={extension} />
+                            ) : (
+                              <Expander label="View permissions" expanded={false}>
+                                <InstalledPermissionSummary extension={extension} />
+                              </Expander>
+                            )}
+                            {hasCardAction || extension.name !== 'top' ? (
+                              <Row gap={1} width="fill" align="center" justify="start" wrap>
                                 {update && (
                                   <Button
                                     key="review-update"
@@ -2215,58 +2242,26 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                                     }
                                   />
                                 ) : null}
+                                {extension.enabled && !extension.status.startsWith('fault:') ? (
+                                  <Button
+                                    label="Disable"
+                                    size="small"
+                                    variant="ghost"
+                                    enabled={!busy}
+                                    onInvoke={() => lifecycle(extension, 'disable')}
+                                  />
+                                ) : null}
+                                <ConfirmAction
+                                  label="Remove"
+                                  confirmLabel={`Remove ${extension.name}`}
+                                  question={`Remove ${extension.name} and permanently delete its private workspace data?`}
+                                  authorityKey={extension.image_digest}
+                                  enabled={!busy}
+                                  size="small"
+                                  onConfirm={() => lifecycle(extension, 'remove')}
+                                />
                               </Row>
                             ) : null}
-                            <ExtensionFault extension={extension} />
-                            {updateCompatibility ? (
-                              <Text
-                                label={
-                                  update
-                                    ? updateCompatibility.compatible === true
-                                      ? `Update available · Version ${update.version}`
-                                      : `Update to Version ${update.version} · ${updateCompatibility.label}`
-                                    : `Update · ${updateCompatibility.label}`
-                                }
-                                color={
-                                  updateCompatibility.compatible === false ? 'warning' : 'text-dim'
-                                }
-                                wrap
-                              />
-                            ) : null}
-                            <LifecycleFeedback
-                              extensionName={extension.name}
-                              pending={pendingLifecycle}
-                              failure={lifecycleFailure}
-                            />
-                            {extension.name === 'top' ? (
-                              <InstalledPermissionSummary extension={extension} />
-                            ) : (
-                              <>
-                                <Expander label="View permissions" expanded={false}>
-                                  <InstalledPermissionSummary extension={extension} />
-                                </Expander>
-                                <Row gap={1} width="fill" align="center" justify="start" wrap>
-                                  {extension.enabled && !extension.status.startsWith('fault:') ? (
-                                    <Button
-                                      label="Disable"
-                                      size="small"
-                                      variant="ghost"
-                                      enabled={!busy}
-                                      onInvoke={() => lifecycle(extension, 'disable')}
-                                    />
-                                  ) : null}
-                                  <ConfirmAction
-                                    label="Remove"
-                                    confirmLabel={`Remove ${extension.name}`}
-                                    question={`Remove ${extension.name} and permanently delete its private workspace data?`}
-                                    authorityKey={extension.image_digest}
-                                    enabled={!busy}
-                                    size="small"
-                                    onConfirm={() => lifecycle(extension, 'remove')}
-                                  />
-                                </Row>
-                              </>
-                            )}
                           </CardContent>
                         </Card>
                       );

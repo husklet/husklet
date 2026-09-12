@@ -1351,6 +1351,7 @@ mod unix {
                 let check = find_button(&filtered_root, "Check for changes");
                 let card = ancestor_with_class(check.upcast_ref(), "hl-card")
                     .expect("image check action belongs to the installed extension card");
+                let open = find_tooltip_button(&card, "Open Component playground");
                 let state = find_mapped_labelled(&card, "Running");
                 let disable = find_button(&card, "Disable");
                 let remove = find_button(&card, "Remove");
@@ -1358,14 +1359,52 @@ mod unix {
                 let check_bounds = check
                     .compute_bounds(&card)
                     .expect("image check action belongs to its card");
+                let disable_bounds = disable
+                    .compute_bounds(&card)
+                    .expect("disable action belongs to its card");
+                let remove_bounds = remove
+                    .compute_bounds(&card)
+                    .expect("remove action belongs to its card");
                 let state_bounds = state
                     .compute_bounds(&card)
                     .expect("installed state belongs to its card");
                 assert_eq!(check.accessible_role(), gtk::AccessibleRole::Button);
+                assert!(has_label(open.upcast_ref(), "Open"));
+                assert!(open.has_css_class("size-small"));
+                assert_eq!(open.height(), 28, "{width_name} provider action uses the compact tier");
                 assert!(check.has_css_class("size-small"));
                 assert_eq!(check.height(), 28, "{width_name} image check uses the compact tier");
                 assert!(check.is_focusable(), "{width_name} image check is keyboard reachable");
                 assert!(!permissions.is_expanded(), "permissions start collapsed");
+                let provider_group = ancestor_with_class(open.upcast_ref(), "hl-row")
+                    .expect("provider button belongs to its status group");
+                assert_eq!(
+                    provider_group
+                        .parent()
+                        .and_then(|parent| ancestor_with_class(&parent, "hl-row")),
+                    ancestor_with_class(check.upcast_ref(), "hl-row"),
+                    "{width_name} provider and image check share one action footer"
+                );
+                assert_eq!(
+                    ancestor_with_class(check.upcast_ref(), "hl-row"),
+                    ancestor_with_class(disable.upcast_ref(), "hl-row"),
+                    "{width_name} image check and lifecycle control share one action footer"
+                );
+                assert_eq!(
+                    ancestor_with_class(check.upcast_ref(), "hl-row"),
+                    ancestor_with_class(remove.upcast_ref(), "hl-row"),
+                    "{width_name} image check and destructive control share one action footer"
+                );
+                assert_eq!(
+                    check_bounds.y(),
+                    disable_bounds.y(),
+                    "{width_name} image check and lifecycle control align"
+                );
+                assert_eq!(
+                    check_bounds.y(),
+                    remove_bounds.y(),
+                    "{width_name} image check and destructive control align"
+                );
                 for (label, action) in [("Disable", disable), ("Remove", remove)] {
                     assert!(
                         action.is_mapped(),

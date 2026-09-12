@@ -1418,6 +1418,12 @@ test('installed extension management searches, filters, pages, and clears fifty 
   await settled();
   assert.ok(labelled(stage, '1 of 50 installed extensions'));
   assert.ok(labelled(stage, 'installed-07'));
+  const actionFooter = sharedAncestor(stage, ['Open', 'Disable', 'Remove'], 'Row');
+  assert.notEqual(
+    actionFooter,
+    undefined,
+    'launch, lifecycle, and destructive actions share one predictable footer',
+  );
 });
 
 test('extension discovery keeps unknown compatibility reviewable and blocks known mismatches', async () => {
@@ -1644,7 +1650,10 @@ test('an up-to-date built-in is hidden by default and available through the inst
     undefined,
     'default discovery does not duplicate the installed management card',
   );
-  assert.ok(labelled(stage, 'Open Component playground'));
+  assert.ok(labelled(stage, 'Open'));
+  assert.deepEqual(taggedProperty(stage, 'Open', 'Button', 'Tooltip'), {
+    Text: 'Open Component playground',
+  });
 
   changeByTooltip(stage, 'Filter extension catalogue by status', 'installed');
   await settled();
@@ -1662,18 +1671,18 @@ test('an up-to-date built-in is hidden by default and available through the inst
   assert.equal(labelled(stage, 'View installed details'), undefined);
   assert.equal(labelled(stage, 'Review access'), undefined);
   assert.equal(labelled(stage, 'Review update'), undefined);
-  assert.ok(labelled(stage, 'Open Component playground'));
+  assert.ok(labelled(stage, 'Open'));
   assert.ok(labelled(stage, 'Check current image'));
   invoke(stage, 'Check current image');
   await settled();
   await settled();
   assert.ok(calls.some(([operation]) => operation === 'inspect'));
   assert.deepEqual(
-    taggedProperty(stage, 'Open Component playground', 'Button', 'Size'),
+    taggedProperty(stage, 'Open', 'Button', 'Size'),
     { ControlSize: 'Small' },
     'opening an installed extension stays a compact primary card action',
   );
-  invoke(stage, 'Open Component playground');
+  invoke(stage, 'Open');
   await settled();
   assert.ok(labelled(stage, 'Opening…'));
   assert.equal(isEnabled(stage, 'Opening…'), false);
@@ -1739,7 +1748,7 @@ test('opening an extension reports a retained tab when occupant switching fails'
   );
   await settled();
   await settled();
-  invoke(stage, 'Open Component playground');
+  invoke(stage, 'Open');
   await settled();
   await settled();
   assert.ok(
@@ -1780,10 +1789,10 @@ test('opening an extension restores its idle action after tab creation fails', a
   );
   await settled();
   await settled();
-  invoke(stage, 'Open Component playground');
+  invoke(stage, 'Open');
   await settled();
   await settled();
-  assert.ok(labelled(stage, 'Open Component playground'));
+  assert.ok(labelled(stage, 'Open'));
   assert.ok(
     labelled(stage, 'Component playground could not be opened: terminal window is unavailable'),
   );
@@ -8437,6 +8446,28 @@ function ancestorTags(stage, label) {
     ancestors.push(tags.get(node));
   }
   return ancestors;
+}
+
+function sharedAncestor(stage, labels, tag) {
+  const patches = stage.frames.flatMap((frame) => frame.patches);
+  const tags = new Map(
+    patches.filter((patch) => patch.Create).map((patch) => [patch.Create.id, patch.Create.tag]),
+  );
+  const parents = new Map(
+    patches
+      .filter((patch) => patch.Insert)
+      .map((patch) => [patch.Insert.child, patch.Insert.parent]),
+  );
+  const ancestors = labels.map((label) => {
+    const found = [];
+    let node = labelled(stage, label)?.SetProp.id;
+    while (parents.has(node)) {
+      node = parents.get(node);
+      if (tags.get(node) === tag) found.push(node);
+    }
+    return found;
+  });
+  return ancestors[0]?.find((node) => ancestors.slice(1).every((held) => held.includes(node)));
 }
 
 function formControlField(stage, label, tag) {
