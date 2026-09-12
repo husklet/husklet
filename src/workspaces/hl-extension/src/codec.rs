@@ -237,6 +237,7 @@ mod tests {
             filesystem: crate::FilesystemGrant::default(),
             containers: crate::ContainerGrant::default(), images: crate::ImageGrant::default(),
             networks: crate::NetworkGrant::default(), volumes: crate::VolumeGrant::default(),
+            workspace_environment: crate::WorkspaceEnvironmentGrant::default(),
             limits: Limits::default(),
         })
         .expect("welcome encodes");

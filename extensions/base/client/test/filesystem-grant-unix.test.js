@@ -28,6 +28,7 @@ test('fragmented greeting exposes only the caller filesystem grant as immutable 
           'images:read',
           'networks:read',
           'volumes:read',
+          'workspace-environment:read',
         ],
         filesystem: {
           read: [{ subtree: 'src' }],
@@ -43,6 +44,7 @@ test('fragmented greeting exposes only the caller filesystem grant as immutable 
         },
         networks: { selectors: [{ name: 'backend' }], create: false },
         volumes: { selectors: [{ name: 'pgdata' }], create: false },
+        workspace_environment: { read: [{ workspace: 'dev', name: 'DATABASE_URL' }], write: [] },
       },
     });
     for (const byte of greeting) socket.write(Uint8Array.of(byte));
@@ -65,11 +67,15 @@ test('fragmented greeting exposes only the caller filesystem grant as immutable 
     assert.deepEqual(session.grantedImages.read, [{ reference: 'postgres:17' }]);
     assert.deepEqual(session.grantedNetworks.selectors, [{ name: 'backend' }]);
     assert.deepEqual(session.grantedVolumes.selectors, [{ name: 'pgdata' }]);
+    assert.deepEqual(session.grantedWorkspaceEnvironment.read, [
+      { workspace: 'dev', name: 'DATABASE_URL' },
+    ]);
     for (const grant of [
       session.grantedContainers,
       session.grantedImages,
       session.grantedNetworks,
       session.grantedVolumes,
+      session.grantedWorkspaceEnvironment,
     ]) {
       assert(Object.isFrozen(grant));
       assert(Object.isFrozen(grant.selectors ?? grant.read));

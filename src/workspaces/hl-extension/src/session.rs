@@ -361,6 +361,10 @@ impl Session {
     pub const fn network_grant(&self) -> &crate::NetworkGrant { &self.networks }
     #[must_use]
     pub const fn volume_grant(&self) -> &crate::VolumeGrant { &self.volumes }
+    #[must_use]
+    pub const fn workspace_environment_grant(&self) -> &crate::WorkspaceEnvironmentGrant {
+        &self.workspace_environment
+    }
 
     #[must_use]
     pub fn visible_networks(&self, networks: Vec<crate::port::NetworkSummary>) -> crate::port::NetworkInventory {

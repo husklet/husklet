@@ -324,6 +324,7 @@ export class Session {
     });
     #networks = freezeGrant({ selectors: [], create: false });
     #volumes = freezeGrant({ selectors: [], create: false });
+    #workspaceEnvironment = freezeGrant({ read: [], write: [] });
     #greeted;
     #ready;
     #rejectReady;
@@ -415,6 +416,9 @@ export class Session {
     }
     get grantedVolumes() {
         return this.#volumes;
+    }
+    get grantedWorkspaceEnvironment() {
+        return this.#workspaceEnvironment;
     }
     /** Resolves when the handshake is complete and calls may be sent. */
     get ready() {
@@ -970,6 +974,7 @@ export class Session {
             networks: welcome.networks ?? { selectors: [], create: false },
             volumes: welcome.volumes ?? { selectors: [], create: false },
         };
+        const environment = welcome.workspace_environment ?? { read: [], write: [] };
         encodeRequest('extension_install', {
             job: 'grant-validation',
             revision: 0,
@@ -977,8 +982,23 @@ export class Session {
             granted: [],
             ...resources,
             filesystem: {},
-            workspace_environment: {},
+            workspace_environment: environment,
         });
+        for (const operation of ['read', 'write']) {
+            for (const selector of environment[operation]) {
+                if ('all' in selector) {
+                    if (selector.all !== true || name !== 'top')
+                        throw new TypeError('host greeting contains an overbroad workspace environment selector');
+                }
+                else if (!selector.workspace ||
+                    [...selector.workspace].some((character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127) ||
+                    !/^[A-Za-z_][A-Za-z0-9_]*$/.test(selector.name))
+                    throw new TypeError('host greeting contains an invalid workspace environment selector');
+            }
+            const capability = `workspace-environment:${operation}`;
+            if (environment[operation].length > 0 && !this.#granted.includes(capability))
+                throw new TypeError(`host greeting discloses workspace environment ${operation} without ${capability}`);
+        }
         const holds = (capability) => this.#granted.includes(capability);
         const any = (values) => values.some(holds);
         if (resources.containers.selectors.length > 0 &&
@@ -1016,6 +1036,7 @@ export class Session {
         this.#images = freezeGrant(resources.images);
         this.#networks = freezeGrant(resources.networks);
         this.#volumes = freezeGrant(resources.volumes);
+        this.#workspaceEnvironment = freezeGrant(environment);
         this.#write({
             channel: CONTROL,
             kind: KIND.response,

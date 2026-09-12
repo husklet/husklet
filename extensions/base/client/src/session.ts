@@ -23,6 +23,7 @@ import type {
   ReadonlyImageGrant,
   ReadonlyNetworkGrant,
   ReadonlyVolumeGrant,
+  ReadonlyWorkspaceEnvironmentGrant,
 } from './api.js';
 
 /** The protocol this package speaks. The host refuses anything else. */
@@ -391,6 +392,7 @@ export class Session {
   }) as ReadonlyImageGrant;
   #networks = freezeGrant({ selectors: [], create: false }) as ReadonlyNetworkGrant;
   #volumes = freezeGrant({ selectors: [], create: false }) as ReadonlyVolumeGrant;
+  #workspaceEnvironment = freezeGrant({ read: [], write: [] }) as ReadonlyWorkspaceEnvironmentGrant;
   #greeted;
   #ready;
   #rejectReady;
@@ -495,6 +497,9 @@ export class Session {
   }
   get grantedVolumes() {
     return this.#volumes;
+  }
+  get grantedWorkspaceEnvironment() {
+    return this.#workspaceEnvironment;
   }
 
   /** Resolves when the handshake is complete and calls may be sent. */
@@ -1055,6 +1060,7 @@ export class Session {
       networks: welcome.networks ?? { selectors: [], create: false },
       volumes: welcome.volumes ?? { selectors: [], create: false },
     };
+    const environment = welcome.workspace_environment ?? { read: [], write: [] };
     encodeRequest('extension_install', {
       job: 'grant-validation',
       revision: 0,
@@ -1062,8 +1068,30 @@ export class Session {
       granted: [],
       ...resources,
       filesystem: {},
-      workspace_environment: {},
+      workspace_environment: environment,
     });
+    for (const operation of ['read', 'write']) {
+      for (const selector of environment[operation]) {
+        if ('all' in selector) {
+          if (selector.all !== true || name !== 'top')
+            throw new TypeError(
+              'host greeting contains an overbroad workspace environment selector',
+            );
+        } else if (
+          !selector.workspace ||
+          [...selector.workspace].some(
+            (character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127,
+          ) ||
+          !/^[A-Za-z_][A-Za-z0-9_]*$/.test(selector.name)
+        )
+          throw new TypeError('host greeting contains an invalid workspace environment selector');
+      }
+      const capability = `workspace-environment:${operation}`;
+      if (environment[operation].length > 0 && !this.#granted.includes(capability))
+        throw new TypeError(
+          `host greeting discloses workspace environment ${operation} without ${capability}`,
+        );
+    }
     const holds = (capability) => this.#granted.includes(capability);
     const any = (values) => values.some(holds);
     if (
@@ -1107,6 +1135,7 @@ export class Session {
     this.#images = freezeGrant(resources.images) as ReadonlyImageGrant;
     this.#networks = freezeGrant(resources.networks) as ReadonlyNetworkGrant;
     this.#volumes = freezeGrant(resources.volumes) as ReadonlyVolumeGrant;
+    this.#workspaceEnvironment = freezeGrant(environment) as ReadonlyWorkspaceEnvironmentGrant;
     this.#write({
       channel: CONTROL,
       kind: KIND.response,

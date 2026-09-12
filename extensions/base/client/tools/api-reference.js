@@ -218,7 +218,7 @@ wrong caller.
 | UI inspection/automation | Strong | Native panes expose bounded, redacted semantic XML and revision-bound advertised actions; terminal panes expose bounded screen/history text. Arbitrary pixel/OCR access is intentionally absent. |
 | Layout/tab controller | Strong | Topology, pinning, split, focus, ratio, retitle, close, occupant switching, and observed variants cover layout control. |
 | Extension catalogue/manager | Partial | Discovery can be rendered from the host's bounded catalogue and \`requireCompleteCatalogue\` fails closed rather than treating truncation as a searchable store. Acquisition/install/update/enable/disable/remove are complete. There is no snapshot-pinned catalogue continuation or verified global publisher trust service. |
-| Extension configuration/state | Strong | One authenticated extension-owned blob (1 MiB maximum) survives restart/update and is cleared on successful uninstall. It is private state, not an encrypted secret vault. |
+| Extension configuration/state | Strong | One authenticated extension-owned blob (1 MiB maximum) survives restart/update and is cleared on successful uninstall. \`grantedWorkspaceEnvironment\` exposes the caller's immutable exact environment scope. It is private state, not an encrypted secret vault. |
 
 Capabilities use \`group:verb\` wire names. Filesystem authority is additionally
 confined by exact consented roots, including a single file. Container authority is

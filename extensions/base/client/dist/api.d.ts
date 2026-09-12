@@ -139,6 +139,9 @@ export interface WorkspaceEnvironmentGrant {
         all: true;
     })[];
 }
+export type ReadonlyWorkspaceEnvironmentGrant = {
+    readonly [Operation in keyof WorkspaceEnvironmentGrant]: readonly Readonly<WorkspaceEnvironmentGrant[Operation][number]>[];
+};
 /** The complete authority approved for one reviewed extension image. */
 export interface ExtensionReviewedGrants {
     capabilities: ExtensionCapability[];
@@ -899,6 +902,7 @@ export declare class Session {
     readonly grantedImages: ReadonlyImageGrant;
     readonly grantedNetworks: ReadonlyNetworkGrant;
     readonly grantedVolumes: ReadonlyVolumeGrant;
+    readonly grantedWorkspaceEnvironment: ReadonlyWorkspaceEnvironmentGrant;
     call<C extends WireCall>(method: C, ...args: WireRequestFor<C> extends {
         with: infer P;
     } ? [params: P, options?: CallOptions] : [params?: undefined, options?: CallOptions]): Promise<WireReplyFor<C>>;
@@ -929,6 +933,7 @@ export interface WorkspaceApi {
     readonly grantedImages: ReadonlyImageGrant;
     readonly grantedNetworks: ReadonlyNetworkGrant;
     readonly grantedVolumes: ReadonlyVolumeGrant;
+    readonly grantedWorkspaceEnvironment: ReadonlyWorkspaceEnvironmentGrant;
     /** Returns the complete typed facade with every call bound to this signal. */
     withSignal(signal: AbortSignal): WorkspaceApi;
     info(): Promise<WorkspaceInfo>;

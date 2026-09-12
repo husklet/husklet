@@ -144,6 +144,7 @@ mod unix {
                 filesystem: hl_extension::FilesystemGrant::default(),
                 containers: hl_extension::ContainerGrant::default(), images: hl_extension::ImageGrant::default(),
                 networks: hl_extension::NetworkGrant::default(), volumes: hl_extension::VolumeGrant::default(),
+                workspace_environment: hl_extension::WorkspaceEnvironmentGrant::default(),
                 limits: hl_extension::Limits::default(),
             })
             .expect("welcome encodes"),

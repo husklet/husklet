@@ -255,6 +255,7 @@ is the immutable effective read/write/create/delete/rename selector set for this
 extension only, so a narrowly scoped extension can explain its reach without probing.
 The same caller-only view is available as `grantedContainers`, `grantedImages`,
 `grantedNetworks`, and `grantedVolumes`; selector arrays and their entries are deeply immutable.
+`grantedWorkspaceEnvironment` likewise exposes the exact readable and writable variable selectors.
 
 `@husklet/react` consumes and re-exports this client for compatibility.
 

@@ -91,6 +91,8 @@ pub struct Welcome {
     pub networks: NetworkGrant,
     #[serde(default)]
     pub volumes: VolumeGrant,
+    #[serde(default)]
+    pub workspace_environment: WorkspaceEnvironmentGrant,
     pub limits: Limits,
 }
 

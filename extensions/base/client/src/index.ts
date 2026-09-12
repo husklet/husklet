@@ -1272,6 +1272,9 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
     get grantedVolumes() {
       return session.grantedVolumes;
     },
+    get grantedWorkspaceEnvironment() {
+      return session.grantedWorkspaceEnvironment;
+    },
     info: async () => expect(await session.call('workspace_info'), 'workspace'),
     list: async () => {
       const workspaces = expect(await session.call('workspace_list'), 'workspaces');

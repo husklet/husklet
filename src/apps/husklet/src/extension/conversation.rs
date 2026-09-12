@@ -803,6 +803,7 @@ impl Conversation {
             images: self.session.image_grant().clone(),
             networks: self.session.network_grant().clone(),
             volumes: self.session.volume_grant().clone(),
+            workspace_environment: self.session.workspace_environment_grant().clone(),
             limits: Limits::default(),
         };
         let frame = codec::welcome(&welcome).map_err(|coding| Fault::Malformed(coding.to_string()))?;
