@@ -2464,8 +2464,7 @@ mod unix {
             );
             for (label, action) in [("retry", &retry), ("back", &back)] {
                 assert!(action.has_css_class("size-small"), "{width_name} {label} action is compact");
-                assert_eq!(action.height(), 28, "{width_name} {label} action height");
-                assert!(action.is_focusable(), "{width_name} {label} action is keyboard reachable");
+                assert_standard_action(action, width_name, label, 28);
             }
             capture(
                 window,
