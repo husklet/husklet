@@ -48,16 +48,27 @@ export function InlineButtonWorkbench() {
           </Row>
         </DocumentationSection>
         <DocumentationSection title="States">
-          <Row gap={2} wrap align="center">
-            <InlineButton label="Available" variant="outline" />
-            <InlineButton
-              label="Focused action"
-              variant="outline"
-              onFocus={() => setEvent('Focus visible')}
-            />
-            <InlineButton label="Unavailable" variant="outline" enabled={false} />
-            <InlineButton label="Reading…" variant="outline" busy />
-          </Row>
+          <Column gap={1}>
+            <Row gap={2} wrap align="center">
+              <InlineButton label="Focus filled" variant="filled" tone="accent" />
+              <InlineButton
+                label="Focus outline"
+                variant="outline"
+                onFocus={() => setEvent('Focus visible')}
+              />
+              <InlineButton label="Focus ghost" variant="ghost" />
+            </Row>
+            <Row gap={2} wrap align="center">
+              <InlineButton label="Available" variant="outline" />
+              <InlineButton label="Unavailable" variant="outline" enabled={false} />
+              <InlineButton label="Reading…" variant="outline" busy />
+            </Row>
+          </Column>
+          <Text
+            label="Keyboard focus draws one accent ring around the compact chrome, never a second rectangle around its transparent target."
+            color="text-dim"
+            wrap
+          />
         </DocumentationSection>
       </SpecimenGrid>
       <DocumentationSection title="Placement">

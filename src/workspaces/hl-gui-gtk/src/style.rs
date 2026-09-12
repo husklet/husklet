@@ -266,6 +266,8 @@ fn standard_buttons(css: &mut String, theme: &Theme) {
     let _ = writeln!(
         css,
         "button.hl-button, button.hl-button:hover, button.hl-button:active {{ background: transparent; border-color: transparent; box-shadow: none; }}\n\
+         button.hl-button:focus-visible {{ outline: none; }}\n\
+         button.hl-button:focus-visible > .hl-button-chrome {{ outline: 2px solid {accent}; outline-offset: 2px; }}\n\
          button.hl-button.variant-plain > .hl-button-chrome {{ background: transparent; color: {text}; border: 1px solid transparent; }}\n\
          button.hl-button.variant-filled > .hl-button-chrome {{ background: {text}; color: {ground}; border: 1px solid {text}; }}\n\
          button.hl-button.variant-outline > .hl-button-chrome {{ background: transparent; color: {text}; border: 1px solid {line}; }}\n\
@@ -282,6 +284,7 @@ fn standard_buttons(css: &mut String, theme: &Theme) {
         surface = theme.color(Token::Surface).hex(),
         faint = theme.color(Token::TextFaint).hex(),
         line = theme.color(Token::Line).hex(),
+        accent = theme.color(Token::Accent).hex(),
     );
 }
 
@@ -289,6 +292,8 @@ fn inline_buttons(css: &mut String, theme: &Theme) {
     let _ = writeln!(
         css,
         "button.hl-inline-button, button.hl-inline-button:hover, button.hl-inline-button:active {{ background: transparent; border-color: transparent; box-shadow: none; }}\n\
+         button.hl-inline-button:focus-visible {{ outline: none; }}\n\
+         button.hl-inline-button:focus-visible > .hl-inline-button-chrome {{ outline: 2px solid {accent}; outline-offset: 2px; }}\n\
          button.hl-inline-button > .hl-inline-button-chrome {{ background: transparent; color: {text}; border-color: transparent; }}\n\
          button.hl-inline-button.variant-outline > .hl-inline-button-chrome {{ border-color: {line}; }}\n\
          button.hl-inline-button.variant-filled > .hl-inline-button-chrome {{ background: {text}; color: {ground}; border-color: {text}; }}\n\
@@ -561,6 +566,24 @@ mod tests {
         assert!(
             css.contains("button.hl-inline-button.variant-outline > .hl-inline-button-chrome { border-color: #323843;")
         );
+        assert!(css.contains("button.hl-inline-button:focus-visible { outline: none; }"));
+        assert!(css.contains(
+            "button.hl-inline-button:focus-visible > .hl-inline-button-chrome { outline: 2px solid #559df7; outline-offset: 2px; }"
+        ));
+    }
+
+    #[test]
+    fn standard_button_focus_paints_only_its_visual_chrome() {
+        let css = super::sheet(&Theme::dark());
+        assert!(css.contains("button.hl-button:focus-visible { outline: none; }"));
+        assert!(css.contains(
+            "button.hl-button:focus-visible > .hl-button-chrome { outline: 2px solid #559df7; outline-offset: 2px; }"
+        ));
+        assert!(
+            css.contains("button:focus-visible { outline: 2px"),
+            "IconButton retains the native rule"
+        );
+        assert!(css.contains(".hl-menu-item:focus, .hl-menu-item:focus-visible { outline: none;"));
     }
 
     #[test]

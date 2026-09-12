@@ -41,6 +41,12 @@ test('InlineButton has an authored single-component page with variants and state
     0,
     'the page demonstrates InlineButton without substituting a standard Button',
   );
+  for (const label of ['Focus filled', 'Focus outline', 'Focus ghost']) {
+    assert.ok(
+      actions.some((props) => props.Label?.Text === label),
+      `missing ${label} state`,
+    );
+  }
 });
 
 test('InlineButton teaches compact chrome and full target semantics before its API', () => {
@@ -50,6 +56,7 @@ test('InlineButton teaches compact chrome and full target semantics before its A
 
   assert.ok(labels.some((label) => label?.includes('visible chrome is 28px')));
   assert.ok(labels.some((label) => label?.includes('hit target remains at least 44px')));
+  assert.ok(labels.some((label) => label?.includes('one accent ring around the compact chrome')));
   assert.deepEqual(headings.slice(0, 3), ['InlineButton', 'Overview', 'Variants']);
   assert.ok(headings.indexOf('Accessibility') < headings.indexOf('API'));
 });

@@ -87,6 +87,27 @@ test('Button distinguishes compact visible chrome from its accessible target', (
   }
 });
 
+test('Button documents one chrome focus ring across variants and sizes', () => {
+  const frame = host().render(h(ButtonWorkbench));
+  const buttons = propsFor(frame.patches, 'Button');
+  for (const [label, size, variant] of [
+    ['Focus filled', 'Small', 'Filled'],
+    ['Focus outline', 'Medium', 'Outline'],
+    ['Focus ghost', 'Large', 'Ghost'],
+  ]) {
+    assert(
+      buttons.some(
+        (props) =>
+          props.Label?.Text === label &&
+          props.Size?.ControlSize === size &&
+          props.Variant?.Variant === variant,
+      ),
+    );
+  }
+  const copy = propsFor(frame.patches, 'Text').map((props) => props.Label?.Text ?? '');
+  assert(copy.some((label) => label.includes('one accent ring around the visible chrome')));
+});
+
 test('Button documents a compact reset beside the value it affects', () => {
   const frame = host().render(h(ButtonWorkbench));
   const buttons = propsFor(frame.patches, 'Button');

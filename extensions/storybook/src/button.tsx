@@ -151,6 +151,18 @@ export function ButtonWorkbench() {
           wrap
         />
       </SectionBlock>
+      <SectionBlock title="Keyboard focus">
+        <Row gap={2} wrap align="center">
+          <Button label="Focus filled" size="small" variant="filled" tone="accent" />
+          <Button label="Focus outline" size="medium" variant="outline" tone="accent" />
+          <Button label="Focus ghost" size="large" variant="ghost" tone="accent" />
+        </Row>
+        <Text
+          label="Keyboard focus paints one accent ring around the visible chrome. The larger transparent interaction target never draws a second rectangle."
+          color="text-dim"
+          wrap
+        />
+      </SectionBlock>
       <SectionBlock title="Inline reset action">
         <Row gap={1} width="fill" align="center" justify="stretch">
           <Text label="Product access · 5/6" color="text-dim" />

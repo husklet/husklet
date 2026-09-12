@@ -451,6 +451,31 @@ mod unix {
                         && button.accessible_role() == gtk::AccessibleRole::Button
                 }));
             }
+            let disabled = find::<gtk::Button>(&root, |button| button_caption(button).as_deref() == Some("Disabled"));
+            assert!(!disabled.is_sensitive());
+            assert!(!disabled.grab_focus(), "disabled Button entered keyboard focus order");
+            for (width, width_name) in [(600, "narrow"), (1_200, "wide")] {
+                realized_window.set_size_request(width, 800);
+                realized_window.set_default_size(width, 800);
+                settle_window_width(&realized_window, width);
+                for (label, variant) in [
+                    ("Focus filled", "filled"),
+                    ("Focus outline", "outline"),
+                    ("Focus ghost", "ghost"),
+                ] {
+                    let action = find::<gtk::Button>(&root, |button| button_caption(button).as_deref() == Some(label));
+                    assert!(action.has_css_class(&format!("variant-{variant}")));
+                    assert!(action.grab_focus(), "{label} accepts keyboard focus");
+                    settle_toolkit();
+                    assert!(action.has_focus(), "{label} owns native focus");
+                    assert!(
+                        action
+                            .child()
+                            .is_some_and(|chrome| chrome.has_css_class("hl-button-chrome"))
+                    );
+                }
+                capture_story(&realized_window, &format!("Button focused ghost {width_name}"));
+            }
         }
         if story == "IconButton" {
             for (class, expected, icon) in [("size-small", 28, 14), ("size-medium", 36, 18), ("size-large", 44, 20)] {
@@ -1162,11 +1187,14 @@ mod unix {
             assert_eq!(root.width(), width, "{story} did not accept the {width}px allocation");
             assert_contained(&root, story);
             if story == "InlineButton" {
+                realized_window.set_size_request(width, 800);
+                realized_window.set_default_size(width, 800);
+                settle_window_width(&realized_window, width);
                 let actions = descendants::<gtk::Button>(&root)
                     .into_iter()
                     .filter(|button| button.has_css_class("hl-inline-button"))
                     .collect::<Vec<_>>();
-                assert_eq!(actions.len(), 11, "InlineButton page lost a canonical specimen");
+                assert_eq!(actions.len(), 13, "InlineButton page lost a canonical specimen");
                 for action in &actions {
                     assert_eq!(action.accessible_role(), gtk::AccessibleRole::Button);
                     assert!(action.is_focusable(), "InlineButton left keyboard focus order");
@@ -1190,6 +1218,13 @@ mod unix {
                 });
                 assert!(inspect.grab_focus(), "enabled InlineButton accepts keyboard focus");
                 assert!(inspect.has_focus(), "InlineButton exposes native focus state");
+                let focus_ghost = find::<gtk::Button>(&root, |button| {
+                    button_caption(button).as_deref() == Some("Focus ghost")
+                });
+                assert!(focus_ghost.grab_focus());
+                assert!(focus_ghost.has_focus());
+                let width_name = if width == 600 { "narrow" } else { "wide" };
+                capture_story(&realized_window, &format!("InlineButton focused ghost {width_name}"));
                 let _ = surface.reports().drain();
             }
             if let Some((paned, body)) = &responsive {
@@ -1628,14 +1663,12 @@ mod unix {
                     "Card actions appeared before its content"
                 );
                 assert!(
-                    descendants::<gtk::Button>(actions.upcast_ref())
-                        .iter()
-                        .all(|button| {
-                            button.height() >= 44
-                                && button
-                                    .child()
-                                    .is_some_and(|chrome| (28..=36).contains(&chrome.height()))
-                        }),
+                    descendants::<gtk::Button>(actions.upcast_ref()).iter().all(|button| {
+                        button.height() >= 44
+                            && button
+                                .child()
+                                .is_some_and(|chrome| (28..=36).contains(&chrome.height()))
+                    }),
                     "Card actions are not compact controls"
                 );
             }
