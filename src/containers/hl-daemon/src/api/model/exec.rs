@@ -260,6 +260,16 @@ pub struct ExecInspect {
     pub running: bool,
     #[serde(rename = "ExitCode")]
     pub exit_code: i64,
+    /// Authoritative terminal result. Unlike Docker's flattened `ExitCode`,
+    /// this preserves whether the process exited, was signalled, or faulted.
+    #[serde(rename = "Result")]
+    pub result: Option<hl_container::ExitStatus>,
+    #[serde(rename = "CreatedAt")]
+    pub created_at_ms: u64,
+    #[serde(rename = "StartedAt")]
+    pub started_at_ms: Option<u64>,
+    #[serde(rename = "FinishedAt")]
+    pub finished_at_ms: Option<u64>,
     #[serde(rename = "Pid")]
     pub pid: i64,
     #[serde(rename = "CanRemove")]

@@ -1,5 +1,5 @@
 // Generated from Rust hl-extension protocol/v1.json. Do not edit.
-// Protocol artifact fnv1a64:dc237199f62cb1dc
+// Protocol artifact fnv1a64:c3fbea2c3cba069c
 export const PROTOCOL_SPECIFICATION_VERSION: 1;
 export const PROTOCOL_VERSION: 1;
 export const PROTOCOL_BOUNDS: Readonly<{ "extension_job_bytes": number; "extension_reference_bytes": number; "pane_input_bytes": number; "pane_inventory_items": number; "pane_text_bytes": number; "resource_inventory_items": number; "semantic_action_value_bytes": number; "semantic_depth": number; "semantic_nodes": number; "semantic_text_bytes": number; "terminal_command_argument_bytes": number; "terminal_command_bytes": number }>;
@@ -33,10 +33,12 @@ export type Edges = { "top": Length; "end": Length; "bottom": Length; "start": L
 export type Entry = { "path": RelativePath; "directory": boolean; "size": number; "identity"?: string | null };
 export type EventId = string;
 export type ExecEnvironmentValue = string;
+export type ExecutionFaultCause = "unknown" | "fetch" | "memory" | "decode" | "unsupported" | "frozen" | "cache_epoch" | "protocol" | "native_fatal";
 export type ExecutionList = { "executions": Array<ExecutionSummary>; "truncated": boolean };
 export type ExecutionOutputEntry = { "sequence": number; "timestamp_ms": number; "stream": string; "bytes": Array<number> };
 export type ExecutionOutputPage = { "entries": Array<ExecutionOutputEntry>; "next": number; "more": boolean; "eof": boolean; "gap": boolean };
-export type ExecutionSummary = { "id": string; "container_id": string; "running": boolean; "exit_code": number; "pid": number; "command": Array<string>; "user": string };
+export type ExecutionResult = { kind: "code"; value: number } | { kind: "signal"; value: number } | { kind: "fault"; value: { "status": number; "detail": number; "reason": ExecutionFaultCause } };
+export type ExecutionSummary = { "id": string; "container_id": string; "running": boolean; "exit_code": number; "result"?: ExecutionResult | null; "created_at_ms"?: number | null; "started_at_ms"?: number | null; "finished_at_ms"?: number | null; "pid": number; "command": Array<string>; "user": string };
 export type ExtensionAcquisitionChange = { "job": string; "revision": number; "state": string; "coalesced": number };
 export type ExtensionAcquisitionJob = { "job": string };
 export type ExtensionAcquisitionProgress = { "status": string; "id"?: string | null; "current"?: number | null; "total"?: number | null };

@@ -142,6 +142,10 @@ impl ContainerInventory for Host {
             container_id: "c2".into(),
             running: true,
             exit_code: 0,
+            result: None,
+            created_at_ms: Some(5),
+            started_at_ms: Some(6),
+            finished_at_ms: None,
             pid: 9,
             command: vec!["psql".into()],
             user: "postgres".into(),
@@ -154,8 +158,7 @@ impl ContainerInventory for Host {
         after: u64,
         _limit: u16,
     ) -> Result<hl_extension::port::ExecutionOutputPage, HostError> {
-        self.execution_output_calls
-            .set(self.execution_output_calls.get() + 1);
+        self.execution_output_calls.set(self.execution_output_calls.get() + 1);
         Ok(hl_extension::port::ExecutionOutputPage {
             entries: vec![hl_extension::port::ExecutionOutputEntry {
                 sequence: after + 1,
@@ -379,7 +382,9 @@ fn a_scoped_symlink_target_crosses_the_real_socket_without_following_it() {
         .send(&codec::request(&request).expect("request frame"))
         .expect("request sent");
     let decoded = codec::read_request(&server.receive().expect("request crossed socket")).expect("request decoded");
-    let reply = session.dispatch(&decoded, &services(&host)).expect("authorized link read");
+    let reply = session
+        .dispatch(&decoded, &services(&host))
+        .expect("authorized link read");
     server
         .send(&codec::reply(&reply).expect("reply frame"))
         .expect("reply sent");
@@ -1183,8 +1188,10 @@ fn a_whole_interface_is_rendered_from_a_socket() {
             peer: ExtensionName::new("containers").expect("name"),
             granted: Grant::new([Capability::Interface]),
             filesystem: hl_extension::FilesystemGrant::default(),
-            containers: hl_extension::ContainerGrant::default(), images: hl_extension::ImageGrant::default(),
-            networks: hl_extension::NetworkGrant::default(), volumes: hl_extension::VolumeGrant::default(),
+            containers: hl_extension::ContainerGrant::default(),
+            images: hl_extension::ImageGrant::default(),
+            networks: hl_extension::NetworkGrant::default(),
+            volumes: hl_extension::VolumeGrant::default(),
             workspace_environment: hl_extension::WorkspaceEnvironmentGrant::default(),
             limits: hl_extension::Limits::default(),
         })

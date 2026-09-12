@@ -414,14 +414,27 @@ export class ExecutionDetailsSource {
   }
 
   async replace(details: ExecutionSummary | null): Promise<number> {
+    const result = details?.result;
+    const outcome =
+      result?.kind === 'code'
+        ? `Exited with code ${result.value}`
+        : result?.kind === 'signal'
+          ? `Stopped by signal ${result.value}`
+          : result?.kind === 'fault'
+            ? `Runtime fault (${result.value.reason.replaceAll('_', ' ')}, status ${result.value.status})`
+            : details && !details.running
+              ? `Exited with code ${details.exit_code}`
+              : null;
+    const instant = (value: number | null | undefined) =>
+      value == null ? null : new Date(value).toISOString();
     const values: Array<[string, unknown]> = [
       ['Execution ID', details?.id],
       ['Container ID', details?.container_id],
       ['State', details && 'running' in details ? (details.running ? 'running' : 'exited') : null],
-      [
-        'Exit code',
-        details && 'exit_code' in details && !details.running ? String(details.exit_code) : null,
-      ],
+      ['Result', outcome],
+      ['Created', instant(details?.created_at_ms)],
+      ['Started', instant(details?.started_at_ms)],
+      ['Finished', instant(details?.finished_at_ms)],
       ['Process ID', details && details.pid > 0 ? String(details.pid) : null],
       ['Command', details?.command?.join(' ')],
       ['User', details && 'user' in details ? details.user || 'default user' : null],

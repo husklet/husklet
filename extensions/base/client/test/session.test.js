@@ -10135,6 +10135,46 @@ test('real Unix terminal-to-text rejects same-slot replacement and preserves ses
   );
 });
 
+test('real Unix execution inspection rejects contradictory typed results and preserves session health', async () => {
+  const id = 'e'.repeat(32);
+  let inspections = 0;
+  await withPaneIdentityHost(
+    ['containers:read'],
+    (request, socket) => {
+      assert.equal(request.call, 'execution_inspect');
+      inspections += 1;
+      socket.write(
+        encode({
+          channel: 2,
+          kind: KIND.response,
+          payload: {
+            reply: 'execution',
+            with: {
+              id,
+              container_id: 'c'.repeat(32),
+              running: false,
+              exit_code: inspections === 1 ? 0 : 137,
+              result: { kind: 'signal', value: 9 },
+              created_at_ms: 1_000,
+              finished_at_ms: 1_250,
+              pid: 22,
+              command: ['postgres'],
+              user: 'postgres',
+            },
+          },
+        }),
+      );
+    },
+    async (session) => {
+      await assert.rejects(
+        workspace(session).containers.execution(id),
+        /contradictory exit status/,
+      );
+      assert.equal((await workspace(session).containers.execution(id)).result.kind, 'signal');
+    },
+  );
+});
+
 test('real Unix execAndWait prevalidates then executes, waits, and reads bounded output in order', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-exec-and-wait-'));
   const socketPath = path.join(directory, 'host.sock');
@@ -10147,6 +10187,10 @@ test('real Unix execAndWait prevalidates then executes, waits, and reads bounded
     container_id: containerId,
     running: false,
     exit_code: 0,
+    result: { kind: 'code', value: 0 },
+    created_at_ms: 1_000,
+    started_at_ms: null,
+    finished_at_ms: 1_250,
     pid: 22,
     command: ['printf', 'ok'],
     user: 'root',

@@ -347,6 +347,30 @@ export interface ExecutionSummary {
   container_id: string;
   running: boolean;
   exit_code: number;
+  result?:
+    | { kind: 'code'; value: number }
+    | { kind: 'signal'; value: number }
+    | {
+        kind: 'fault';
+        value: {
+          status: number;
+          detail: number;
+          reason:
+            | 'unknown'
+            | 'fetch'
+            | 'memory'
+            | 'decode'
+            | 'unsupported'
+            | 'frozen'
+            | 'cache_epoch'
+            | 'protocol'
+            | 'native_fatal';
+        };
+      }
+    | null;
+  created_at_ms?: number | null;
+  started_at_ms?: number | null;
+  finished_at_ms?: number | null;
   pid: number;
   command: string[];
   user: string;

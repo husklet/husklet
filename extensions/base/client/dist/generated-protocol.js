@@ -1,5 +1,5 @@
 // Generated from Rust hl-extension protocol/v1.json. Do not edit.
-// Protocol artifact fnv1a64:dc237199f62cb1dc
+// Protocol artifact fnv1a64:c3fbea2c3cba069c
 export const PROTOCOL_SPECIFICATION_VERSION = 1;
 export const PROTOCOL_VERSION = 1;
 export const PROTOCOL_BOUNDS = Object.freeze({
@@ -1817,6 +1817,68 @@ const definitions = {
       "transparent": true
     }
   },
+  "ExecutionFaultCause": {
+    "kind": "enum",
+    "serde": {
+      "rename_all": "snake_case"
+    },
+    "variants": [
+      {
+        "name": "unknown",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
+        "name": "fetch",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
+        "name": "memory",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
+        "name": "decode",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
+        "name": "unsupported",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
+        "name": "frozen",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
+        "name": "cache_epoch",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
+        "name": "protocol",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
+        "name": "native_fatal",
+        "payload": {
+          "kind": "unit"
+        }
+      }
+    ]
+  },
   "ExecutionList": {
     "fields": [
       {
@@ -1939,6 +2001,80 @@ const definitions = {
     "kind": "struct",
     "serde": {}
   },
+  "ExecutionResult": {
+    "kind": "enum",
+    "serde": {
+      "content": "value",
+      "rename_all": "snake_case",
+      "tag": "kind"
+    },
+    "variants": [
+      {
+        "name": "code",
+        "payload": {
+          "kind": "newtype",
+          "of": {
+            "bits": 32,
+            "kind": "integer",
+            "maximum": 2147483647,
+            "minimum": -2147483648,
+            "signed": true
+          }
+        }
+      },
+      {
+        "name": "signal",
+        "payload": {
+          "kind": "newtype",
+          "of": {
+            "bits": 32,
+            "kind": "integer",
+            "maximum": 2147483647,
+            "minimum": -2147483648,
+            "signed": true
+          }
+        }
+      },
+      {
+        "name": "fault",
+        "payload": {
+          "fields": [
+            {
+              "name": "status",
+              "optional": false,
+              "schema": {
+                "bits": 32,
+                "kind": "integer",
+                "maximum": 2147483647,
+                "minimum": -2147483648,
+                "signed": true
+              }
+            },
+            {
+              "name": "detail",
+              "optional": false,
+              "schema": {
+                "bits": 64,
+                "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "signed": false
+              }
+            },
+            {
+              "name": "reason",
+              "optional": false,
+              "schema": {
+                "kind": "ref",
+                "name": "ExecutionFaultCause"
+              }
+            }
+          ],
+          "kind": "struct"
+        }
+      }
+    ]
+  },
   "ExecutionSummary": {
     "fields": [
       {
@@ -1971,6 +2107,59 @@ const definitions = {
           "maximum": 9007199254740991,
           "minimum": -9007199254740991,
           "signed": true
+        }
+      },
+      {
+        "name": "result",
+        "optional": true,
+        "schema": {
+          "kind": "optional",
+          "of": {
+            "kind": "ref",
+            "name": "ExecutionResult"
+          }
+        }
+      },
+      {
+        "name": "created_at_ms",
+        "optional": true,
+        "schema": {
+          "kind": "optional",
+          "of": {
+            "bits": 64,
+            "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "signed": false
+          }
+        }
+      },
+      {
+        "name": "started_at_ms",
+        "optional": true,
+        "schema": {
+          "kind": "optional",
+          "of": {
+            "bits": 64,
+            "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "signed": false
+          }
+        }
+      },
+      {
+        "name": "finished_at_ms",
+        "optional": true,
+        "schema": {
+          "kind": "optional",
+          "of": {
+            "bits": 64,
+            "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "signed": false
+          }
         }
       },
       {

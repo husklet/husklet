@@ -222,12 +222,44 @@ pub struct ContainerPublishedPort {
 }
 
 /// State of one additional process created through the container exec API.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionFaultCause {
+    Unknown,
+    Fetch,
+    Memory,
+    Decode,
+    Unsupported,
+    Frozen,
+    CacheEpoch,
+    Protocol,
+    NativeFatal,
+}
+
+/// Unambiguous terminal result of an execution.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
+pub enum ExecutionResult {
+    Code(i32),
+    Signal(i32),
+    Fault {
+        status: i32,
+        detail: u64,
+        reason: ExecutionFaultCause,
+    },
+}
+
+/// State of one additional process created through the container exec API.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct ExecutionSummary {
     pub id: String,
     pub container_id: String,
     pub running: bool,
     pub exit_code: i64,
+    pub result: Option<ExecutionResult>,
+    pub created_at_ms: Option<u64>,
+    pub started_at_ms: Option<u64>,
+    pub finished_at_ms: Option<u64>,
     pub pid: i64,
     pub command: Vec<String>,
     pub user: String,

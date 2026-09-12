@@ -28,6 +28,9 @@ pub(super) fn model(exec: hl_container::Exec) -> ApiResult<Json<ExecInspect>> {
     let Inspection {
         running,
         exit_code,
+        result,
+        started_at_ms,
+        finished_at_ms,
         pid,
     } = exec.state.try_into()?;
     let process = exec.spec.process;
@@ -36,6 +39,10 @@ pub(super) fn model(exec: hl_container::Exec) -> ApiResult<Json<ExecInspect>> {
         container_id: exec.container.to_string(),
         running,
         exit_code,
+        result,
+        created_at_ms: exec.created_at_ms,
+        started_at_ms,
+        finished_at_ms,
         pid,
         can_remove: !running,
         detach_keys: exec.spec.detach_keys,
@@ -58,6 +65,9 @@ pub(super) fn model(exec: hl_container::Exec) -> ApiResult<Json<ExecInspect>> {
 struct Inspection {
     running: bool,
     exit_code: i64,
+    result: Option<ExitStatus>,
+    started_at_ms: Option<u64>,
+    finished_at_ms: Option<u64>,
     pid: i64,
 }
 
@@ -65,15 +75,25 @@ impl TryFrom<ExecState> for Inspection {
     type Error = ApiError;
 
     fn try_from(state: ExecState) -> Result<Self, Self::Error> {
-        let (running, exit_code, pid) = match state {
-            ExecState::Created => (false, 0, 0),
-            ExecState::Running { process_id, .. } => (
+        let (running, exit_code, result, started_at_ms, finished_at_ms, pid) = match state {
+            ExecState::Created => (false, 0, None, None, None, 0),
+            ExecState::Running {
+                process_id,
+                started_at_ms,
+            } => (
                 true,
                 0,
+                None,
+                Some(started_at_ms),
+                None,
                 i64::try_from(process_id)
                     .map_err(|_| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "exec PID exceeds i64"))?,
             ),
-            ExecState::Exited { result, process_id, .. } => {
+            ExecState::Exited {
+                result,
+                finished_at_ms,
+                process_id,
+            } => {
                 let code = match result {
                     ExitStatus::Code(code) => code,
                     ExitStatus::Signal(signal) => 128 + signal,
@@ -84,12 +104,15 @@ impl TryFrom<ExecState> for Inspection {
                     .transpose()
                     .map_err(|_| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "exec PID exceeds i64"))?
                     .unwrap_or_default();
-                (false, i64::from(code), pid)
+                (false, i64::from(code), Some(result), None, Some(finished_at_ms), pid)
             }
         };
         Ok(Self {
             running,
             exit_code,
+            result,
+            started_at_ms,
+            finished_at_ms,
             pid,
         })
     }
@@ -111,6 +134,9 @@ mod tests {
             Inspection {
                 running: false,
                 exit_code: 7,
+                result: Some(ExitStatus::Code(7)),
+                started_at_ms: None,
+                finished_at_ms: Some(20),
                 pid: 42,
             }
         );
@@ -128,9 +154,25 @@ mod tests {
             Inspection {
                 running: false,
                 exit_code: 0,
+                result: Some(ExitStatus::Code(0)),
+                started_at_ms: None,
+                finished_at_ms: Some(20),
                 pid: 0,
             }
         );
+    }
+
+    #[test]
+    fn signal_identity_is_not_flattened_into_an_ambiguous_exit_code() {
+        let inspection = Inspection::try_from(ExecState::Exited {
+            result: ExitStatus::Signal(9),
+            finished_at_ms: 21,
+            process_id: Some(43),
+        })
+        .unwrap();
+        assert_eq!(inspection.exit_code, 137);
+        assert_eq!(inspection.result, Some(ExitStatus::Signal(9)));
+        assert_eq!(inspection.finished_at_ms, Some(21));
     }
 
     #[test]

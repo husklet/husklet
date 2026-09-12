@@ -32,6 +32,15 @@ import {
 import type { Resource } from './overview.js';
 import { ResourceSummary } from './resource-summary.js';
 
+function executionStatus(execution: ExecutionSummary): string {
+  if (execution.running) return 'running';
+  if (execution.result?.kind === 'code') return `exit ${execution.result.value}`;
+  if (execution.result?.kind === 'signal') return `signal ${execution.result.value}`;
+  if (execution.result?.kind === 'fault')
+    return `${execution.result.value.reason.replaceAll('_', ' ')} fault`;
+  return 'created';
+}
+
 const DETAIL_SCHEMA = [
   { key: 'property', title: 'Property', width: { chars: 20 } },
   { key: 'value', title: 'Value', width: 'fill' as const },
@@ -268,8 +277,10 @@ export function Executions({
               detail={`container ${shortId(item.container_id)}`}
               status={
                 <Badge
-                  label={item.running ? 'running' : `exited ${item.exit_code}`}
-                  tone={item.running ? 'positive' : 'neutral'}
+                  label={executionStatus(item)}
+                  tone={
+                    item.running ? 'positive' : item.result?.kind === 'fault' ? 'danger' : 'neutral'
+                  }
                 />
               }
               actions={

@@ -1412,6 +1412,10 @@ mod tests {
                     container_id: "c1".into(),
                     running: false,
                     exit_code: 7,
+                    result: Some(hl_extension::port::ExecutionResult::Code(7)),
+                    created_at_ms: Some(5),
+                    started_at_ms: None,
+                    finished_at_ms: Some(9),
                     pid: 42,
                     command: vec!["worker".into()],
                     user: "root".into(),
@@ -1427,6 +1431,10 @@ mod tests {
                 container_id: "c1".into(),
                 running: false,
                 exit_code: 7,
+                result: Some(hl_extension::port::ExecutionResult::Code(7)),
+                created_at_ms: Some(5),
+                started_at_ms: None,
+                finished_at_ms: Some(9),
                 pid: 42,
                 command: vec!["worker".into()],
                 user: "root".into(),
@@ -2800,13 +2808,29 @@ mod tests {
         shake(&mut wire, PROTOCOL);
 
         let inventory = ask(&mut wire, &Request::FilesystemInventory);
-        let Ok(Reply::FileInventory(inventory)) = codec::read_reply(&inventory) else { panic!("inventory") };
+        let Ok(Reply::FileInventory(inventory)) = codec::read_reply(&inventory) else {
+            panic!("inventory")
+        };
         let journal = inventory.journal;
-        let baseline = ask(&mut wire, &Request::FilesystemChanges { observed: journal.clone(), after: 0, limit: 2 });
+        let baseline = ask(
+            &mut wire,
+            &Request::FilesystemChanges {
+                observed: journal.clone(),
+                after: 0,
+                limit: 2,
+            },
+        );
         assert!(
             matches!(codec::read_reply(&baseline), Ok(Reply::FileChanges(page)) if page.changes.is_empty() && !page.truncated)
         );
-        let foreign_cursor = ask(&mut wire, &Request::FilesystemChanges { observed: journal.clone(), after: 999, limit: 2 });
+        let foreign_cursor = ask(
+            &mut wire,
+            &Request::FilesystemChanges {
+                observed: journal.clone(),
+                after: 999,
+                limit: 2,
+            },
+        );
         let Reply::FileChanges(foreign_cursor) = codec::read_reply(&foreign_cursor).unwrap() else {
             panic!("page")
         };
@@ -3036,7 +3060,10 @@ mod tests {
             panic!("unexpected reply")
         };
         assert_ne!(published, observed);
-        assert_eq!(std::fs::read(root.join("settings.json")).expect("published file"), b"new");
+        assert_eq!(
+            std::fs::read(root.join("settings.json")).expect("published file"),
+            b"new"
+        );
         let files = WorkspaceDirectory::new(&root).expect("reopened workspace directory");
         assert_eq!(
             files.stat(&exact).expect("published stat").identity.as_deref(),
@@ -3050,7 +3077,10 @@ mod tests {
                 .starts_with(".husklet-write-")),
             "socket completion leaves no staged or displaced entry"
         );
-        assert!(ledger.reached().is_empty(), "the real filesystem adapter handled the request");
+        assert!(
+            ledger.reached().is_empty(),
+            "the real filesystem adapter handled the request"
+        );
 
         drop(wire);
         assert_eq!(served.join().expect("joined"), Ok(()));
@@ -3108,31 +3138,41 @@ mod tests {
         let (theirs, served) = workspace_control_host(Arc::clone(&ledger));
         let mut wire = Wire::new(theirs);
         shake(&mut wire, PROTOCOL);
-        let answer = ask(&mut wire, &Request::WorkspaceCreate {
-            configuration: hl_extension::WorkspaceConfiguration {
-                generation: "0123456789abcdef0123456789abcdef".into(),
-                configuration_revision: "abcdef0123456789abcdef0123456789".into(),
-                name: "agent-created".into(),
-                image: "alpine:3.20".into(),
-                architecture: "arm64".into(),
-                storage: None,
-                shell: None,
-                cpus: None,
-                memory_mb: None,
-                environment: vec![("TOKEN".into(), "must-not-cross".into())],
-                environment_redacted: false,
-                mounts: Vec::new(),
-                docker_socket: false,
-                scrollback: None,
-                vpn: None,
-                execution_lifetime: "persisted".into(),
-                terminal: hl_extension::WorkspaceTerminal::default(),
+        let answer = ask(
+            &mut wire,
+            &Request::WorkspaceCreate {
+                configuration: hl_extension::WorkspaceConfiguration {
+                    generation: "0123456789abcdef0123456789abcdef".into(),
+                    configuration_revision: "abcdef0123456789abcdef0123456789".into(),
+                    name: "agent-created".into(),
+                    image: "alpine:3.20".into(),
+                    architecture: "arm64".into(),
+                    storage: None,
+                    shell: None,
+                    cpus: None,
+                    memory_mb: None,
+                    environment: vec![("TOKEN".into(), "must-not-cross".into())],
+                    environment_redacted: false,
+                    mounts: Vec::new(),
+                    docker_socket: false,
+                    scrollback: None,
+                    vpn: None,
+                    execution_lifetime: "persisted".into(),
+                    terminal: hl_extension::WorkspaceTerminal::default(),
+                },
             },
-        });
-        assert!(matches!(codec::read_failure(&answer), Ok(Failure::Denied { ref capability, .. })
-            if capability == Capability::WorkspaceEnvironmentWrite.as_str()));
+        );
+        assert!(
+            matches!(codec::read_failure(&answer), Ok(Failure::Denied { ref capability, .. })
+            if capability == Capability::WorkspaceEnvironmentWrite.as_str())
+        );
         assert!(ledger.reached().is_empty(), "the host create callback was reached");
-        assert!(!answer.payload.windows(b"must-not-cross".len()).any(|part| part == b"must-not-cross"));
+        assert!(
+            !answer
+                .payload
+                .windows(b"must-not-cross".len())
+                .any(|part| part == b"must-not-cross")
+        );
         drop(wire);
         assert_eq!(served.join().unwrap(), Ok(()));
     }

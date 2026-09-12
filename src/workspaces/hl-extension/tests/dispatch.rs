@@ -228,6 +228,10 @@ impl ContainerInventory for Host {
             container_id: self.execution_container.borrow().clone(),
             running: true,
             exit_code: 0,
+            result: None,
+            created_at_ms: Some(5),
+            started_at_ms: Some(6),
+            finished_at_ms: None,
             pid: 8,
             command: vec!["worker".into()],
             user: "root".into(),
@@ -279,6 +283,10 @@ impl ContainerInventory for Host {
             container_id: "c1".into(),
             running: false,
             exit_code: 17,
+            result: Some(hl_extension::port::ExecutionResult::Code(17)),
+            created_at_ms: Some(5),
+            started_at_ms: None,
+            finished_at_ms: Some(9),
             pid: 0,
             command: vec!["worker".into()],
             user: "root".into(),
@@ -776,7 +784,10 @@ fn supervised_terminal_command_has_owned_identity_output_input_and_completion_wi
         &services(&host),
     );
     assert!(matches!(foreign, Err(Failure::Denied { .. })));
-    assert!(host.ledger.reached().is_empty(), "foreign ownership must be fenced before host lookup");
+    assert!(
+        host.ledger.reached().is_empty(),
+        "foreign ownership must be fenced before host lookup"
+    );
 
     let resumed = session(&[Capability::TerminalOutput], &[])
         .with_execution_ownership(ownership.clone())
@@ -909,15 +920,15 @@ fn pane_snapshot_fences_command_creation_but_not_its_durable_identity() {
     let resumed = session(&[Capability::TerminalOutput], &[])
         .with_execution_ownership(ownership.clone())
         .dispatch(
-        &Request::TerminalCommandInspect {
-            id: "e".repeat(32),
-            owner: COMMAND_OWNER.into(),
-            slot: "s1".into(),
-            generation: 0,
-            revision: 1,
-        },
-        &services(&host),
-    );
+            &Request::TerminalCommandInspect {
+                id: "e".repeat(32),
+                owner: COMMAND_OWNER.into(),
+                slot: "s1".into(),
+                generation: 0,
+                revision: 1,
+            },
+            &services(&host),
+        );
     assert!(matches!(resumed, Ok(Reply::TerminalCommand(_))));
     assert!(
         host.ledger.reached() == vec!["executions.inspect"],
@@ -926,17 +937,17 @@ fn pane_snapshot_fences_command_creation_but_not_its_durable_identity() {
     let output = session(&[Capability::TerminalOutput], &[])
         .with_execution_ownership(ownership)
         .dispatch(
-        &Request::TerminalCommandOutput {
-            id: "e".repeat(32),
-            owner: COMMAND_OWNER.into(),
-            slot: "s1".into(),
-            generation: 0,
-            revision: 1,
-            after: 0,
-            limit: 1,
-        },
-        &services(&host),
-    );
+            &Request::TerminalCommandOutput {
+                id: "e".repeat(32),
+                owner: COMMAND_OWNER.into(),
+                slot: "s1".into(),
+                generation: 0,
+                revision: 1,
+                after: 0,
+                limit: 1,
+            },
+            &services(&host),
+        );
     assert!(matches!(output, Ok(Reply::TerminalCommandOutput(_))));
     assert_eq!(
         host.ledger.reached(),
@@ -1516,37 +1527,45 @@ fn workspace_creation_cannot_bypass_environment_write_consent() {
         if capability == Capability::WorkspaceEnvironmentWrite.as_str()));
     assert!(host.ledger.reached().is_empty(), "denial must precede creation");
 
-    let authority = || Authority::new(
-        ExtensionName::new("sample").unwrap(),
-        Grant::new([Capability::WorkspaceControl, Capability::WorkspaceEnvironmentWrite]),
-        Vec::new(),
-    );
-    let mut wrong_workspace = Session::new(authority()).with_workspace_environment(
-        hl_extension::WorkspaceEnvironmentGrant {
+    let authority = || {
+        Authority::new(
+            ExtensionName::new("sample").unwrap(),
+            Grant::new([Capability::WorkspaceControl, Capability::WorkspaceEnvironmentWrite]),
+            Vec::new(),
+        )
+    };
+    let mut wrong_workspace =
+        Session::new(authority()).with_workspace_environment(hl_extension::WorkspaceEnvironmentGrant {
             read: Vec::new(),
             write: vec![hl_extension::WorkspaceEnvironmentSelector::Exact {
                 workspace: "sibling".into(),
                 name: "DATABASE_PASSWORD".into(),
             }],
-        },
-    );
-    assert!(matches!(wrong_workspace.dispatch(&request, &services(&host)), Err(Failure::Denied { .. })));
+        });
+    assert!(matches!(
+        wrong_workspace.dispatch(&request, &services(&host)),
+        Err(Failure::Denied { .. })
+    ));
     assert!(host.ledger.reached().is_empty(), "wrong selector must precede creation");
 
-    let mut scoped = Session::new(authority()).with_workspace_environment(
-        hl_extension::WorkspaceEnvironmentGrant {
-            read: Vec::new(),
-            write: vec![hl_extension::WorkspaceEnvironmentSelector::Exact {
-                workspace: "other".into(),
-                name: "DATABASE_PASSWORD".into(),
-            }],
-        },
-    );
+    let mut scoped = Session::new(authority()).with_workspace_environment(hl_extension::WorkspaceEnvironmentGrant {
+        read: Vec::new(),
+        write: vec![hl_extension::WorkspaceEnvironmentSelector::Exact {
+            workspace: "other".into(),
+            name: "DATABASE_PASSWORD".into(),
+        }],
+    });
     let Reply::WorkspaceConfiguration(created) = scoped
         .dispatch(&request, &services(&host))
-        .expect("independently consented initial environment") else { panic!("unexpected reply") };
+        .expect("independently consented initial environment")
+    else {
+        panic!("unexpected reply")
+    };
     assert_eq!(host.ledger.reached(), vec!["workspace.create"]);
-    assert!(created.environment.is_empty(), "write authority must not imply secret readback");
+    assert!(
+        created.environment.is_empty(),
+        "write authority must not imply secret readback"
+    );
     assert!(created.environment_redacted);
 }
 
@@ -2517,10 +2536,7 @@ fn every_call_succeeds_with_its_capability_and_fails_without_it() {
             capabilities.push(Capability::TerminalProcessControl);
         }
         let ownership = hl_extension::ExecutionOwnership::default();
-        ownership
-            .lock()
-            .expect("ownership")
-            .insert("e".repeat(32));
+        ownership.lock().expect("ownership").insert("e".repeat(32));
         let mut granted = session(&capabilities, &["logs"])
             .with_execution_ownership(ownership)
             .with_images(hl_extension::ImageGrant {
@@ -2621,21 +2637,16 @@ fn workspace_settings_update_cannot_bypass_exact_environment_patch_authority() {
     };
     let authority = Authority::new(
         ExtensionName::new("sample").unwrap(),
-        Grant::new([
-            Capability::WorkspaceConfigure,
-            Capability::WorkspaceEnvironmentWrite,
-        ]),
+        Grant::new([Capability::WorkspaceConfigure, Capability::WorkspaceEnvironmentWrite]),
         Vec::new(),
     );
-    let mut session = Session::new(authority).with_workspace_environment(
-        hl_extension::WorkspaceEnvironmentGrant {
-            read: Vec::new(),
-            write: vec![hl_extension::WorkspaceEnvironmentSelector::Exact {
-                workspace: "other".into(),
-                name: "DATABASE_PASSWORD".into(),
-            }],
-        },
-    );
+    let mut session = Session::new(authority).with_workspace_environment(hl_extension::WorkspaceEnvironmentGrant {
+        read: Vec::new(),
+        write: vec![hl_extension::WorkspaceEnvironmentSelector::Exact {
+            workspace: "other".into(),
+            name: "DATABASE_PASSWORD".into(),
+        }],
+    });
 
     let failure = session
         .dispatch(&request, &services(&host))
@@ -2841,10 +2852,7 @@ fn terminal_focus_can_select_a_tab_that_has_no_focusable_pane() {
     let host = Host::new();
     let mut session = session(&[Capability::TerminalFocus], &[]);
     let reply = session
-        .dispatch(
-            &Request::TerminalFocusTab { tab: "t1".into() },
-            &services(&host),
-        )
+        .dispatch(&Request::TerminalFocusTab { tab: "t1".into() }, &services(&host))
         .expect("focus tab");
     assert_eq!(reply, Reply::Done);
     assert_eq!(host.ledger.reached(), vec!["terminal.focus_tab"]);
@@ -2917,9 +2925,11 @@ fn pane_titles_are_utf8_bounded_and_refused_before_terminal_authority() {
 fn terminal_focus_grant_cannot_mutate_layout() {
     let host = Host::new();
     let mut session = session(&[Capability::TerminalFocus], &[]);
-    assert!(session
-        .dispatch(&Request::TerminalFocusPane { slot: "s1".into() }, &services(&host))
-        .is_ok());
+    assert!(
+        session
+            .dispatch(&Request::TerminalFocusPane { slot: "s1".into() }, &services(&host))
+            .is_ok()
+    );
     assert_eq!(host.ledger.reached(), ["terminal.focus"]);
     host.ledger.clear();
     assert!(matches!(
@@ -4413,7 +4423,10 @@ fn execution_stdin_is_bounded_authorized_and_explicitly_half_closed() {
         Err(Failure::Denied { detail, .. })
             if detail == "execution control is limited to processes created by this extension incarnation"
     ));
-    assert!(host.ledger.reached().is_empty(), "foreign input must be rejected before lookup");
+    assert!(
+        host.ledger.reached().is_empty(),
+        "foreign input must be rejected before lookup"
+    );
 
     let ownership = hl_extension::ExecutionOwnership::default();
     ownership.lock().expect("ownership").insert(id.clone());

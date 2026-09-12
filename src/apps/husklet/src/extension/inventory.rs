@@ -9,9 +9,8 @@ use std::{
 
 use hl_client::model::{Container, InspectContainer, List};
 use hl_extension::port::{
-    ContainerInventory, ContainerOutput, ContainerPublishedPort, ContainerSummary, ExecutionList, ExecutionSummary,
-    HostError,
-    ProcessList, ProcessPidIdentity, ProcessScope,
+    ContainerInventory, ContainerOutput, ContainerPublishedPort, ContainerSummary, ExecutionFaultCause, ExecutionList,
+    ExecutionResult, ExecutionSummary, HostError, ProcessList, ProcessPidIdentity, ProcessScope,
 };
 use sha2::{Digest, Sha256};
 
@@ -58,21 +57,15 @@ impl ContainerInventory for ContainerCatalog {
         Ok(inspection(&container))
     }
 
-    fn processes(
-        &self,
-        id: &str,
-        snapshot: Option<&str>,
-        after: u32,
-        limit: u16,
-    ) -> Result<ProcessList, HostError> {
+    fn processes(&self, id: &str, snapshot: Option<&str>, after: u32, limit: u16) -> Result<ProcessList, HostError> {
         if let Some(snapshot) = snapshot {
             let snapshots = self
                 .process_snapshots
                 .lock()
                 .map_err(|_| HostError::Failed("process snapshot store is unavailable".into()))?;
-            let held = snapshots.get(snapshot).ok_or_else(|| {
-                HostError::Conflict("container process snapshot is stale; restart pagination".into())
-            })?;
+            let held = snapshots
+                .get(snapshot)
+                .ok_or_else(|| HostError::Conflict("container process snapshot is stale; restart pagination".into()))?;
             if held.container_id != id {
                 return Err(HostError::Conflict(
                     "container process snapshot belongs to another container".into(),
@@ -140,14 +133,26 @@ impl ContainerInventory for ContainerCatalog {
     fn executions(&self) -> Result<ExecutionList, HostError> {
         const LIMIT: usize = 1024;
         let client = self.bridge.client();
-        let catalogue = self.bridge.wait(client.executions().list(LIMIT as u16)).map_err(|error| failure(&error))?;
-        Ok(ExecutionList { executions: catalogue.executions.into_iter().map(execution_summary).collect(), truncated: catalogue.truncated })
+        let catalogue = self
+            .bridge
+            .wait(client.executions().list(LIMIT as u16))
+            .map_err(|error| failure(&error))?;
+        Ok(ExecutionList {
+            executions: catalogue.executions.into_iter().map(execution_summary).collect(),
+            truncated: catalogue.truncated,
+        })
     }
 
     fn execution_logs(&self, id: &str, stdout: bool, stderr: bool) -> Result<ContainerOutput, HostError> {
         let client = self.bridge.client();
-        let execution = self.bridge.wait(client.executions().inspect(id)).map_err(|error| failure(&error))?;
-        let logs = self.bridge.wait(client.executions().logs(id)).map_err(|error| failure(&error))?;
+        let execution = self
+            .bridge
+            .wait(client.executions().inspect(id))
+            .map_err(|error| failure(&error))?;
+        let logs = self
+            .bridge
+            .wait(client.executions().logs(id))
+            .map_err(|error| failure(&error))?;
         Ok(output(
             if stdout { logs.stdout } else { Vec::new() },
             if stderr { logs.stderr } else { Vec::new() },
@@ -190,29 +195,64 @@ impl ContainerInventory for ContainerCatalog {
 
     fn execution_wait(&self, id: &str, timeout_ms: u32) -> Result<ExecutionSummary, HostError> {
         let client = self.bridge.client();
-        self.bridge.wait(async {
-            tokio::time::timeout(Duration::from_millis(u64::from(timeout_ms)), client.executions().wait(id)).await
-        }).map_err(|_| HostError::Conflict(format!("execution {id} did not stop within {timeout_ms}ms")))?
+        self.bridge
+            .wait(async {
+                tokio::time::timeout(
+                    Duration::from_millis(u64::from(timeout_ms)),
+                    client.executions().wait(id),
+                )
+                .await
+            })
+            .map_err(|_| HostError::Conflict(format!("execution {id} did not stop within {timeout_ms}ms")))?
             .map_err(|error| failure(&error))?;
-        let execution = self.bridge.wait(client.executions().inspect(id)).map_err(|error| failure(&error))?;
+        let execution = self
+            .bridge
+            .wait(client.executions().inspect(id))
+            .map_err(|error| failure(&error))?;
         Ok(execution_summary(execution))
     }
 }
 
 fn execution_summary(execution: hl_client::model::ExecInspect) -> ExecutionSummary {
-        let command = std::iter::once(execution.process.entrypoint.clone())
-            .chain(execution.process.arguments.clone())
-            .filter(|part| !part.is_empty())
-            .collect();
-        ExecutionSummary {
-            id: execution.id,
-            container_id: execution.container_id,
-            running: execution.running,
-            exit_code: execution.exit_code,
-            pid: execution.pid,
-            command,
-            user: execution.process.user,
-        }
+    let command = std::iter::once(execution.process.entrypoint.clone())
+        .chain(execution.process.arguments.clone())
+        .filter(|part| !part.is_empty())
+        .collect();
+    ExecutionSummary {
+        id: execution.id,
+        container_id: execution.container_id,
+        running: execution.running,
+        exit_code: execution.exit_code,
+        result: execution.result.map(execution_result),
+        created_at_ms: Some(execution.created_at_ms),
+        started_at_ms: execution.started_at_ms,
+        finished_at_ms: execution.finished_at_ms,
+        pid: execution.pid,
+        command,
+        user: execution.process.user,
+    }
+}
+
+fn execution_result(result: hl_container::ExitStatus) -> ExecutionResult {
+    match result {
+        hl_container::ExitStatus::Code(code) => ExecutionResult::Code(code),
+        hl_container::ExitStatus::Signal(signal) => ExecutionResult::Signal(signal),
+        hl_container::ExitStatus::Fault { status, detail, reason } => ExecutionResult::Fault {
+            status,
+            detail,
+            reason: match reason {
+                hl_container::FaultCause::Unknown => ExecutionFaultCause::Unknown,
+                hl_container::FaultCause::Fetch => ExecutionFaultCause::Fetch,
+                hl_container::FaultCause::Memory => ExecutionFaultCause::Memory,
+                hl_container::FaultCause::Decode => ExecutionFaultCause::Decode,
+                hl_container::FaultCause::Unsupported => ExecutionFaultCause::Unsupported,
+                hl_container::FaultCause::Frozen => ExecutionFaultCause::Frozen,
+                hl_container::FaultCause::CacheEpoch => ExecutionFaultCause::CacheEpoch,
+                hl_container::FaultCause::Protocol => ExecutionFaultCause::Protocol,
+                hl_container::FaultCause::NativeFatal => ExecutionFaultCause::NativeFatal,
+            },
+        },
+    }
 }
 
 /// Per-stream wire bound. The client already bounds the HTTP response; this
@@ -287,7 +327,10 @@ fn process_snapshot(
     let mut truncated = titles.len() > PROCESS_COLUMNS || processes.len() > PROCESS_ROWS;
     titles.truncate(PROCESS_COLUMNS);
     processes.truncate(PROCESS_ROWS);
-    for value in titles.iter_mut().chain(processes.iter_mut().flat_map(|row| row.iter_mut())) {
+    for value in titles
+        .iter_mut()
+        .chain(processes.iter_mut().flat_map(|row| row.iter_mut()))
+    {
         if value.len() > PROCESS_CELL_BYTES {
             let mut end = PROCESS_CELL_BYTES;
             while !value.is_char_boundary(end) {
@@ -358,7 +401,9 @@ fn summary(container: &Container) -> ContainerSummary {
         state: container.state.clone(),
         created: container.created,
         generation: container.metadata.generation,
-        ports: container.ports.iter()
+        ports: container
+            .ports
+            .iter()
             .filter(|port| matches!(port.protocol.as_str(), "tcp" | "udp"))
             .take(64)
             .map(|port| ContainerPublishedPort {
@@ -388,23 +433,47 @@ fn inspection(container: &InspectContainer) -> ContainerSummary {
     }
 }
 
-fn inspected_ports(ports: &std::collections::BTreeMap<String, Option<Vec<hl_client::model::PortBinding>>>) -> Vec<ContainerPublishedPort> {
-    ports.iter().flat_map(|(declaration, bindings)| {
-        let Some((container, protocol)) = declaration.split_once('/') else { return Vec::new() };
-        let Ok(container) = container.parse::<u16>() else { return Vec::new() };
-        if !matches!(protocol, "tcp" | "udp") { return Vec::new() }
-        match bindings {
-            Some(bindings) if !bindings.is_empty() => bindings.iter().filter_map(|binding| {
-                binding.host_port.parse::<u16>().ok().map(|host| ContainerPublishedPort {
+fn inspected_ports(
+    ports: &std::collections::BTreeMap<String, Option<Vec<hl_client::model::PortBinding>>>,
+) -> Vec<ContainerPublishedPort> {
+    ports
+        .iter()
+        .flat_map(|(declaration, bindings)| {
+            let Some((container, protocol)) = declaration.split_once('/') else {
+                return Vec::new();
+            };
+            let Ok(container) = container.parse::<u16>() else {
+                return Vec::new();
+            };
+            if !matches!(protocol, "tcp" | "udp") {
+                return Vec::new();
+            }
+            match bindings {
+                Some(bindings) if !bindings.is_empty() => bindings
+                    .iter()
+                    .filter_map(|binding| {
+                        binding
+                            .host_port
+                            .parse::<u16>()
+                            .ok()
+                            .map(|host| ContainerPublishedPort {
+                                container,
+                                host: Some(host),
+                                host_ip: Some(binding.host_ip.clone()),
+                                protocol: protocol.to_owned(),
+                            })
+                    })
+                    .collect(),
+                _ => vec![ContainerPublishedPort {
                     container,
-                    host: Some(host),
-                    host_ip: Some(binding.host_ip.clone()),
+                    host: None,
+                    host_ip: None,
                     protocol: protocol.to_owned(),
-                })
-            }).collect(),
-            _ => vec![ContainerPublishedPort { container, host: None, host_ip: None, protocol: protocol.to_owned() }],
-        }
-    }).take(64).collect()
+                }],
+            }
+        })
+        .take(64)
+        .collect()
 }
 
 /// Converts `YYYY-MM-DDThh:mm:ss[.fraction][Z]` to whole seconds since the epoch.
@@ -441,8 +510,8 @@ fn civil_days(year: i64, month: i64, day: i64) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        OUTPUT_BYTES, PROCESS_CELL_BYTES, PROCESS_COLUMNS, PROCESS_ROWS, bounded, civil_days,
-        epoch_seconds, inspection, output, process_snapshot, summary,
+        OUTPUT_BYTES, PROCESS_CELL_BYTES, PROCESS_COLUMNS, PROCESS_ROWS, bounded, civil_days, epoch_seconds,
+        inspection, output, process_snapshot, summary,
     };
     use hl_client::model::{Container, InspectContainer};
     use hl_extension::port::{ContainerInventory as _, ContainerPublishedPort, HostError};
@@ -471,7 +540,15 @@ mod tests {
         assert_eq!(mapped.image, "ubuntu:24.04");
         assert_eq!(mapped.state, "running");
         assert_eq!(mapped.created, 1_700_000_000);
-        assert_eq!(mapped.ports, vec![ContainerPublishedPort { container: 5432, host: Some(15432), host_ip: Some("0.0.0.0".into()), protocol: "tcp".into() }]);
+        assert_eq!(
+            mapped.ports,
+            vec![ContainerPublishedPort {
+                container: 5432,
+                host: Some(15432),
+                host_ip: Some("0.0.0.0".into()),
+                protocol: "tcp".into()
+            }]
+        );
     }
 
     #[test]
@@ -519,7 +596,15 @@ mod tests {
         assert_eq!(mapped.name, "demo");
         assert_eq!(mapped.state, "exited");
         assert_eq!(mapped.created, 1_700_000_000, "the same instant the listing reports");
-        assert_eq!(mapped.ports, vec![ContainerPublishedPort { container: 5432, host: Some(15432), host_ip: Some("127.0.0.1".into()), protocol: "tcp".into() }]);
+        assert_eq!(
+            mapped.ports,
+            vec![ContainerPublishedPort {
+                container: 5432,
+                host: Some(15432),
+                host_ip: Some("127.0.0.1".into()),
+                protocol: "tcp".into()
+            }]
+        );
     }
 
     #[test]
@@ -613,7 +698,12 @@ mod tests {
                 let read = stream.read(&mut buffer).unwrap();
                 request.extend_from_slice(&buffer[..read]);
             }
-            write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}", body.len()).unwrap();
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            )
+            .unwrap();
             String::from_utf8(request).unwrap()
         }
 
@@ -623,24 +713,30 @@ mod tests {
         let id = "a".repeat(64);
         let expected = id.clone();
         let serving = std::thread::spawn(move || {
-            let inspect = format!(r#"{{"Id":"{expected}","Image":"alpine","Mounts":[],"Path":"/bin/sh","Args":[],"Name":"/worker","Created":"2023-11-14T22:13:20Z","State":{{"Status":"running","Running":true,"Paused":false,"Restarting":false,"OOMKilled":false,"Dead":false,"Pid":1,"ExitCode":0,"Error":"","StartedAt":"","FinishedAt":""}},"RestartCount":0,"Config":{{"ExposedPorts":{{}},"Labels":{{}},"StopSignal":"SIGTERM","StopTimeout":10}},"HostConfig":{{"NetworkMode":"bridge","AutoRemove":false,"RestartPolicy":{{"Name":"no","MaximumRetryCount":0}}}},"NetworkSettings":{{"Ports":{{}},"Networks":{{}}}}}}"#);
+            let inspect = format!(
+                r#"{{"Id":"{expected}","Image":"alpine","Mounts":[],"Path":"/bin/sh","Args":[],"Name":"/worker","Created":"2023-11-14T22:13:20Z","State":{{"Status":"running","Running":true,"Paused":false,"Restarting":false,"OOMKilled":false,"Dead":false,"Pid":1,"ExitCode":0,"Error":"","StartedAt":"","FinishedAt":""}},"RestartCount":0,"Config":{{"ExposedPorts":{{}},"Labels":{{}},"StopSignal":"SIGTERM","StopTimeout":10}},"HostConfig":{{"NetworkMode":"bridge","AutoRemove":false,"RestartPolicy":{{"Name":"no","MaximumRetryCount":0}}}},"NetworkSettings":{{"Ports":{{}},"Networks":{{}}}}}}"#
+            );
             let first = exchange(&listener, &inspect);
             let second = exchange(&listener, r#"{"Titles":["PID","COMM"],"Processes":[["1","init"]]}"#);
             (first, second)
         });
         let catalogue = super::ContainerCatalog::new(Arc::new(super::super::Bridge::new(socket).unwrap()));
         let snapshot = catalogue.processes("worker", None, 0, 128).unwrap();
-        let continued = catalogue
-            .processes(&id, Some(&snapshot.snapshot), 0, 128)
-            .unwrap();
+        let continued = catalogue.processes(&id, Some(&snapshot.snapshot), 0, 128).unwrap();
         assert_eq!(continued.snapshot, snapshot.snapshot);
         assert!(matches!(
             catalogue.processes(&id, Some(&"f".repeat(64)), 0, 128),
             Err(HostError::Conflict(detail)) if detail.contains("stale")
         ));
         let (inspect_request, top_request) = serving.join().unwrap();
-        assert!(inspect_request.starts_with("GET /v1.43/containers/worker/json?size=false HTTP/1.1"), "{inspect_request}");
-        assert!(top_request.starts_with(&format!("GET /v1.43/containers/{id}/top?ps_args=")), "{top_request}");
+        assert!(
+            inspect_request.starts_with("GET /v1.43/containers/worker/json?size=false HTTP/1.1"),
+            "{inspect_request}"
+        );
+        assert!(
+            top_request.starts_with(&format!("GET /v1.43/containers/{id}/top?ps_args=")),
+            "{top_request}"
+        );
         assert_eq!(snapshot.container_id, id);
     }
 }

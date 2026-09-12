@@ -989,6 +989,38 @@ export function workspace(session, { signal } = {}) {
         if (execution.id !== id) {
             throw new TypeError(`host returned ${operation} for execution ${execution.id}, expected ${id}; no execution state was assumed`);
         }
+        const timestamp = (value, name) => {
+            if (value != null && (!Number.isSafeInteger(value) || value < 0))
+                throw new TypeError(`host returned ${operation} with an invalid ${name}`);
+        };
+        timestamp(execution.created_at_ms, 'creation timestamp');
+        timestamp(execution.started_at_ms, 'start timestamp');
+        timestamp(execution.finished_at_ms, 'finish timestamp');
+        if (execution.result == null) {
+            if (execution.finished_at_ms != null)
+                throw new TypeError(`host returned ${operation} with a finish time but no terminal result`);
+        }
+        else {
+            if (execution.running || execution.finished_at_ms == null)
+                throw new TypeError(`host returned ${operation} with an impossible terminal result state`);
+            const flattened = execution.result.kind === 'code'
+                ? execution.result.value
+                : execution.result.kind === 'signal'
+                    ? 128 + execution.result.value
+                    : execution.result.value.status;
+            if (execution.exit_code !== flattened)
+                throw new TypeError(`host returned ${operation} with contradictory exit status`);
+        }
+        if (execution.running && (execution.started_at_ms == null || execution.finished_at_ms != null))
+            throw new TypeError(`host returned ${operation} with an impossible running lifecycle`);
+        if (execution.created_at_ms != null &&
+            execution.started_at_ms != null &&
+            execution.started_at_ms < execution.created_at_ms)
+            throw new TypeError(`host returned ${operation} with a start before creation`);
+        if (execution.created_at_ms != null &&
+            execution.finished_at_ms != null &&
+            execution.finished_at_ms < execution.created_at_ms)
+            throw new TypeError(`host returned ${operation} with a finish before creation`);
         return execution;
     };
     const done = async (name, argument) => expect(await session.call(name, argument), 'done');
