@@ -30,6 +30,7 @@ fn standard() -> gtk::Button {
     let widget = sized(action());
     let content = axis::row(0);
     content.append(&slot::emblem_image());
+    content.append(&slot::activity_spinner());
     content.append(&slot::caption_label());
     widget.set_child(Some(&content));
     widget

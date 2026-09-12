@@ -170,9 +170,45 @@ fn a_described_interface_reaches_the_toolkit_and_only_its_changes_do() {
     a_rebound_handler_reports_the_new_identity();
     a_select_follows_its_stable_value();
     button_sizes_allocate_their_semantic_metrics();
+    a_busy_button_preserves_its_label_and_cannot_be_reenabled();
     clearing_button_size_restores_the_default();
     rebinding_a_table_retires_its_previous_source();
     a_theme_installs_before_a_description_is_rendered();
+}
+
+fn a_busy_button_preserves_its_label_and_cannot_be_reenabled() {
+    let button = |busy: bool, icon: &str| {
+        Element::button("Saving…", EventId::new("save"))
+            .key("save")
+            .prop(Prop::Icon, PropValue::text(icon))
+            .prop(Prop::Enabled, PropValue::Flag(true))
+            .prop(Prop::Busy, PropValue::Flag(busy))
+    };
+    let mut session = Session::new();
+    session.render(&button(true, "document-save-symbolic"));
+    let widget = session.tagged(Tag::Button).expect("busy button remains reachable");
+    assert!(!widget.is_sensitive(), "busy action accepts a duplicate invocation");
+    assert!(session.labels().iter().any(|label| label == "Saving…"));
+    let spinner = session
+        .widgets()
+        .into_iter()
+        .find_map(|widget| widget.downcast::<gtk::Spinner>().ok())
+        .expect("busy action owns activity");
+    assert!(spinner.is_visible() && spinner.is_spinning());
+
+    session.render(&button(true, "document-send-symbolic"));
+    let icon = session
+        .widgets()
+        .into_iter()
+        .find_map(|widget| widget.downcast::<gtk::Image>().ok())
+        .expect("busy action retains its emblem slot");
+    assert!(!icon.is_visible(), "an icon update displaced busy activity");
+    assert!(!session.tagged(Tag::Button).unwrap().is_sensitive());
+
+    session.render(&button(false, "document-send-symbolic"));
+    assert!(session.tagged(Tag::Button).unwrap().is_sensitive());
+    assert!(!spinner.is_spinning());
+    assert!(icon.is_visible(), "the action icon did not return after completion");
 }
 
 fn clearing_button_size_restores_the_default() {

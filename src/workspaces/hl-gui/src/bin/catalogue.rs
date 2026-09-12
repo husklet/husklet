@@ -103,6 +103,10 @@ fn prop_notes(tag: Tag) -> String {
                 "Enabled",
                 "When false, prevents invocation. Explain the unmet prerequisite in nearby text.",
             ),
+            (
+                "Busy",
+                "When true, replaces the leading icon with activity, prevents invocation, and keeps the action label visible.",
+            ),
         ],
         Tag::IconButton => &[
             (

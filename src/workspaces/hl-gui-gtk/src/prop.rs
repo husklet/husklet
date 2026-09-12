@@ -18,17 +18,22 @@ pub(crate) fn apply(widget: &gtk::Widget, node: &Node, prop: Prop, value: &PropV
         Prop::Placeholder => text::placeholder(widget, value),
         Prop::Icon => {
             text::icon(widget, value);
+            if node.tag == Tag::Button && node.prop(Prop::Busy).and_then(PropValue::as_flag).unwrap_or(false) {
+                if let Some(emblem) = crate::component::slot::emblem(widget) {
+                    emblem.set_visible(false);
+                }
+            }
             if value.as_text().is_none() {
                 feedback::tone(widget, node, node.prop(Prop::Tone).unwrap_or(&PropValue::Nothing));
             }
         }
         Prop::Uri => text::uri(widget, value),
-        Prop::Enabled => widget.set_sensitive(value.as_flag().unwrap_or(true)),
+        Prop::Enabled => enabled(widget, node, value),
         Prop::Visible => widget.set_visible(value.as_flag().unwrap_or(true)),
         Prop::Selected | Prop::Checked => checked(widget, value),
         Prop::Indeterminate => indeterminate(widget, value),
         Prop::Expanded => expanded(widget, value),
-        Prop::Busy => busy(widget, value),
+        Prop::Busy => busy(widget, node, value),
         Prop::Secret => secret(widget, value),
         // Product-authored semantic metadata. It must survive in the retained
         // tree, but has no visual state for a toolkit adapter to manufacture.
@@ -77,6 +82,11 @@ fn tooltip(widget: &gtk::Widget, value: &PropValue) {
     widget.set_tooltip_text(value.as_text());
 }
 
+fn enabled(widget: &gtk::Widget, node: &Node, value: &PropValue) {
+    let busy = node.tag == Tag::Button && node.prop(Prop::Busy).and_then(PropValue::as_flag).unwrap_or(false);
+    widget.set_sensitive(value.as_flag().unwrap_or(true) && !busy);
+}
+
 fn checked(widget: &gtk::Widget, value: &PropValue) {
     let state = value.as_flag().unwrap_or(false);
     if let Some(check) = widget.downcast_ref::<gtk::CheckButton>() {
@@ -109,14 +119,36 @@ fn expanded(widget: &gtk::Widget, value: &PropValue) {
     }
 }
 
-fn busy(widget: &gtk::Widget, value: &PropValue) {
-    let Some(spinner) = widget.downcast_ref::<gtk::Spinner>() else {
-        return;
-    };
-    if value.as_flag().unwrap_or(true) {
+fn busy(widget: &gtk::Widget, node: &Node, value: &PropValue) {
+    let state = value.as_flag().unwrap_or(node.tag == Tag::Spinner);
+    let spinner = widget
+        .downcast_ref::<gtk::Spinner>()
+        .cloned()
+        .or_else(|| crate::component::slot::activity(widget));
+    let Some(spinner) = spinner else { return };
+    if state {
         spinner.start();
     } else {
         spinner.stop();
+    }
+    spinner.set_visible(state);
+
+    if node.tag == Tag::Button {
+        widget.update_state(&[gtk::accessible::State::Busy(state)]);
+        if let Some(emblem) = crate::component::slot::emblem(widget) {
+            let has_icon = node
+                .prop(Prop::Icon)
+                .and_then(PropValue::as_text)
+                .is_some_and(|icon| !icon.is_empty());
+            emblem.set_visible(!state && has_icon);
+        }
+        let enabled = node.prop(Prop::Enabled).and_then(PropValue::as_flag).unwrap_or(true);
+        widget.set_sensitive(!state && enabled);
+        if state {
+            widget.add_css_class("hl-busy");
+        } else {
+            widget.remove_css_class("hl-busy");
+        }
     }
 }
 

@@ -86,3 +86,9 @@ test('Button documents a compact reset beside the value it affects', () => {
     ),
   );
 });
+
+test('Button documents a labelled non-invokable busy state', () => {
+  const frame = host().render(h(ButtonWorkbench));
+  const buttons = propsFor(frame.patches, 'Button');
+  assert(buttons.some((props) => props.Label?.Text === 'Saving…' && props.Busy?.Flag === true));
+});

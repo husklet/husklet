@@ -20,6 +20,8 @@ const CAPTION: &str = "hl-caption";
 const DETAIL: &str = "hl-detail";
 /// The image a composite shows its own `Icon` in.
 const EMBLEM: &str = "hl-emblem";
+/// The activity indicator a busy action reveals in place of its emblem.
+const ACTIVITY: &str = "hl-activity";
 /// The editable a composite holds its own `Value` in.
 const FIELD: &str = "hl-field";
 
@@ -44,6 +46,14 @@ pub(crate) fn emblem_image() -> gtk::Image {
     image.set_visible(false);
     image.add_css_class(EMBLEM);
     image
+}
+
+/// A dormant activity indicator embedded in an action's content row.
+pub(crate) fn activity_spinner() -> gtk::Spinner {
+    let spinner = gtk::Spinner::new();
+    spinner.set_visible(false);
+    spinner.add_css_class(ACTIVITY);
+    spinner
 }
 
 /// Marks an editable as the slot its composite's `Value` belongs in.
@@ -74,6 +84,11 @@ pub(crate) fn detail(widget: &gtk::Widget) -> Option<gtk::Label> {
 /// The icon slot of a composite, when it has one.
 pub(crate) fn emblem(widget: &gtk::Widget) -> Option<gtk::Image> {
     descend(widget, EMBLEM)?.downcast().ok()
+}
+
+/// The activity indicator owned by a composite action, when it has one.
+pub(crate) fn activity(widget: &gtk::Widget) -> Option<gtk::Spinner> {
+    descend(widget, ACTIVITY)?.downcast().ok()
 }
 
 /// The editable slot of a composite, when it has one.

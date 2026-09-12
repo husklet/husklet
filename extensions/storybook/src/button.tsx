@@ -133,10 +133,11 @@ export function ButtonWorkbench() {
             onFocus={() => setEvent('Focus state visible')}
           />
           <Button label="Disabled" enabled={false} />
+          <Button label="Saving…" busy variant="filled" tone="accent" />
         </Row>
         <Text
           label={
-            'Hover, pressed, and keyboard focus are rendered by the native host.\nInteract with the live controls above.'
+            'Busy actions retain their label, show activity, and cannot run twice. Hover, pressed, and keyboard focus are rendered by the native host.'
           }
           color="text-dim"
           wrap

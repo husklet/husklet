@@ -413,6 +413,18 @@ mod unix {
             let _ = surface.reports().drain();
         }
         if story == "Button" {
+            let busy = find::<gtk::Button>(&root, |button| button_caption(button).as_deref() == Some("Saving…"));
+            assert!(!busy.is_sensitive(), "busy Button remains invokable");
+            assert!(
+                busy.has_css_class("hl-busy"),
+                "busy Button omits its visible state marker"
+            );
+            let activity = descendants::<gtk::Spinner>(busy.upcast_ref())
+                .into_iter()
+                .find(|spinner| spinner.has_css_class("hl-activity"))
+                .expect("busy Button owns an activity indicator");
+            assert!(activity.is_spinning(), "busy Button activity is not running");
+            assert!(activity.is_visible(), "busy Button activity is not visible");
             for (class, expected) in [("size-small", 28), ("size-medium", 36), ("size-large", 44)] {
                 let heights = descendants::<gtk::Button>(&root)
                     .into_iter()
@@ -1051,9 +1063,7 @@ mod unix {
                 bounded.width(),
                 root.width()
             );
-            let action = find::<gtk::Expander>(&root, |expander| {
-                expander.label().as_deref() == Some("More actions")
-            });
+            let action = find::<gtk::Expander>(&root, |expander| expander.label().as_deref() == Some("More actions"));
             assert!(action.has_css_class("variant-outline"));
             assert_eq!(action.height(), 28, "action disclosure is one compact control row");
             assert!(
