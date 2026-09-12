@@ -1618,6 +1618,13 @@ pub trait WorkspaceFiles {
     /// Returns a host failure.
     fn read(&self, path: &RelativePath) -> Result<Vec<u8>, HostError>;
 
+    /// Reads a symbolic link's bounded, uninterpreted target bytes without
+    /// following it. This lets repository tools index links without granting
+    /// access to whatever they name.
+    fn read_link(&self, _path: &RelativePath) -> Result<Vec<u8>, HostError> {
+        Err(HostError::Unsupported("symbolic-link reads are unavailable".into()))
+    }
+
     fn read_range(
         &self,
         _path: &RelativePath,

@@ -832,6 +832,7 @@ impl Session {
             | Request::FilesystemList { .. }
             | Request::FilesystemListPage { .. }
             | Request::FilesystemRead { .. }
+            | Request::FilesystemReadLink { .. }
             | Request::FilesystemReadRange { .. }
             | Request::FilesystemReadRanges { .. }
             | Request::FilesystemStat { .. }
@@ -2028,6 +2029,10 @@ impl Session {
             Request::FilesystemRead { path } => {
                 let port = self.peer.authority().port(Capability::FilesystemRead, services.files)?;
                 Ok(Reply::Contents(port.read(path)?))
+            }
+            Request::FilesystemReadLink { path } => {
+                let port = self.peer.authority().port(Capability::FilesystemRead, services.files)?;
+                Ok(Reply::Contents(port.read_link(path)?))
             }
             Request::FilesystemReadRange {
                 path,

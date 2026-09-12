@@ -499,6 +499,10 @@ pub enum Request {
     FilesystemRead {
         path: RelativePath,
     },
+    /// Reads the link text itself without following it.
+    FilesystemReadLink {
+        path: RelativePath,
+    },
     FilesystemReadRange {
         path: RelativePath,
         offset: u64,
@@ -711,6 +715,7 @@ impl Request {
             | Self::FilesystemList { .. }
             | Self::FilesystemListPage { .. }
             | Self::FilesystemRead { .. }
+            | Self::FilesystemReadLink { .. }
             | Self::FilesystemReadRange { .. }
             | Self::FilesystemReadRanges { .. }
             | Self::FilesystemStat { .. } => Capability::FilesystemRead,
@@ -748,6 +753,7 @@ impl Request {
             Self::FilesystemList { path }
             | Self::FilesystemListPage { path, .. }
             | Self::FilesystemRead { path }
+            | Self::FilesystemReadLink { path }
             | Self::FilesystemReadRange { path, .. }
             | Self::FilesystemStat { path }
             | Self::FilesystemWrite { path, .. }

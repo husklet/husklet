@@ -1938,6 +1938,12 @@ fn calls() -> Vec<(Request, Capability)> {
             Capability::FilesystemRead,
         ),
         (
+            Request::FilesystemReadLink {
+                path: path("logs/current"),
+            },
+            Capability::FilesystemRead,
+        ),
+        (
             Request::FilesystemReadRange {
                 path: path("logs/app.log"),
                 offset: 0,

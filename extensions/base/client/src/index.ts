@@ -3387,6 +3387,8 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
         }
       },
       read: async (path) => expect(await session.call('filesystem_read', { path }), 'contents'),
+      readLink: async (path) =>
+        expect(await session.call('filesystem_read_link', { path }), 'contents'),
       readRange: async (path, offset = 0, limit = 65536, observed = null) => {
         const [boundedOffset, boundedLimit] = exactFileRange(offset, limit);
         const range = expect(
@@ -6039,6 +6041,7 @@ export const protocolCoverage = Object.freeze({
       'listPage',
       'walk',
       'read',
+      'readLink',
       'readRange',
       'readRanges',
       'readChunks',

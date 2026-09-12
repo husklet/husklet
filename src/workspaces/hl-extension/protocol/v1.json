@@ -8646,6 +8646,10 @@
     },
     {
       "capability": "filesystem:read",
+      "request": "filesystem_read_link"
+    },
+    {
+      "capability": "filesystem:read",
       "request": "filesystem_read_range"
     },
     {
@@ -9181,6 +9185,10 @@
     {
       "reply": "contents",
       "request": "filesystem_read"
+    },
+    {
+      "reply": "contents",
+      "request": "filesystem_read_link"
     },
     {
       "reply": "file_range",
@@ -12821,6 +12829,22 @@
           }
         },
         {
+          "name": "filesystem_read_link",
+          "payload": {
+            "fields": [
+              {
+                "name": "path",
+                "optional": false,
+                "schema": {
+                  "kind": "ref",
+                  "name": "RelativePath"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
           "name": "filesystem_read_range",
           "payload": {
             "fields": [
@@ -14510,7 +14534,7 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:fa55eb1ecb386626",
+  "source_fingerprint": "fnv1a64:306ef83d6b2892ae",
   "specification_version": 1,
   "topics": [
     {

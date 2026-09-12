@@ -1917,6 +1917,8 @@ export interface WorkspaceApi {
         }): AsyncGenerator<FileEntry, void, void>;
         stat(path: string): Promise<FileEntry>;
         read(path: string): Promise<number[]>;
+        /** Reads a symbolic link's raw target bytes without following the target. */
+        readLink(path: string): Promise<number[]>;
         readRange(path: string, offset?: number, limit?: number, observed?: string | null): Promise<FileRange>;
         /** Reads up to 64 confined ranges with one 64 KiB aggregate host round trip. */
         readRanges(ranges: Array<{

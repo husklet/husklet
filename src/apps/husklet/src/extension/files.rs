@@ -644,6 +644,21 @@ impl WorkspaceFiles for WorkspaceDirectory {
         read_bounded(file).map_err(|error| absence(path, &error))
     }
 
+    fn read_link(&self, path: &RelativePath) -> Result<Vec<u8>, HostError> {
+        let entry = self.pinned(path)?;
+        let target = rustix::fs::readlinkat(&entry.directory, &entry.name, Vec::new())
+            .map_err(io::Error::from)
+            .map_err(|error| absence(path, &error))?;
+        let bytes = target.as_bytes().to_vec();
+        if bytes.len() > RelativePath::LIMIT {
+            return Err(HostError::Failed(format!(
+                "{path}: symbolic-link target exceeds the {}-byte limit",
+                RelativePath::LIMIT
+            )));
+        }
+        Ok(bytes)
+    }
+
     fn read_range(
         &self,
         path: &RelativePath,
@@ -687,12 +702,20 @@ impl WorkspaceFiles for WorkspaceDirectory {
     }
 
     fn stat(&self, path: &RelativePath) -> Result<Entry, HostError> {
-        let metadata = self.opened(path)?.metadata().map_err(|error| absence(path, &error))?;
+        let entry = self.pinned(path)?;
+        let status = rustix::fs::statat(
+            &entry.directory,
+            &entry.name,
+            rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+        )
+        .map_err(io::Error::from)
+        .map_err(|error| absence(path, &error))?;
         Ok(Entry {
             path: path.clone(),
-            directory: metadata.is_dir(),
-            size: metadata.len(),
-            identity: Some(file_identity(&metadata)),
+            directory: rustix::fs::FileType::from_raw_mode(status.st_mode)
+                == rustix::fs::FileType::Directory,
+            size: status.st_size.try_into().unwrap_or(u64::MAX),
+            identity: Some(status_identity(&status)),
         })
     }
 
@@ -1461,7 +1484,19 @@ mod tests {
         // upstream of this adapter can refuse it.
         let escape = path("escape.txt");
         assert!(matches!(files.read(&escape), Err(HostError::Conflict(_))));
-        assert!(matches!(files.stat(&escape), Err(HostError::Conflict(_))));
+        let link = files.stat(&escape).expect("link metadata");
+        assert!(!link.directory);
+        assert_eq!(link.size, secret.as_os_str().as_encoded_bytes().len() as u64);
+        assert_eq!(
+            files.read_link(&escape).expect("link text"),
+            secret.as_os_str().as_encoded_bytes()
+        );
+        let inventory = files
+            .inventory(&[hl_extension::FilesystemSelector::Subtree {
+                subtree: path("escape.txt"),
+            }])
+            .expect("a link does not break scoped inventory");
+        assert_eq!(inventory.entries, vec![link]);
         assert!(matches!(files.write(&escape, b"owned"), Err(HostError::Conflict(_))));
         assert!(matches!(
             files.write(&path("local-link.txt"), b"owned"),

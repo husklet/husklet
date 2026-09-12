@@ -1,5 +1,5 @@
 // Generated from Rust hl-extension protocol/v1.json. Do not edit.
-// Protocol artifact fnv1a64:35600c53825a5275
+// Protocol artifact fnv1a64:3e4ae10aab3a2456
 export const PROTOCOL_SPECIFICATION_VERSION = 1;
 export const PROTOCOL_VERSION = 1;
 export const PROTOCOL_BOUNDS = Object.freeze({
@@ -421,6 +421,7 @@ export const PROTOCOL_REPLIES = Object.freeze({
   "filesystem_list": "entries",
   "filesystem_list_page": "directory_page",
   "filesystem_read": "contents",
+  "filesystem_read_link": "contents",
   "filesystem_read_range": "file_range",
   "filesystem_read_ranges": "file_ranges",
   "filesystem_stat": "entry",
@@ -557,6 +558,7 @@ export const PROTOCOL_REQUEST_CAPABILITIES = Object.freeze({
   "filesystem_list": "filesystem:read",
   "filesystem_list_page": "filesystem:read",
   "filesystem_read": "filesystem:read",
+  "filesystem_read_link": "filesystem:read",
   "filesystem_read_range": "filesystem:read",
   "filesystem_read_ranges": "filesystem:read",
   "filesystem_stat": "filesystem:read",
@@ -12017,6 +12019,22 @@ const roots = {
       },
       {
         "name": "filesystem_read",
+        "payload": {
+          "fields": [
+            {
+              "name": "path",
+              "optional": false,
+              "schema": {
+                "kind": "ref",
+                "name": "RelativePath"
+              }
+            }
+          ],
+          "kind": "struct"
+        }
+      },
+      {
+        "name": "filesystem_read_link",
         "payload": {
           "fields": [
             {

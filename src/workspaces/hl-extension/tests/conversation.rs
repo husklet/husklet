@@ -310,6 +310,14 @@ impl WorkspaceFiles for Host {
         Ok(())
     }
 
+    fn read_link(&self, path: &RelativePath) -> Result<Vec<u8>, HostError> {
+        if path.as_str() == "src/current" {
+            Ok(b"generated/current.ts".to_vec())
+        } else {
+            Err(HostError::Absent(path.to_string()))
+        }
+    }
+
     fn create_observed(&self, path: &RelativePath, contents: &[u8]) -> Result<String, HostError> {
         let mut file = self.filesystem_file.borrow_mut();
         if file.is_some() {
@@ -344,6 +352,54 @@ impl WorkspaceFiles for Host {
         *file = None;
         Ok(())
     }
+}
+
+#[test]
+fn a_scoped_symlink_target_crosses_the_real_socket_without_following_it() {
+    let (host_end, extension_end) = connected_pair();
+    let host = Host::new();
+    let mut session = Session::new(Authority::new(
+        ExtensionName::new("indexer").expect("name"),
+        Grant::new([Capability::FilesystemRead]),
+        Vec::new(),
+    ))
+    .with_filesystem(hl_extension::FilesystemGrant {
+        read: vec![hl_extension::FilesystemSelector::Exact {
+            exact: RelativePath::new("src/current").expect("read root"),
+        }],
+        ..hl_extension::FilesystemGrant::default()
+    });
+    let mut extension = hl_extension::Wire::new(extension_end);
+    let mut server = hl_extension::Wire::new(host_end);
+    let request = Request::FilesystemReadLink {
+        path: RelativePath::new("src/current").expect("path"),
+    };
+
+    extension
+        .send(&codec::request(&request).expect("request frame"))
+        .expect("request sent");
+    let decoded = codec::read_request(&server.receive().expect("request crossed socket")).expect("request decoded");
+    let reply = session.dispatch(&decoded, &services(&host)).expect("authorized link read");
+    server
+        .send(&codec::reply(&reply).expect("reply frame"))
+        .expect("reply sent");
+
+    assert_eq!(
+        codec::read_reply(&extension.receive().expect("reply crossed socket")).expect("reply decoded"),
+        Reply::Contents(b"generated/current.ts".to_vec())
+    );
+    assert_eq!(
+        session.dispatch(
+            &Request::FilesystemReadLink {
+                path: RelativePath::new("private/key").expect("path"),
+            },
+            &services(&host),
+        ),
+        Err(Failure::Denied {
+            capability: Capability::FilesystemRead.as_str().into(),
+            detail: "path is outside the extension's consented resource scope".into(),
+        })
+    );
 }
 
 #[test]

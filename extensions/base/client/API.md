@@ -192,6 +192,7 @@ order; the JavaScript client's checks are never treated as a security boundary.
 - `host.files.list(...)` — `filesystem_list`, requires `filesystem:read`.
 - `host.files.listPage(...)` — `filesystem_list_page`, requires `filesystem:read`.
 - `host.files.read(...)` — `filesystem_read`, requires `filesystem:read`.
+- `host.files.readLink(...)` — `filesystem_read_link`, requires `filesystem:read`.
 - `host.files.readRange(...)` — `filesystem_read_range`, requires `filesystem:read`.
 - `host.files.readRanges(...)` — `filesystem_read_ranges`, requires `filesystem:read`.
 - `host.files.stat(...)` — `filesystem_stat`, requires `filesystem:read`.

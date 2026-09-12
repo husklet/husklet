@@ -149,6 +149,7 @@ const REQUEST_TO_REPLY: &[(&str, &str)] = &[
     ("filesystem_list", "entries"),
     ("filesystem_list_page", "directory_page"),
     ("filesystem_read", "contents"),
+    ("filesystem_read_link", "contents"),
     ("filesystem_read_range", "file_range"),
     ("filesystem_read_ranges", "file_ranges"),
     ("filesystem_stat", "entry"),
@@ -255,6 +256,7 @@ fn request_capability(request: &str) -> Capability {
         | "filesystem_list"
         | "filesystem_list_page"
         | "filesystem_read"
+        | "filesystem_read_link"
         | "filesystem_read_range"
         | "filesystem_read_ranges"
         | "filesystem_stat" => Capability::FilesystemRead,
