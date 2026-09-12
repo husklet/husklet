@@ -805,10 +805,20 @@ export declare class JsonLineDecodeError extends TypeError {
     readonly cause: unknown;
 }
 export declare class TerminalOperationError extends Error {
-    readonly operation: 'open-tab';
+    readonly operation: 'open-tab' | 'write-input';
     readonly result: Readonly<{
         tab: string;
         title: string;
+    }> | Readonly<{
+        slot: string;
+        generation: number;
+        revision: number;
+        written: true;
+        after?: Readonly<{
+            kind: 'terminal' | 'ui';
+            generation: number;
+            revision: number;
+        }>;
     }>;
     readonly cause: unknown;
 }

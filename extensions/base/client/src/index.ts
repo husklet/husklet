@@ -3984,21 +3984,23 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
     });
     let timer;
     let abort;
+    let inputWritten = false;
     try {
       const before = await scoped.terminal.read(slot, lines);
       if (before.generation !== generation || before.revision !== revision) {
         throw new Error('terminal screen cursor changed before input authority');
       }
       await scoped.terminal.writeInput(slot, generation, revision, contents);
+      inputWritten = true;
       const deadline = Date.now() + timeoutMs;
-      const aborted = new Promise((_, reject) => {
-        abort = () => reject(outputAbort(signal));
-        signal?.addEventListener('abort', abort, { once: true });
-      });
       for (;;) {
         if (!announced) {
           const remaining = deadline - Date.now();
           if (remaining < 1) return { changed: false, before };
+          const aborted = new Promise((_, reject) => {
+            abort = () => reject(outputAbort(signal));
+            signal?.addEventListener('abort', abort, { once: true });
+          });
           const change = await Promise.race([
             new Promise((resolve) => {
               wake = resolve;
@@ -4008,6 +4010,8 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
             }),
             aborted,
           ]);
+          signal?.removeEventListener('abort', abort!);
+          abort = undefined;
           clearTimeout(timer);
           if (change === null) return { changed: false, before };
         } else {
@@ -4023,6 +4027,15 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
         }
         return { changed: true, before, after: readable ?? after };
       }
+    } catch (cause) {
+      if (inputWritten && !(cause instanceof TerminalOperationError)) {
+        throw new TerminalOperationError(
+          'write-input',
+          { slot, generation, revision, written: true },
+          cause,
+        );
+      }
+      throw cause;
     } finally {
       clearTimeout(timer);
       if (abort) signal?.removeEventListener('abort', abort);
@@ -4090,22 +4103,41 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
     if (after.snapshot.generation !== before.generation) {
       return { ...first, after, settled: false, replaced: true };
     }
-    for (;;) {
-      const remaining = deadline - Date.now();
-      if (remaining < 1) return { ...first, after, settled: false, replaced: false };
-      const window = Math.min(quietMs, remaining);
-      const next = await api.terminal.waitForText(after.snapshot.slot, after.snapshot, {
-        lines,
-        timeoutMs: window,
-        signal,
-      });
-      if (!next.changed) {
-        return { ...first, after, settled: window === quietMs, replaced: false };
+    try {
+      for (;;) {
+        const remaining = deadline - Date.now();
+        if (remaining < 1) return { ...first, after, settled: false, replaced: false };
+        const window = Math.min(quietMs, remaining);
+        const next = await api.terminal.waitForText(after.snapshot.slot, after.snapshot, {
+          lines,
+          timeoutMs: window,
+          signal,
+        });
+        if (!next.changed) {
+          return { ...first, after, settled: window === quietMs, replaced: false };
+        }
+        after = next.readable;
+        if (after.snapshot.generation !== before.generation) {
+          return { ...first, after, settled: false, replaced: true };
+        }
       }
-      after = next.readable;
-      if (after.snapshot.generation !== before.generation) {
-        return { ...first, after, settled: false, replaced: true };
-      }
+    } catch (cause) {
+      if (cause instanceof TerminalOperationError) throw cause;
+      throw new TerminalOperationError(
+        'write-input',
+        {
+          slot: before.slot,
+          generation: before.generation,
+          revision: before.revision,
+          written: true,
+          after: {
+            kind: after.kind,
+            generation: after.snapshot.generation,
+            revision: after.snapshot.revision,
+          },
+        },
+        cause,
+      );
     }
   };
   api.terminal.spawnAndWait = async (

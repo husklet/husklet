@@ -772,8 +772,16 @@ export declare class JsonLineDecodeError extends TypeError {
 }
 
 export declare class TerminalOperationError extends Error {
-  readonly operation: 'open-tab';
-  readonly result: Readonly<{ tab: string; title: string }>;
+  readonly operation: 'open-tab' | 'write-input';
+  readonly result:
+    | Readonly<{ tab: string; title: string }>
+    | Readonly<{
+        slot: string;
+        generation: number;
+        revision: number;
+        written: true;
+        after?: Readonly<{ kind: 'terminal' | 'ui'; generation: number; revision: number }>;
+      }>;
   readonly cause: unknown;
 }
 /** A terminal text request cannot be represented by the host's bounded pane tail. */

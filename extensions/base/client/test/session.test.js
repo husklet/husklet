@@ -8531,7 +8531,18 @@ test('real Unix writeAndWait subscribes and reads before bytes, then returns adv
       signal: cancellation.signal,
     });
     setTimeout(() => cancellation.abort('agent stopped'), 5);
-    await assert.rejects(cancelled, (error) => error?.name === 'AbortError');
+    await assert.rejects(cancelled, (error) => {
+      assert(error instanceof TerminalOperationError);
+      assert.equal(error.operation, 'write-input');
+      assert.deepEqual(error.result, {
+        slot,
+        generation: 4,
+        revision: 7,
+        written: true,
+      });
+      assert.equal(error.cause?.name, 'AbortError');
+      return true;
+    });
     assert.deepEqual(calls, [
       'event_subscribe',
       'terminal_read_pane',
@@ -8701,7 +8712,18 @@ test('real Unix quiet terminal wait does not mistake local echo for an agent res
       },
     );
     setTimeout(() => cancellation.abort('agent stopped'), 5);
-    await assert.rejects(cancelled, (error) => error?.name === 'AbortError');
+    await assert.rejects(cancelled, (error) => {
+      assert(error instanceof TerminalOperationError);
+      assert.equal(error.operation, 'write-input');
+      assert.deepEqual(error.result, {
+        slot,
+        generation: 4,
+        revision: 9,
+        written: true,
+      });
+      assert.equal(error.cause?.name, 'AbortError');
+      return true;
+    });
     assert.equal((await terminal.read(slot)).revision, 9, 'the ordered session remains usable');
     await session.close();
   } finally {
