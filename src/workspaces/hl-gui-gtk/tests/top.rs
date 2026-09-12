@@ -37,6 +37,10 @@ mod unix {
     ];
     const DEADLINE: Duration = Duration::from_secs(5);
     const PATCH_LIMIT: usize = 1_500;
+    const NAVIGATION_LABELS: &[&str] = &[
+        "Workspace", "Settings", "Extensions", "Containers", "Processes", "Executions", "Images", "Volumes",
+        "Networks", "Terminals",
+    ];
 
     struct TopChild(Child);
 
@@ -588,6 +592,7 @@ mod unix {
                             "Networks",
                             "Terminals",
                         ],
+                        1,
                     );
                 }
             }
@@ -850,6 +855,34 @@ mod unix {
                 );
                 assert_overview_grid(&root, 1_200, 224, "resized-wide");
                 capture(&window, "populated-workspace-resized-wide", 1_200, 800);
+                // A divider gesture is durable UI state, not geometry that may
+                // disappear when Responsive temporarily selects its compact
+                // branch. Exercise the actual reparenting path before trusting
+                // either mapped geometry or a screenshot of it.
+                window.set_default_size(600, 800);
+                window.set_size_request(600, 800);
+                window.present();
+                root.allocate(600, 1_600, -1, None);
+                settle_frame();
+                assert!(!paned.is_visible(), "Top selects compact navigation below its breakpoint");
+                assert!(
+                    paned.end_child().is_none(),
+                    "compact Top moves its one authoritative body out of the hidden desktop divider"
+                );
+                window.set_default_size(1_200, 800);
+                window.set_size_request(1_200, 800);
+                window.present();
+                root.allocate(1_200, 1_600, -1, None);
+                settle_frame();
+                assert!(paned.is_visible(), "Top restores desktop navigation above its breakpoint");
+                assert_eq!(paned.start_child().as_ref(), Some(&navigation));
+                assert_eq!(paned.end_child().as_ref(), Some(&body));
+                assert_eq!(navigation.width(), 200, "a resized rail width survives compact mode");
+                assert_contained(&root, "populated/workspace/resized-round-trip");
+                for frame in 1..=3 {
+                    assert_labels_painted(&window, &root, NAVIGATION_LABELS, frame);
+                }
+                capture_stable(&window, "populated-workspace-resized-round-trip-wide", 1_200, 800);
                 paned.set_position(160);
                 root.allocate(1_200, 1_600, -1, None);
                 selected.grab_focus();
@@ -1424,6 +1457,7 @@ mod unix {
                             "Networks",
                             "Terminals",
                         ],
+                        1,
                     );
                 }
                 capture(&window, &format!("post-success-networks-{width_name}"), width, 800);
@@ -3474,23 +3508,55 @@ mod unix {
             .expect("Top screenshot is written");
     }
 
-    fn assert_labels_painted(window: &gtk::Window, root: &gtk::Widget, labels: &[&str]) {
+    fn capture_stable(window: &gtk::Window, name: &str, width: i32, height: i32) {
+        let Some(directory) = std::env::var_os("HUSKLET_TOP_SHOT") else {
+            return;
+        };
+        let directory = PathBuf::from(directory);
+        std::fs::create_dir_all(&directory).expect("Top screenshot directory is created");
+        stable_texture(window, width, height)
+            .save_to_png(directory.join(format!("{name}.png")))
+            .expect("Top screenshot is written");
+    }
+
+    /// WidgetPaintable may still expose the render node cached immediately
+    /// before a resize/reparent. A non-null node is therefore not evidence that
+    /// it represents the current frame. Require two consecutive, byte-identical
+    /// textures before using a frame as visual evidence.
+    fn stable_texture(window: &gtk::Window, width: i32, height: i32) -> gtk::gdk::Texture {
         let paintable = gtk::WidgetPaintable::new(Some(window.upcast_ref::<gtk::Widget>()));
-        let node = (0..20)
-            .find_map(|_| {
-                window.queue_draw();
-                settle_toolkit();
-                let snapshot = gtk::Snapshot::new();
-                paintable.snapshot(snapshot.upcast_ref::<gtk::gdk::Snapshot>(), 1_200.0, 800.0);
-                let node = snapshot.to_node();
-                if node.is_none() {
-                    std::thread::sleep(Duration::from_millis(10));
-                }
-                node
-            })
-            .expect("Top window produces a render node");
         let renderer = window.renderer().expect("Top window has a renderer");
-        let texture = renderer.render_texture(&node, None);
+        let mut previous: Option<(u64, gtk::gdk::Texture)> = None;
+        for _ in 0..20 {
+            window.queue_draw();
+            settle_frame();
+            let snapshot = gtk::Snapshot::new();
+            paintable.snapshot(snapshot.upcast_ref::<gtk::gdk::Snapshot>(), width as f64, height as f64);
+            let Some(node) = snapshot.to_node() else {
+                std::thread::sleep(Duration::from_millis(10));
+                continue;
+            };
+            let texture = renderer.render_texture(&node, None);
+            let signature = texture_signature(&texture);
+            if previous.as_ref().is_some_and(|(prior, _)| *prior == signature) {
+                return texture;
+            }
+            previous = Some((signature, texture));
+        }
+        previous.expect("Top window produces a render node").1
+    }
+
+    fn texture_signature(texture: &gtk::gdk::Texture) -> u64 {
+        let stride = texture.width() as usize * 4;
+        let mut pixels = vec![0_u8; stride * texture.height() as usize];
+        texture.download(&mut pixels, stride);
+        pixels.into_iter().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
+        })
+    }
+
+    fn assert_labels_painted(window: &gtk::Window, root: &gtk::Widget, labels: &[&str], frame: usize) {
+        let texture = stable_texture(window, 1_200, 800);
         let width = texture.width() as usize;
         let height = texture.height() as usize;
         let stride = width * 4;
@@ -3519,15 +3585,16 @@ mod unix {
             let y0 = bounds.y().floor().max(0.0) as usize;
             let x1 = (bounds.x() + bounds.width()).ceil().min(width as f32) as usize;
             let y1 = (bounds.y() + bounds.height()).ceil().min(height as f32) as usize;
-            let painted = (y0..y1).any(|y| {
-                (x0..x1).any(|x| {
+            let painted_pixels = (y0..y1)
+                .flat_map(|y| (x0..x1).map(move |x| (x, y)))
+                .filter(|(x, y)| {
                     let pixel = &pixels[y * stride + x * 4..y * stride + x * 4 + 3];
                     pixel.iter().all(|channel| *channel >= 128)
                 })
-            });
+                .count();
             assert!(
-                painted,
-                "navigation label {wanted:?} was mapped but absent from the rendered frame"
+                painted_pixels >= 4,
+                "navigation label {wanted:?} was mapped but absent from rendered frame {frame} ({painted_pixels} bright pixels)"
             );
         }
     }
