@@ -1,11 +1,14 @@
 import React from 'react';
 import {
+  Button,
   Code,
   Entry,
   FormControl,
   FormHelperText,
   FormLabel,
+  IconButton,
   InlineMessage,
+  Row,
   Text,
 } from '@husklet/react';
 import {
@@ -40,6 +43,39 @@ export function FormControlWorkbench() {
           value={
             '<FormControl>\n  <FormLabel label="Extension name" />\n  <Entry value={name} onChange={setName} />\n  <FormHelperText label="Used in manifests." />\n</FormControl>'
           }
+          wrap
+        />
+      </DocumentationSection>
+
+      <DocumentationSection title="Inline actions">
+        <FormControl gap={1} width={{ minimum: { chars: 20 }, maximum: { chars: 64 } }}>
+          <FormLabel label="Image reference" />
+          <Row gap={1} wrap width="fill" align="center" justify="start">
+            <Entry value="alpine:3.20" width={{ minimum: { chars: 20 }, maximum: { chars: 40 } }} />
+            <Row gap={1} align="start" justify="center" height="content">
+              <Button
+                label="Pull"
+                size="medium"
+                height="content"
+                justify="start"
+                variant="filled"
+                tone="accent"
+              />
+              <IconButton
+                label="Refresh"
+                tooltip="Refresh images"
+                icon="view-refresh-symbolic"
+                size="medium"
+                height="content"
+                justify="start"
+                variant="ghost"
+              />
+            </Row>
+          </Row>
+          <FormHelperText label="Keep the field and its immediate actions in one wrapping row." />
+        </FormControl>
+        <Text
+          label="Inline actions stay visually attached to their field and wrap together only when the pane truly runs out of room."
           wrap
         />
       </DocumentationSection>

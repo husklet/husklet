@@ -9,6 +9,7 @@ import {
   Entry,
   Expander,
   FormControl,
+  FormHelperText,
   FormLabel,
   Heading,
   IconButton,
@@ -220,39 +221,46 @@ export function Images({
         : 'ready';
   return (
     <Page title="Images" subtitle="Images available to this workspace.">
-      <Column gap={1} align="start">
-        <FormControl gap={1}>
-          <FormLabel label="Image reference" />
+      <FormControl gap={1} width={{ minimum: { chars: 20 }, maximum: { chars: 64 } }}>
+        <FormLabel label="Image reference" />
+        <Row gap={1} wrap width="fill" align="center" justify="start">
           <Entry
             value={reference}
             placeholder="registry/image:tag"
-            width={{ minimum: { chars: 10 }, maximum: { chars: 32 } }}
+            width={{ minimum: { chars: 20 }, maximum: { chars: 40 } }}
             onChange={(event) => setReference(String(event.value ?? ''))}
           />
-        </FormControl>
-        <Row gap={1} wrap>
-          <Button
-            variant="filled"
-            tone="accent"
-            label={pull?.state === 'failed' ? 'Retry pull' : busy === 'pull' ? 'Starting…' : 'Pull'}
-            enabled={
-              !busy &&
-              reference.trim().length > 0 &&
-              (!pull || TERMINAL_PULL_STATES.has(pull.state))
-            }
-            onInvoke={startPull}
-          />
-          <IconButton
-            label="Refresh"
-            tooltip="Refresh images"
-            icon="view-refresh-symbolic"
-            size="large"
-            variant="ghost"
-            enabled={!busy}
-            onInvoke={resource.reload}
-          />
+          <Row gap={1} align="start" justify="center" height="content">
+            <Button
+              variant="filled"
+              tone="accent"
+              label={
+                pull?.state === 'failed' ? 'Retry pull' : busy === 'pull' ? 'Starting…' : 'Pull'
+              }
+              height="content"
+              justify="start"
+              enabled={
+                !busy &&
+                reference.trim().length > 0 &&
+                (!pull || TERMINAL_PULL_STATES.has(pull.state))
+              }
+              onInvoke={startPull}
+            />
+            <IconButton
+              label="Refresh"
+              tooltip="Refresh images"
+              icon="view-refresh-symbolic"
+              size="medium"
+              height="content"
+              justify="start"
+              variant="ghost"
+              enabled={!busy}
+              onInvoke={resource.reload}
+            />
+          </Row>
         </Row>
-      </Column>
+        <FormHelperText label="Use a registry reference such as alpine:3.20." />
+      </FormControl>
       {pull ? <PullStatus pull={pull} onCancel={cancelPull} /> : null}
       <ErrorText error={error} />
       {notice ? <Text label={notice} color="positive" /> : null}

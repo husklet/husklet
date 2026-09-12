@@ -399,6 +399,43 @@ mod unix {
                     );
                 }
             }
+            if fixture == "populated" && name == "images" {
+                let reference = find_entry_placeholder(&root, "registry/image:tag");
+                let pull = find_button(&root, "Pull");
+                let refresh = find_tooltip_button(&root, "Refresh images");
+                let reference_bounds = reference
+                    .compute_bounds(&root)
+                    .expect("image reference belongs to the rendered root");
+                let pull_bounds = pull
+                    .compute_bounds(&root)
+                    .expect("image pull belongs to the rendered root");
+                let refresh_bounds = refresh
+                    .compute_bounds(&root)
+                    .expect("image refresh belongs to the rendered root");
+                for (label, bounds) in [("Pull", pull_bounds), ("Refresh", refresh_bounds)] {
+                    assert!(
+                        (bounds.y() - reference_bounds.y()).abs() <= 2.0,
+                        "{width_name} image {label} detached from its field row: field={reference_bounds:?}, action={bounds:?}"
+                    );
+                }
+                assert!(
+                    refresh.height() <= 38,
+                    "{width_name} image refresh exceeded the compact medium tier: {}px",
+                    refresh.height()
+                );
+                assert!(
+                    has_label(&root, "Use a registry reference such as alpine:3.20."),
+                    "{width_name} image field keeps concise format guidance"
+                );
+                let guidance = find_label(&root, "Use a registry reference such as alpine:3.20.");
+                let guidance_bounds = guidance
+                    .compute_bounds(&root)
+                    .expect("image guidance belongs to the rendered root");
+                assert!(
+                    guidance_bounds.y() - reference_bounds.y() - reference_bounds.height() <= 20.0,
+                    "{width_name} image FormControl stretched between its field and guidance: field={reference_bounds:?}, guidance={guidance_bounds:?}"
+                );
+            }
             if fixture == "populated" && name == "extensions" {
                 let cards = widgets_with_class(&root, "hl-card");
                 if width == 600 {

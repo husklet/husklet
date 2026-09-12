@@ -3609,8 +3609,8 @@ test('every empty operational page explains what is absent and how to proceed', 
       assert.equal(ancestorTags(stage, 'Pull')[0], 'Row');
       assert.deepEqual(
         ancestorTags(stage, 'Refresh').slice(0, 2),
-        ['Row', 'Column'],
-        'image actions stay grouped when the entry forces a narrow-line break',
+        ['Row', 'Row'],
+        'image actions stay together inside the labelled wrapping field row',
       );
       assert.equal(
         ancestorProperty(stage, 'Pull', 'Row', 'Grow'),

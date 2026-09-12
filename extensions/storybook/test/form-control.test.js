@@ -49,3 +49,17 @@ test('FormControl teaches real states, ownership, and associations before API', 
   assert(text.indexOf('States') < text.indexOf('API'));
   assert(text.indexOf('Accessibility') < text.indexOf('API'));
 });
+
+test('FormControl documents one compact wrapping row for a field and its actions', () => {
+  const frame = host().render(h(FormControlWorkbench));
+  const text = labels(frame.patches);
+  assert(text.includes('Inline actions'));
+  assert(text.includes('Image reference'));
+  assert(text.includes('Pull'));
+  assert(text.includes('Keep the field and its immediate actions in one wrapping row.'));
+  assert.equal(
+    frame.patches.filter((patch) => patch.Create?.tag === 'IconButton').length,
+    1,
+    'the specimen uses a semantic compact refresh action',
+  );
+});
