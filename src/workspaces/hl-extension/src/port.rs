@@ -1365,6 +1365,11 @@ pub trait TerminalSurface {
         Err(HostError::Unsupported("terminal tab pinning is unavailable".into()))
     }
 
+    /// Makes a tab visible without requiring it to contain a terminal pane.
+    fn focus_tab(&self, _tab: &str) -> Result<(), HostError> {
+        Err(HostError::Unsupported("terminal tab focus is unavailable".into()))
+    }
+
     /// # Errors
     /// Returns a host failure.
     fn split(&self, slot: &str, division: Division) -> Result<String, HostError>;

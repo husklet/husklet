@@ -776,6 +776,14 @@ impl<'a> Tabs<'a> {
             .save()
             .map_err(|error| hl_extension::HostError::Failed(error.to_string()))
     }
+
+    pub(crate) fn focus(&self, tab: &str) -> Result<(), hl_extension::HostError> {
+        if !self.window.entries.borrow().iter().any(|entry| entry.name == tab) {
+            return Err(hl_extension::HostError::Absent(tab.to_owned()));
+        }
+        Page::new(self.window, tab).select_and_focus();
+        Ok(())
+    }
 }
 
 pub(crate) struct CurrentPage;
@@ -1202,6 +1210,30 @@ mod focus_ownership_tests {
             assert!(matches!(
                 Tabs::new(&tw).pin(&tab, false),
                 Err(hl_extension::HostError::Conflict(_))
+            ));
+            tw.closing.set(true);
+        });
+        if !ran {
+            println!("skipped: no display connection");
+        }
+    }
+
+    #[test]
+    fn extension_can_select_a_surface_only_tab_by_its_stable_identity() {
+        let ran = crate::test_support::on_the_toolkit_thread(|| {
+            let workspace = WorkspaceConfig::new("focus-tab-test", "alpine:3.20", hl_ws::Arch::Amd64);
+            let tw = Window::bench(&workspace);
+            let overview = gtk::Label::new(Some("overview"));
+            let overview_tab = Tabs::new(&tw).add_persisted("Workspace", None, &overview, false, true);
+            let shell = gtk::Label::new(Some("shell"));
+            let shell_tab = Tabs::new(&tw).add("shell", None, &shell, true);
+            assert_eq!(tw.stack.visible_child_name().as_deref(), Some(shell_tab.as_str()));
+
+            Tabs::new(&tw).focus(&overview_tab).expect("focus surface-only tab");
+            assert_eq!(tw.stack.visible_child_name().as_deref(), Some(overview_tab.as_str()));
+            assert!(matches!(
+                Tabs::new(&tw).focus("missing-tab"),
+                Err(hl_extension::HostError::Absent(tab)) if tab == "missing-tab"
             ));
             tw.closing.set(true);
         });

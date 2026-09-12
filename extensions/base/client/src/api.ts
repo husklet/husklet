@@ -1466,6 +1466,8 @@ export interface WorkspaceApi {
     topology(): Promise<TerminalTopology>;
     openTab(title: string): Promise<string>;
     pinTab(tab: string, pinned?: boolean): Promise<void>;
+    /** Select a tab, including a surface-only tab that has no terminal pane to focus. */
+    focusTab(tab: string): Promise<void>;
     /** Arm terminal inventory before pinning, then verify the exact tab reports the requested durable state. */
     pinTabAndWait(
       tab: string,

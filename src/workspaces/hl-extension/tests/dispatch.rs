@@ -468,6 +468,11 @@ impl TerminalSurface for Host {
         Ok(())
     }
 
+    fn focus_tab(&self, _tab: &str) -> Result<(), HostError> {
+        self.ledger.note("terminal.focus_tab");
+        Ok(())
+    }
+
     fn split(&self, _slot: &str, _division: Division) -> Result<String, HostError> {
         self.ledger.note("terminal.split");
         Ok("s2".into())
@@ -1756,6 +1761,10 @@ fn calls() -> Vec<(Request, Capability)> {
             Capability::TerminalLayoutControl,
         ),
         (
+            Request::TerminalFocusTab { tab: "t1".into() },
+            Capability::TerminalFocus,
+        ),
+        (
             Request::TerminalSplit {
                 slot: "s1".into(),
                 division: Division::Beside,
@@ -2640,6 +2649,20 @@ fn terminal_input_alone_cannot_reach_process_or_layout_authority() {
         ));
     }
     assert!(host.ledger.reached().is_empty());
+}
+
+#[test]
+fn terminal_focus_can_select_a_tab_that_has_no_focusable_pane() {
+    let host = Host::new();
+    let mut session = session(&[Capability::TerminalFocus], &[]);
+    let reply = session
+        .dispatch(
+            &Request::TerminalFocusTab { tab: "t1".into() },
+            &services(&host),
+        )
+        .expect("focus tab");
+    assert_eq!(reply, Reply::Done);
+    assert_eq!(host.ledger.reached(), vec!["terminal.focus_tab"]);
 }
 
 #[test]

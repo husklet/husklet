@@ -116,6 +116,7 @@ const REQUEST_TO_REPLY: &[(&str, &str)] = &[
     ("pane_list", "panes"),
     ("terminal_open_tab", "identity"),
     ("terminal_pin_tab", "done"),
+    ("terminal_focus_tab", "done"),
     ("terminal_split", "identity"),
     ("terminal_split_observed", "identity"),
     ("terminal_spawn", "done"),
@@ -247,7 +248,7 @@ fn request_capability(request: &str) -> Capability {
         | "terminal_retitle_pane_observed"
         | "terminal_ratio"
         | "terminal_ratio_observed" => Capability::TerminalLayoutControl,
-        "terminal_focus_pane" | "terminal_focus_pane_observed" => Capability::TerminalFocus,
+        "terminal_focus_tab" | "terminal_focus_pane" | "terminal_focus_pane_observed" => Capability::TerminalFocus,
         "terminal_switch_occupant" | "terminal_switch_occupant_observed" => Capability::TerminalProcessControl,
         "filesystem_inventory"
         | "filesystem_changes"

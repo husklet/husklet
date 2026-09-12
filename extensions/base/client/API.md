@@ -135,6 +135,7 @@ order; the JavaScript client's checks are never treated as a security boundary.
 - `host.terminal.panes(...)` — `pane_list`, requires `panes:observe`.
 - `host.terminal.openTab(...)` — `terminal_open_tab`, requires `terminals:layout-control`.
 - `host.terminal.pinTab(...)` — `terminal_pin_tab`, requires `terminals:layout-control`.
+- `host.terminal.focusTab(...)` — `terminal_focus_tab`, requires `terminals:focus`.
 - `host.terminal.split(...)` — `terminal_split`, requires `terminals:layout-control`.
 - `host.terminal.splitObserved(...)` — `terminal_split_observed`, requires `terminals:layout-control`.
 - `host.terminal.spawn(...)` — `terminal_spawn`, requires `terminals:process-control`.

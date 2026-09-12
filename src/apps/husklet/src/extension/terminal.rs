@@ -55,6 +55,7 @@ pub enum Request {
         tab: String,
         pinned: bool,
     },
+    FocusTab(String),
     /// A pane split off the named slot.
     Split {
         /// The pane being divided.
@@ -306,6 +307,10 @@ impl TerminalSurface for Relay {
             tab: tab.to_owned(),
             pinned,
         })
+    }
+
+    fn focus_tab(&self, tab: &str) -> Result<(), HostError> {
+        self.done(Request::FocusTab(tab.to_owned()))
     }
 
     /// # Errors

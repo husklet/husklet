@@ -8513,6 +8513,10 @@
       "request": "terminal_pin_tab"
     },
     {
+      "capability": "terminals:focus",
+      "request": "terminal_focus_tab"
+    },
+    {
       "capability": "terminals:layout-control",
       "request": "terminal_split"
     },
@@ -9045,6 +9049,10 @@
     {
       "reply": "done",
       "request": "terminal_pin_tab"
+    },
+    {
+      "reply": "done",
+      "request": "terminal_focus_tab"
     },
     {
       "reply": "identity",
@@ -11562,6 +11570,21 @@
                 "optional": false,
                 "schema": {
                   "kind": "boolean"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "terminal_focus_tab",
+          "payload": {
+            "fields": [
+              {
+                "name": "tab",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
                 }
               }
             ],
@@ -14487,7 +14510,7 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:33f739950d6855bc",
+  "source_fingerprint": "fnv1a64:fa55eb1ecb386626",
   "specification_version": 1,
   "topics": [
     {

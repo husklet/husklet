@@ -318,6 +318,9 @@ pub enum Request {
         tab: String,
         pinned: bool,
     },
+    TerminalFocusTab {
+        tab: String,
+    },
     TerminalSplit {
         slot: String,
         division: Division,
@@ -672,7 +675,9 @@ impl Request {
             Self::TerminalWritePane { .. }
             | Self::TerminalCommandWrite { .. }
             | Self::TerminalCommandCloseInput { .. } => Capability::TerminalInput,
-            Self::TerminalFocusPane { .. } | Self::TerminalFocusPaneObserved { .. } => Capability::TerminalFocus,
+            Self::TerminalFocusTab { .. }
+            | Self::TerminalFocusPane { .. }
+            | Self::TerminalFocusPaneObserved { .. } => Capability::TerminalFocus,
             Self::TerminalSpawn { .. }
             | Self::TerminalSpawnObserved { .. }
             | Self::TerminalCommandStart { .. }

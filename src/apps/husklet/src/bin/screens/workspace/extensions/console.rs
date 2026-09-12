@@ -88,6 +88,7 @@ impl Console {
             Request::PaneList => Self::pane_inventory(window).map(Answer::Panes),
             Request::OpenTab(title) => Ok(Answer::Slot(Self::open(window, title))),
             Request::PinTab { tab, pinned } => Tabs::new(window).pin(tab, *pinned).map(|()| Answer::Done),
+            Request::FocusTab(tab) => Tabs::new(window).focus(tab).map(|()| Answer::Done),
             Request::Split { slot, division } => Self::split(window, slot, *division).map(Answer::Slot),
             Request::Spawn { slot, command } => Self::spawn(window, slot, command).map(|()| Answer::Done),
             Request::Read { slot, lines } => Self::read(window, slot, *lines).map(Answer::Text),

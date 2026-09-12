@@ -3936,6 +3936,7 @@ test('terminal topology, bounded input, grid resize and retitle use exact typed 
   const terminal = workspace(stage.session).terminal;
   const topology = terminal.topology();
   const pinning = terminal.pinTab('t1');
+  const tabFocus = terminal.focusTab('t1');
   const splitting = terminal.splitObserved('s1', 4, 7, 'below');
   const spawning = terminal.spawnObserved('s1', 4, 7, ['printf', '%s\n', 'ready']);
   const writing = terminal.writeInput('s1', 4, 7, 'echo hello\n');
@@ -3948,6 +3949,10 @@ test('terminal topology, bounded input, grid resize and retitle use exact typed 
   assert.deepEqual((await next()).payload, {
     call: 'terminal_pin_tab',
     with: { tab: 't1', pinned: true },
+  });
+  assert.deepEqual((await next()).payload, {
+    call: 'terminal_focus_tab',
+    with: { tab: 't1' },
   });
   assert.deepEqual((await next()).payload, {
     call: 'terminal_split_observed',
@@ -3991,6 +3996,7 @@ test('terminal topology, bounded input, grid resize and retitle use exact typed 
     encode({ channel: 2, kind: KIND.response, payload: { reply: 'topology', with: tree } }),
   );
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
+  stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
   stage.host.write(
     encode({ channel: 2, kind: KIND.response, payload: { reply: 'identity', with: 's2' } }),
   );
@@ -4003,7 +4009,17 @@ test('terminal topology, bounded input, grid resize and retitle use exact typed 
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
   assert.deepEqual(await topology, tree);
   assert.equal(await splitting, 's2');
-  await Promise.all([pinning, spawning, writing, resizing, ratio, focusing, retitling, closing]);
+  await Promise.all([
+    pinning,
+    tabFocus,
+    spawning,
+    writing,
+    resizing,
+    ratio,
+    focusing,
+    retitling,
+    closing,
+  ]);
   assert.throws(() => terminal.spawn('s1', []), /1\.\.=64/);
   assert.throws(() => terminal.spawn('s1', ['sh', 'bad\0argument']), /NUL-free/);
   assert.throws(() => terminal.spawn('s1', ['x'.repeat(4097)]), /4096 bytes/);

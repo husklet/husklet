@@ -768,6 +768,7 @@ impl Session {
             | Request::TerminalTopology
             | Request::TerminalOpenTab { .. }
             | Request::TerminalPinTab { .. }
+            | Request::TerminalFocusTab { .. }
             | Request::TerminalSplit { .. }
             | Request::TerminalSplitObserved { .. }
             | Request::TerminalSpawn { .. }
@@ -1851,6 +1852,7 @@ impl Session {
             Request::TerminalPinTab { tab, pinned } => {
                 port.pin_tab(tab, *pinned).map(|()| Reply::Done).map_err(Failure::from)
             }
+            Request::TerminalFocusTab { tab } => port.focus_tab(tab).map(|()| Reply::Done).map_err(Failure::from),
             Request::TerminalSplit { slot, division } => Ok(Reply::Identity(port.split(slot, *division)?)),
             Request::TerminalSplitObserved { slot, division, .. } => Ok(Reply::Identity(port.split(slot, *division)?)),
             Request::TerminalSpawn { slot, command } => {

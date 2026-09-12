@@ -2222,6 +2222,7 @@ export function workspace(session, { signal } = {}) {
             },
             close: (slot) => done('terminal_close_pane', { slot }),
             pinTab: (tab, pinned = true) => done('terminal_pin_tab', { tab, pinned: Boolean(pinned) }),
+            focusTab: (tab) => done('terminal_focus_tab', { tab }),
             closeObserved: (slot, generation, revision) => {
                 if (!Number.isSafeInteger(generation) ||
                     generation < 0 ||

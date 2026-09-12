@@ -1,5 +1,5 @@
 // Generated from Rust hl-extension protocol/v1.json. Do not edit.
-// Protocol artifact fnv1a64:08dbd10ba5a766fc
+// Protocol artifact fnv1a64:35600c53825a5275
 export const PROTOCOL_SPECIFICATION_VERSION = 1;
 export const PROTOCOL_VERSION = 1;
 export const PROTOCOL_BOUNDS = Object.freeze({
@@ -388,6 +388,7 @@ export const PROTOCOL_REPLIES = Object.freeze({
   "pane_list": "panes",
   "terminal_open_tab": "identity",
   "terminal_pin_tab": "done",
+  "terminal_focus_tab": "done",
   "terminal_split": "identity",
   "terminal_split_observed": "identity",
   "terminal_spawn": "done",
@@ -523,6 +524,7 @@ export const PROTOCOL_REQUEST_CAPABILITIES = Object.freeze({
   "pane_list": "panes:observe",
   "terminal_open_tab": "terminals:layout-control",
   "terminal_pin_tab": "terminals:layout-control",
+  "terminal_focus_tab": "terminals:focus",
   "terminal_split": "terminals:layout-control",
   "terminal_split_observed": "terminals:layout-control",
   "terminal_spawn": "terminals:process-control",
@@ -10779,6 +10781,21 @@ const roots = {
               "optional": false,
               "schema": {
                 "kind": "boolean"
+              }
+            }
+          ],
+          "kind": "struct"
+        }
+      },
+      {
+        "name": "terminal_focus_tab",
+        "payload": {
+          "fields": [
+            {
+              "name": "tab",
+              "optional": false,
+              "schema": {
+                "kind": "string"
               }
             }
           ],
