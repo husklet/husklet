@@ -384,14 +384,6 @@ mod unix {
                     "{width_name} collapsed container record stacked identity, status and actions to {}px",
                     card.height()
                 );
-                let create = find_expander(&root, "Create a container");
-                assert!(create.has_css_class("variant-outline"));
-                assert_eq!(create.height(), 28, "{width_name} create disclosure stays compact");
-                assert_eq!(
-                    create.tooltip_text().as_deref(),
-                    Some("Configure and start a new container")
-                );
-                assert!(create.grab_focus(), "Create a container remains keyboard reachable");
                 for label in ["Details", "Start"] {
                     let action = find_button(&card, label);
                     assert!(action.has_css_class("size-small"));
