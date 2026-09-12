@@ -2600,12 +2600,13 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
       },
       beginWalk: async (path, options: { pageSize?: number; signal?: AbortSignal } = {}) => {
         requireFilesystemActive(options.signal);
-        const inventory = await api.files.inventory();
+        const scoped = options.signal ? api.withSignal(options.signal) : api;
+        const inventory = await scoped.files.inventory();
         requireFilesystemActive(options.signal);
         return {
           inventory,
           cursor: { journal: inventory.journal, revision: inventory.revision },
-          entries: api.files.walk(path, options),
+          entries: scoped.files.walk(path, options),
         };
       },
       changes: async ({ journal, revision: after }, limit = 256) => {
@@ -2655,6 +2656,7 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
         if (!Number.isSafeInteger(maxPages) || maxPages < 1 || maxPages > 256)
           throw new RangeError('filesystem catch-up maxPages must be an integer between 1 and 256');
         requireFilesystemActive(signal);
+        const scoped = signal ? api.withSignal(signal) : api;
         let journal = cursor.journal;
         let revision = cursor.revision;
         let current = revision;
@@ -2663,7 +2665,7 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
           requireFilesystemActive(signal);
           const requested = { journal, revision };
           const remaining = maxChanges - changes.length;
-          const page = await api.files.changes(requested, Math.min(pageSize, remaining));
+          const page = await scoped.files.changes(requested, Math.min(pageSize, remaining));
           requireFilesystemActive(signal);
           if (page.truncated) {
             throw new FilesystemJournalGapError(requested, {
@@ -2713,11 +2715,12 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
           throw new TypeError('filesystem change poll interval must be a positive integer');
         if (gapPolicy !== 'yield' && gapPolicy !== 'throw')
           throw new TypeError("filesystem gapPolicy must be 'yield' or 'throw'");
+        const scoped = signal ? api.withSignal(signal) : api;
         for (;;) {
           requireFilesystemActive(signal);
           const requestedJournal = journal;
           const requestedAfter = after;
-          const page = await api.files.changes({ journal, revision: after }, pageSize);
+          const page = await scoped.files.changes({ journal, revision: after }, pageSize);
           requireFilesystemActive(signal);
           if (page.truncated && gapPolicy === 'throw') {
             throw new FilesystemJournalGapError(

@@ -1744,6 +1744,7 @@ test('real Unix change-page iteration applies backpressure and surfaces overflow
       },
     }),
   );
+  await new Promise((resolve) => setTimeout(resolve, 20));
   controller.abort('diagnostics stopped');
   await assert.rejects(waiting, (error) => error.name === 'AbortError');
 

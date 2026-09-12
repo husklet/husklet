@@ -185,6 +185,80 @@ test('real Unix filesystem catch-up is bounded, resumable, and journal-gap safe'
   }
 });
 
+test('filesystem catch-up aborts a stalled ordered read and reconnects cleanly', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-filesystem-abort-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const connections = new Set();
+  let connectionNumber = 0;
+  let requested;
+  const requestArrived = new Promise((resolve) => {
+    requested = resolve;
+  });
+  const server = net.createServer((socket) => {
+    connections.add(socket);
+    socket.on('close', () => connections.delete(socket));
+    connectionNumber += 1;
+    const current = connectionNumber;
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.kind !== KIND.request || frame.channel !== 2) continue;
+        if (current === 1) {
+          assert.equal(frame.payload.call, 'filesystem_changes');
+          requested();
+          continue;
+        }
+        assert.equal(frame.payload.call, 'workspace_info');
+        const response = encode({
+          channel: 2,
+          kind: KIND.response,
+          payload: {
+            reply: 'workspace',
+            with: { name: 'reconnected-indexer', image: 'toolbox', architecture: 'amd64' },
+          },
+        });
+        socket.write(response.subarray(0, 7));
+        socket.write(response.subarray(7));
+      }
+    });
+    const greeting = encode({
+      channel: CONTROL,
+      kind: KIND.open,
+      payload: {
+        protocol: 1,
+        peer: `filesystem-abort-${current}`,
+        granted: ['filesystem:read', 'workspaces:read'],
+      },
+    });
+    socket.write(greeting.subarray(0, 3));
+    socket.write(greeting.subarray(3));
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const first = await connect({ path: socketPath });
+    const controller = new AbortController();
+    const catchingUp = workspace(first).files.catchUpChanges({
+      cursor: { journal: FILE_JOURNAL, revision: 4 },
+      signal: controller.signal,
+    });
+    await requestArrived;
+    controller.abort('indexer restarted');
+    await assert.rejects(
+      catchingUp,
+      (error) => error.name === 'AbortError' && error.cause === controller.signal.reason,
+    );
+    await first.closed;
+
+    const recovered = await connect({ path: socketPath });
+    assert.equal((await workspace(recovered).info()).name, 'reconnected-indexer');
+    await recovered.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('real Unix query deadline cancels its exact execution and preserves the session', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-query-deadline-'));
   const socketPath = path.join(directory, 'host.sock');
