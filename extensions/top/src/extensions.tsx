@@ -1468,16 +1468,16 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                       >
                         <Column gap={1}>
                           {acquisition.candidate.requested.length > 0 && (
-                            <Text
-                              label={`Product access · ${granted.length}/${acquisition.candidate.requested.length}`}
-                              color="text-dim"
-                            />
-                          )}
-                          {acquisition.candidate.requested.length > 0 && (
-                            <Row gap={1} align="center">
+                            <Row gap={1} width="fill" align="center" justify="stretch">
+                              <Text
+                                label={`Product access · ${granted.length}/${acquisition.candidate.requested.length}`}
+                                color="text-dim"
+                              />
+                              <Spacer />
                               {granted.length > 0 && (
                                 <Button
                                   label="Clear product access"
+                                  size="small"
                                   variant="ghost"
                                   onInvoke={() => {
                                     setGranted([]);

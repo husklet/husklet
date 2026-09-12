@@ -2376,6 +2376,26 @@ mod unix {
                     .filter(|message| message.has_css_class("tone-warning"))
                     .count();
                 assert_eq!(warnings, 3, "{width_name} review repeats risk chrome");
+                let product = find_label(root, "Product access · 5/6");
+                let clear = find_button(root, "Clear product access");
+                let product_bounds = product
+                    .compute_bounds(root)
+                    .expect("product access summary belongs to review");
+                let clear_bounds = clear
+                    .compute_bounds(root)
+                    .expect("product access reset belongs to review");
+                assert!(
+                    (product_bounds.y() - clear_bounds.y()).abs() <= 6.0,
+                    "{width_name} product reset detached vertically: summary={product_bounds:?}, clear={clear_bounds:?}"
+                );
+                assert!(
+                    root.width() as f32 - clear_bounds.x() - clear_bounds.width() <= 40.0,
+                    "{width_name} product reset floated away from the review edge: {clear_bounds:?}"
+                );
+                assert!(
+                    clear.has_css_class("size-small") && clear.height() <= 38,
+                    "{width_name} product reset stays compact: {clear_bounds:?}"
+                );
                 let environment = find_label(root, "Read selected workspace environment values")
                     .mnemonic_widget()
                     .and_then(|widget| widget.downcast::<gtk::Switch>().ok())

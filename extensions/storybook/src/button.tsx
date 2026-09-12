@@ -10,6 +10,7 @@ import {
   Row,
   Section,
   Select,
+  Spacer,
   Switch,
   Text,
 } from '@husklet/react';
@@ -137,6 +138,18 @@ export function ButtonWorkbench() {
           label={
             'Hover, pressed, and keyboard focus are rendered by the native host.\nInteract with the live controls above.'
           }
+          color="text-dim"
+          wrap
+        />
+      </SectionBlock>
+      <SectionBlock title="Inline reset action">
+        <Row gap={1} width="fill" align="center" justify="stretch">
+          <Text label="Product access · 5/6" color="text-dim" />
+          <Spacer />
+          <Button label="Clear product access" size="small" variant="ghost" />
+        </Row>
+        <Text
+          label="Place a compact reset beside the value it affects. Keep it secondary to the page’s commit action."
           color="text-dim"
           wrap
         />

@@ -73,3 +73,16 @@ test('Button keeps its overview code and every size row bounded to the document 
   assert.match(source, /label=\{`\$\{title\(controlSize\)\} · \$\{height\(controlSize\)\}px`\}/);
   assert.match(source, /label=\{title\(emphasis\)\}/);
 });
+
+test('Button documents a compact reset beside the value it affects', () => {
+  const frame = host().render(h(ButtonWorkbench));
+  const buttons = propsFor(frame.patches, 'Button');
+  assert(
+    buttons.some(
+      (props) =>
+        props.Label?.Text === 'Clear product access' &&
+        props.Size?.ControlSize === 'Small' &&
+        props.Variant?.Variant === 'Ghost',
+    ),
+  );
+});
