@@ -87,7 +87,7 @@ export function Navigation({
   return (
     <Column grow={false} width="fill" height="fill" pad={1} gap={1}>
       <Scroll grow width="fill" height="fill">
-        <Column gap={1}>
+        <Column grow={false} height="content" gap={1}>
           {groups
             .map((group) => ({
               ...group,
@@ -95,9 +95,9 @@ export function Navigation({
             }))
             .filter((group) => group.sections.length > 0)
             .map((group) => (
-              <Column key={group.label} gap={0}>
+              <Column key={group.label} grow={false} height="content" gap={0}>
                 <ListSubheader label={group.label} />
-                <NavigationMenu gap={0}>
+                <NavigationMenu grow={false} height="content" gap={0}>
                   {group.sections.map((name) => (
                     <NavigationMenuItem
                       key={name}
@@ -113,6 +113,7 @@ export function Navigation({
                 </NavigationMenu>
               </Column>
             ))}
+          <Spacer grow />
         </Column>
       </Scroll>
     </Column>

@@ -2282,6 +2282,22 @@ mod unix {
                     "{width_name} access recovery action exceeded 32px: {}",
                     open.height()
                 );
+                if width == 1_200 {
+                    for (last_item, next_group) in [("Extensions", "Resources"), ("Networks", "Interface")] {
+                        let item = find_labelled(&recovery_root, last_item);
+                        let heading = find_labelled(&recovery_root, next_group);
+                        let item_bottom = vertical_end(&recovery_root, &item);
+                        let heading_top = heading
+                            .compute_bounds(&recovery_root)
+                            .expect("navigation heading belongs to the Top root")
+                            .y() as i32;
+                        let gap = heading_top - item_bottom;
+                        assert!(
+                            (0..=16).contains(&gap),
+                            "navigation groups are not contiguous between {last_item} and {next_group}: {gap}px"
+                        );
+                    }
+                }
                 capture(&recovery_window, &format!("volume-recovery-{width_name}"), width, 820);
             }
             assert!(open.grab_focus(), "volume recovery action is keyboard reachable");
