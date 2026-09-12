@@ -35,6 +35,7 @@ import {
   capabilityLabel,
   filterCatalogueEntries,
   filterInstalledExtensions,
+  installedExtensionNeedsAttention,
 } from '../dist/app.js';
 
 test('every host capability has explicit consent language and workspace lifecycle is not settings', () => {
@@ -1462,6 +1463,21 @@ test('extension discovery searches, filters, reports result counts, and clears a
 });
 
 test('installed extension projections prioritize faults and updates and search provider names', () => {
+  assert.equal(
+    installedExtensionNeedsAttention(largeInstalledExtensions[0], largeCatalogueEntries),
+    true,
+    'a runtime fault requires attention',
+  );
+  assert.equal(
+    installedExtensionNeedsAttention(largeInstalledExtensions[1], largeCatalogueEntries),
+    true,
+    'an available update requires attention',
+  );
+  assert.equal(
+    installedExtensionNeedsAttention(largeInstalledExtensions[2], largeCatalogueEntries),
+    false,
+    'an intentionally disabled extension remains healthy rather than alarming',
+  );
   assert.deepEqual(
     filterInstalledExtensions(largeInstalledExtensions, largeCatalogueEntries, '', 'all')
       .slice(0, 4)
@@ -1509,6 +1525,9 @@ test('installed extension management searches, filters, pages, and clears fifty 
   await settled();
   await settled();
   assert.ok(labelled(stage, '50 of 50 installed extensions'));
+  assert.ok(labelled(stage, 'Needs attention'));
+  assert.ok(labelled(stage, '2 extensions'));
+  assert.ok(labelled(stage, 'Healthy extensions'));
   assert.ok(labelled(stage, 'Showing 12 of 50 matching installed extensions'));
   assert.ok(labelled(stage, 'Show 12 more installed'));
   assert.deepEqual(taggedProperty(stage, 'Disabled', 'Badge', 'Tone'), { Tone: 'Neutral' });
@@ -1520,6 +1539,7 @@ test('installed extension management searches, filters, pages, and clears fifty 
   await settled();
   assert.ok(labelled(stage, '1 of 50 installed extensions'));
   assert.ok(labelled(stage, 'faulted-agent'));
+  assert.ok(labelled(stage, 'Needs attention'));
 
   change(stage, 'Search installed', 'no such extension');
   await settled();
@@ -1534,6 +1554,7 @@ test('installed extension management searches, filters, pages, and clears fifty 
   await settled();
   assert.ok(labelled(stage, '1 of 50 installed extensions'));
   assert.ok(labelled(stage, 'installed-07'));
+  assert.ok(labelled(stage, 'Healthy extensions'));
   const actionFooter = sharedAncestor(stage, ['Open', 'Disable', 'Remove'], 'Row');
   assert.notEqual(
     actionFooter,

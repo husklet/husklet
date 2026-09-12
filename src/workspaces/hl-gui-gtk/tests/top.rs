@@ -591,15 +591,38 @@ mod unix {
                     assert!(
                         cards
                             .windows(2)
-                            .all(|pair| pair[0].allocation().y() != pair[1].allocation().y()),
+                            .all(|pair| {
+                                pair[0].compute_bounds(&root).expect("card belongs to root").y()
+                                    != pair[1].compute_bounds(&root).expect("card belongs to root").y()
+                            }),
                         "600px Installed cards did not form one full-width row each"
                     );
                 } else {
-                    let first_y = cards.first().expect("Installed renders cards").allocation().y();
+                    let healthy = cards
+                        .iter()
+                        .filter(|card| card.width() < width / 2)
+                        .collect::<Vec<_>>();
+                    let first_y = healthy
+                        .first()
+                        .expect("Installed renders healthy cards")
+                        .compute_bounds(&root)
+                        .expect("healthy card belongs to root")
+                        .y();
                     assert_eq!(
-                        cards.iter().take_while(|card| card.allocation().y() == first_y).count(),
+                        healthy
+                            .iter()
+                            .take_while(|card| {
+                                card.compute_bounds(&root).expect("healthy card belongs to root").y()
+                                    == first_y
+                            })
+                            .count(),
                         3,
-                        "1200px Installed collection did not retain three columns"
+                        "1200px healthy Installed collection did not retain three columns: {:?}",
+                        healthy
+                            .iter()
+                            .take(6)
+                            .map(|card| (card.width(), card.compute_bounds(&root).map(|bounds| (bounds.x(), bounds.y()))))
+                            .collect::<Vec<_>>()
                     );
                 }
                 let refresh = find_tooltip_button(&root, "Refresh installed extensions");
@@ -3756,6 +3779,30 @@ mod unix {
             vertical_end(root, &first) <= 780,
             "{case} first installed card was not completely visible in the 800px viewport"
         );
+        assert!(has_label(root, "Needs attention"), "{case} omitted the attention section");
+        assert!(has_label(root, "Healthy extensions"), "{case} omitted the healthy section");
+        let healthy = ancestor_with_class(&find_mapped_labelled(root, "disabled-linter"), "hl-card")
+            .expect("healthy installed extension belongs to a card");
+        let mut attention_cards = vec![("fault", first.clone())];
+        if let Some(action) = find_button_optional(root, "Review update") {
+            attention_cards.push((
+                "update",
+                ancestor_with_class(action.upcast_ref(), "hl-card")
+                    .expect("update-required extension action belongs to a card"),
+            ));
+        }
+        for (label, card) in &attention_cards {
+            let section_width = card.parent().expect("attention card belongs to its section").width();
+            assert!(
+                (card.width() - section_width).abs() <= 4,
+                "{case} {label} attention card is not full section width: card={}px section={section_width}px",
+                card.width(),
+            );
+            assert!(
+                vertical_end(root, card) <= vertical_end(root, &healthy),
+                "{case} {label} attention card appears below healthy extensions"
+            );
+        }
         for label in ["Retry", "Review update", "Enable"] {
             let Some(action) = find_button_optional(root, label) else {
                 assert_eq!(label, "Review update", "{case} omitted required {label} action");
@@ -3769,16 +3816,7 @@ mod unix {
             );
             assert_eq!(action.height(), 28, "{case} {label} action control height");
         }
-        let expected_visible = if width == 600 { 1 } else { 3 };
-        let visible = cards
-            .iter()
-            .filter(|card| card.is_mapped())
-            .take(expected_visible)
-            .collect::<Vec<_>>();
-        assert_eq!(visible.len(), expected_visible, "{case} omitted first-row cards");
         if width > 600 {
-            let healthy = ancestor_with_class(&find_mapped_labelled(root, "disabled-linter"), "hl-card")
-                .expect("disabled installed extension belongs to a card");
             assert!(
                 healthy.height() < first.height(),
                 "{case} healthy card inherited the fault diagnostic height: healthy={}px faulted={}px",
@@ -3790,22 +3828,37 @@ mod unix {
                 "{case} healthy installed card exceeded the compact 190px budget: {}px",
                 healthy.height()
             );
-            let widths = cards
+            let healthy_cards = cards
                 .iter()
                 .filter(|card| card.is_mapped())
-                .map(gtk::Widget::width)
+                .filter(|card| card.width() < width / 2)
                 .collect::<Vec<_>>();
-            let narrowest = widths.iter().min().copied().unwrap_or_default();
-            let widest = widths.iter().max().copied().unwrap_or_default();
+            assert!(healthy_cards.len() >= 3, "{case} omitted the healthy grid");
+            let mut rows = std::collections::BTreeMap::<i32, Vec<i32>>::new();
+            for card in &healthy_cards {
+                let y = vertical_end(root, card) - card.height();
+                rows.entry(y).or_default().push(card.width());
+            }
+            for (y, widths) in rows {
+                let narrowest = widths.iter().min().copied().unwrap_or_default();
+                let widest = widths.iter().max().copied().unwrap_or_default();
+                assert!(
+                    widest - narrowest <= 1,
+                    "{case} healthy row at {y}px inherited uneven widths: {widths:?}"
+                );
+            }
+            let first_row_y = vertical_end(root, healthy_cards[0]) - healthy_cards[0].height();
+            let first_row_heights = healthy_cards
+                .iter()
+                .filter(|card| vertical_end(root, card) - card.height() == first_row_y)
+                .map(|card| card.height())
+                .collect::<Vec<_>>();
+            assert!(first_row_heights.len() >= 3, "{case} healthy grid did not fill its first row");
             assert!(
-                widest - narrowest <= 1,
-                "{case} installed card grid inherited uneven content widths: {widths:?}"
+                first_row_heights.iter().all(|height| *height == first_row_heights[0]),
+                "{case} healthy first-row cards are not uniform: {first_row_heights:?}"
             );
         }
-        assert!(
-            visible.iter().all(|card| vertical_end(root, card) <= 780),
-            "{case} did not show the complete first installed row in the 800px viewport"
-        );
     }
 
     fn find_search_with_placeholder(root: &gtk::Widget, wanted: &str) -> gtk::SearchEntry {

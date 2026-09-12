@@ -266,6 +266,13 @@ function installedPriority(
   return 4;
 }
 
+export function installedExtensionNeedsAttention(
+  extension: ExtensionSummary,
+  catalogue: ExtensionCatalogueEntry[],
+): boolean {
+  return extension.status.startsWith('fault:') || Boolean(installedUpdate(extension, catalogue));
+}
+
 export function filterInstalledExtensions(
   extensions: ExtensionSummary[],
   catalogue: ExtensionCatalogueEntry[],
@@ -2162,164 +2169,207 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                     />
                   </Column>
                 ) : (
-                  <Row gap={1} width="fill" wrap>
-                    {renderedInstalled.map((extension) => {
-                      const catalogueEntry = catalogue?.entries.find(
-                        (entry) => entry.id === extension.name,
+                  <Column gap={2} width="fill">
+                    {[
+                      { attention: true, label: 'Needs attention' },
+                      { attention: false, label: 'Healthy extensions' },
+                    ].map(({ attention, label }) => {
+                      const extensions = renderedInstalled.filter(
+                        (extension) =>
+                          installedExtensionNeedsAttention(extension, catalogueEntries) ===
+                          attention,
                       );
-                      const update =
-                        catalogueEntry && newerVersion(catalogueEntry.version, extension.version)
-                          ? catalogueEntry
-                          : undefined;
-                      const updateCompatibility = update
-                        ? catalogueCompatibility(update, workspaceArchitecture)
-                        : null;
-                      const currentCompatibility = catalogueEntry
-                        ? catalogueCompatibility(catalogueEntry, workspaceArchitecture)
-                        : null;
-                      const provider = extension.pane_providers?.[0];
-                      const hasCardAction = Boolean(
-                        update ||
-                        (extension.name !== 'top' &&
-                          (extension.status.startsWith('fault:') || !extension.enabled)) ||
-                        provider ||
-                        catalogueEntry,
-                      );
+                      if (extensions.length === 0) return null;
                       return (
-                        <Card
-                          key={`${extension.name}:${extension.image_digest}`}
-                          grow
-                          width={{ chars: 36 }}
-                          height="content"
-                          variant="outline"
-                        >
-                          <CardContent gap={1}>
-                            <Row gap={1} width="fill" align="center" justify="start" wrap>
-                              <Column gap={0} grow>
-                                <Text label={extension.name} tooltip={extension.image_digest} />
-                                <Text
-                                  label={
-                                    extension.version
-                                      ? `Version ${extension.version}`
-                                      : 'Version unavailable'
-                                  }
-                                  color="text-dim"
-                                />
+                        <Column key={label} gap={1} width="fill">
+                          <Row gap={1} width="fill" align="center" justify="start">
+                            <Heading label={label} scale="caption" grow={false} align="start" />
+                            <Badge label={countLabel(extensions.length, 'extension')} />
+                          </Row>
+                          {(() => {
+                            const cards = extensions.map((extension) => {
+                              const catalogueEntry = catalogue?.entries.find(
+                                (entry) => entry.id === extension.name,
+                              );
+                              const update =
+                                catalogueEntry &&
+                                newerVersion(catalogueEntry.version, extension.version)
+                                  ? catalogueEntry
+                                  : undefined;
+                              const updateCompatibility = update
+                                ? catalogueCompatibility(update, workspaceArchitecture)
+                                : null;
+                              const currentCompatibility = catalogueEntry
+                                ? catalogueCompatibility(catalogueEntry, workspaceArchitecture)
+                                : null;
+                              const provider = extension.pane_providers?.[0];
+                              const hasCardAction = Boolean(
+                                update ||
+                                (extension.name !== 'top' &&
+                                  (extension.status.startsWith('fault:') || !extension.enabled)) ||
+                                provider ||
+                                catalogueEntry,
+                              );
+                              return (
+                                <Card
+                                  key={`${extension.name}:${extension.image_digest}`}
+                                  grow
+                                  width={attention ? 'fill' : { chars: 36 }}
+                                  height={attention ? 'content' : 'fill'}
+                                  variant="outline"
+                                >
+                                  <CardContent gap={1}>
+                                    <Row gap={1} width="fill" align="center" justify="start" wrap>
+                                      <Column gap={0} grow>
+                                        <Text
+                                          label={extension.name}
+                                          tooltip={extension.image_digest}
+                                        />
+                                        <Text
+                                          label={
+                                            extension.version
+                                              ? `Version ${extension.version}`
+                                              : 'Version unavailable'
+                                          }
+                                          color="text-dim"
+                                        />
+                                      </Column>
+                                      <Badge
+                                        label={capitalize(extensionState(extension))}
+                                        tone={
+                                          extension.status.startsWith('fault:')
+                                            ? 'danger'
+                                            : extension.enabled
+                                              ? 'positive'
+                                              : 'neutral'
+                                        }
+                                      />
+                                    </Row>
+                                    <ExtensionFault extension={extension} />
+                                    {updateCompatibility ? (
+                                      <Text
+                                        label={
+                                          update
+                                            ? updateCompatibility.compatible === true
+                                              ? `Update available · Version ${update.version}`
+                                              : `Update to Version ${update.version} · ${updateCompatibility.label}`
+                                            : `Update · ${updateCompatibility.label}`
+                                        }
+                                        color={
+                                          updateCompatibility.compatible === false
+                                            ? 'warning'
+                                            : 'text-dim'
+                                        }
+                                        wrap
+                                      />
+                                    ) : null}
+                                    <LifecycleFeedback
+                                      extensionName={extension.name}
+                                      pending={pendingLifecycle}
+                                      failure={lifecycleFailure}
+                                    />
+                                    {extension.name === 'top' ? (
+                                      <InstalledPermissionSummary extension={extension} />
+                                    ) : (
+                                      <Expander label="View permissions" expanded={false}>
+                                        <InstalledPermissionSummary extension={extension} />
+                                      </Expander>
+                                    )}
+                                    {hasCardAction || extension.name !== 'top' ? (
+                                      <Row gap={1} width="fill" align="center" justify="start" wrap>
+                                        {update && (
+                                          <Button
+                                            key="review-update"
+                                            label="Review update"
+                                            size="small"
+                                            variant="filled"
+                                            tone="accent"
+                                            enabled={
+                                              !busy && updateCompatibility?.compatible !== false
+                                            }
+                                            onInvoke={() => inspect(update.reference, update)}
+                                          />
+                                        )}
+                                        {!update &&
+                                        extension.name !== 'top' &&
+                                        extension.status.startsWith('fault:') ? (
+                                          <Button
+                                            key="lifecycle"
+                                            label="Retry"
+                                            size="small"
+                                            variant="outline"
+                                            tone="accent"
+                                            enabled={!busy}
+                                            onInvoke={() => lifecycle(extension, 'retry')}
+                                          />
+                                        ) : !update &&
+                                          extension.name !== 'top' &&
+                                          !extension.enabled ? (
+                                          <Button
+                                            key="lifecycle"
+                                            label="Enable"
+                                            size="small"
+                                            variant="outline"
+                                            tone="accent"
+                                            enabled={!busy}
+                                            onInvoke={() => lifecycle(extension, 'enable')}
+                                          />
+                                        ) : !update && provider ? (
+                                          providerAction(extension, provider)
+                                        ) : null}
+                                        {!update && catalogueEntry ? (
+                                          <Button
+                                            label="Check for changes"
+                                            tooltip={`Check ${extension.name} image for changes`}
+                                            size="small"
+                                            variant="ghost"
+                                            enabled={
+                                              !busy && currentCompatibility?.compatible !== false
+                                            }
+                                            onInvoke={() =>
+                                              inspect(catalogueEntry.reference, catalogueEntry)
+                                            }
+                                          />
+                                        ) : null}
+                                        {extension.enabled &&
+                                        !extension.status.startsWith('fault:') ? (
+                                          <Button
+                                            label="Disable"
+                                            size="small"
+                                            variant="ghost"
+                                            enabled={!busy}
+                                            onInvoke={() => lifecycle(extension, 'disable')}
+                                          />
+                                        ) : null}
+                                        <ConfirmAction
+                                          label="Remove"
+                                          confirmLabel={`Remove ${extension.name}`}
+                                          question={`Remove ${extension.name} and permanently delete its private workspace data?`}
+                                          authorityKey={extension.image_digest}
+                                          enabled={!busy}
+                                          size="small"
+                                          onConfirm={() => lifecycle(extension, 'remove')}
+                                        />
+                                      </Row>
+                                    ) : null}
+                                  </CardContent>
+                                </Card>
+                              );
+                            });
+                            return attention ? (
+                              <Column gap={1} width="fill">
+                                {cards}
                               </Column>
-                              <Badge
-                                label={capitalize(extensionState(extension))}
-                                tone={
-                                  extension.status.startsWith('fault:')
-                                    ? 'danger'
-                                    : extension.enabled
-                                      ? 'positive'
-                                      : 'neutral'
-                                }
-                              />
-                            </Row>
-                            <ExtensionFault extension={extension} />
-                            {updateCompatibility ? (
-                              <Text
-                                label={
-                                  update
-                                    ? updateCompatibility.compatible === true
-                                      ? `Update available · Version ${update.version}`
-                                      : `Update to Version ${update.version} · ${updateCompatibility.label}`
-                                    : `Update · ${updateCompatibility.label}`
-                                }
-                                color={
-                                  updateCompatibility.compatible === false ? 'warning' : 'text-dim'
-                                }
-                                wrap
-                              />
-                            ) : null}
-                            <LifecycleFeedback
-                              extensionName={extension.name}
-                              pending={pendingLifecycle}
-                              failure={lifecycleFailure}
-                            />
-                            {extension.name === 'top' ? (
-                              <InstalledPermissionSummary extension={extension} />
                             ) : (
-                              <Expander label="View permissions" expanded={false}>
-                                <InstalledPermissionSummary extension={extension} />
-                              </Expander>
-                            )}
-                            {hasCardAction || extension.name !== 'top' ? (
-                              <Row gap={1} width="fill" align="center" justify="start" wrap>
-                                {update && (
-                                  <Button
-                                    key="review-update"
-                                    label="Review update"
-                                    size="small"
-                                    variant="filled"
-                                    tone="accent"
-                                    enabled={!busy && updateCompatibility?.compatible !== false}
-                                    onInvoke={() => inspect(update.reference, update)}
-                                  />
-                                )}
-                                {!update &&
-                                extension.name !== 'top' &&
-                                extension.status.startsWith('fault:') ? (
-                                  <Button
-                                    key="lifecycle"
-                                    label="Retry"
-                                    size="small"
-                                    variant="outline"
-                                    tone="accent"
-                                    enabled={!busy}
-                                    onInvoke={() => lifecycle(extension, 'retry')}
-                                  />
-                                ) : !update && extension.name !== 'top' && !extension.enabled ? (
-                                  <Button
-                                    key="lifecycle"
-                                    label="Enable"
-                                    size="small"
-                                    variant="outline"
-                                    tone="accent"
-                                    enabled={!busy}
-                                    onInvoke={() => lifecycle(extension, 'enable')}
-                                  />
-                                ) : !update && provider ? (
-                                  providerAction(extension, provider)
-                                ) : null}
-                                {!update && catalogueEntry ? (
-                                  <Button
-                                    label="Check for changes"
-                                    tooltip={`Check ${extension.name} image for changes`}
-                                    size="small"
-                                    variant="ghost"
-                                    enabled={!busy && currentCompatibility?.compatible !== false}
-                                    onInvoke={() =>
-                                      inspect(catalogueEntry.reference, catalogueEntry)
-                                    }
-                                  />
-                                ) : null}
-                                {extension.enabled && !extension.status.startsWith('fault:') ? (
-                                  <Button
-                                    label="Disable"
-                                    size="small"
-                                    variant="ghost"
-                                    enabled={!busy}
-                                    onInvoke={() => lifecycle(extension, 'disable')}
-                                  />
-                                ) : null}
-                                <ConfirmAction
-                                  label="Remove"
-                                  confirmLabel={`Remove ${extension.name}`}
-                                  question={`Remove ${extension.name} and permanently delete its private workspace data?`}
-                                  authorityKey={extension.image_digest}
-                                  enabled={!busy}
-                                  size="small"
-                                  onConfirm={() => lifecycle(extension, 'remove')}
-                                />
+                              <Row gap={1} width="fill" wrap>
+                                {cards}
                               </Row>
-                            ) : null}
-                          </CardContent>
-                        </Card>
+                            );
+                          })()}
+                        </Column>
                       );
                     })}
-                  </Row>
+                  </Column>
                 )}
                 {visibleInstalled.length > renderedInstalled.length ? (
                   <Row gap={1} width="fill" wrap align="center" justify="start">

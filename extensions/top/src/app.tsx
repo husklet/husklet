@@ -68,6 +68,7 @@ export {
   compactImageReference,
   filterCatalogueEntries,
   filterInstalledExtensions,
+  installedExtensionNeedsAttention,
 } from './extensions.js';
 
 const { useCallback, useEffect, useMemo, useRef, useState } = React;
