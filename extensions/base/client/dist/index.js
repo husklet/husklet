@@ -1015,10 +1015,15 @@ export function workspace(session, { signal } = {}) {
             throw new RangeError(`host does not publish the ${topic} snapshot topic`);
         let state = states.get(topic);
         if (!state) {
-            state = { references: 0, active: false, operation: Promise.resolve() };
+            state = { references: new Set(), active: false, operation: Promise.resolve() };
             states.set(topic, state);
         }
-        state.references += 1;
+        // Give every acquisition its own identity. A failed pending subscribe and
+        // a concurrent unsubscribe may both try to release what used to be the
+        // same numeric reference; identity makes the second release a no-op rather
+        // than letting the count underflow and retire a later consumer.
+        const reference = Symbol(`subscription ${topic}`);
+        state.references.add(reference);
         const operation = state.operation.then(async () => {
             if (!state.active) {
                 await subscription('event_subscribe', topic);
@@ -1030,8 +1035,8 @@ export function workspace(session, { signal } = {}) {
             await operation;
         }
         catch (error) {
-            state.references -= 1;
-            if (state.references === 0 && !state.active)
+            state.references.delete(reference);
+            if (state.references.size === 0 && !state.active && states.get(topic) === state)
                 states.delete(topic);
             throw error;
         }
@@ -1040,15 +1045,16 @@ export function workspace(session, { signal } = {}) {
         if (!SNAPSHOT_TOPICS.includes(topic))
             throw new RangeError(`host does not publish the ${topic} snapshot topic`);
         const state = states.get(topic);
-        if (!state || state.references === 0)
+        if (!state || state.references.size === 0)
             return;
-        state.references -= 1;
+        const reference = state.references.values().next().value;
+        state.references.delete(reference);
         const operation = state.operation.then(async () => {
-            if (state.references === 0 && state.active) {
+            if (state.references.size === 0 && state.active) {
                 await expect(await hostSession.call('event_unsubscribe', { topic }), 'done');
                 state.active = false;
             }
-            if (state.references === 0 && !state.active)
+            if (state.references.size === 0 && !state.active && states.get(topic) === state)
                 states.delete(topic);
         });
         state.operation = operation.catch(() => { });
