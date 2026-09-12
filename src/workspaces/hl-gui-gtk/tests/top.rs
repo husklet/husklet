@@ -1637,6 +1637,24 @@ mod unix {
         );
         let progress_root = surface.widget().clone().upcast::<gtk::Widget>();
         capture_update_surface(window, &progress_root, "update-progress");
+        let cancel = find_button(&progress_root, "Cancel inspection");
+        assert!(cancel.has_css_class("size-small"));
+        assert_eq!(cancel.height(), 28, "inspection cancellation stays compact");
+        let cancel_bounds = cancel
+            .compute_bounds(&progress_root)
+            .expect("cancel action belongs to the progress surface");
+        let toolbar = cancel.parent().expect("cancel action remains in its progress toolbar");
+        let toolbar_bounds = toolbar
+            .compute_bounds(&progress_root)
+            .expect("progress toolbar belongs to the progress surface");
+        assert!(
+            (cancel_bounds.x() + cancel_bounds.width()
+                - toolbar_bounds.x()
+                - toolbar_bounds.width())
+                .abs()
+                <= 1.0,
+            "cancel action is stranded beside progress text: cancel={cancel_bounds:?}, toolbar={toolbar_bounds:?}"
+        );
 
         assert!(acquisition_subscribed.get(), "progress wait subscribed before review");
         let payload = codec::payload(&Snapshot::ExtensionAcquisitions(

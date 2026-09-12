@@ -2296,6 +2296,9 @@ test('a stale cancellation refreshes the authoritative phase and remains cancell
     ),
   );
   assert.ok(labelled(stage, 'Cancel inspection'));
+  assert.deepEqual(property(stage, 'Cancel inspection', 'Size'), {
+    ControlSize: 'Small',
+  });
 });
 
 test('exact workspace environment consent carries its required verb and clears coherently', async () => {

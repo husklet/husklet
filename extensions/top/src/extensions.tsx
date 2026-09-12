@@ -1946,12 +1946,16 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                       ) : ['installed', 'updated'].includes(acquisition.state) ? (
                         <Text label={acquisitionLabel(acquisition)} wrap />
                       ) : (
-                        <Row gap={1} align="center" wrap>
-                          <Spinner />
-                          <Text label={acquisitionLabel(acquisition)} wrap />
+                        <Row gap={1} width="fill" align="center" justify="stretch">
+                          <Row gap={1} align="center" wrap>
+                            <Spinner />
+                            <Text label={acquisitionLabel(acquisition)} wrap />
+                          </Row>
+                          <Spacer />
                           <Button
                             label={busy === 'cancel' ? 'Cancelling…' : 'Cancel inspection'}
                             variant="outline"
+                            size="small"
                             enabled={busy !== 'cancel'}
                             onInvoke={cancel}
                           />
