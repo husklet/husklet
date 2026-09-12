@@ -414,6 +414,36 @@ export function Networks({
                         />
                       )
                     }
+                    overflow={
+                      network.kind !== 'builtin' ? (
+                        <Expander
+                          label="Danger zone"
+                          variant="outline"
+                          width="content"
+                          align="start"
+                          tooltip="Remove this network from the workspace"
+                        >
+                          <Column gap={1}>
+                            <Text
+                              label="Removing this network disconnects it from the workspace and cannot be undone."
+                              color="text-dim"
+                              wrap
+                            />
+                            <Row>
+                              <ConfirmAction
+                                authorityKey={`network:${id}:remove`}
+                                label="Remove"
+                                confirmLabel="Confirm remove"
+                                pendingLabel="Confirm remove"
+                                question={`Remove immutable network ${id} (${network.name})?`}
+                                size="small"
+                                onConfirm={() => remove(network)}
+                              />
+                            </Row>
+                          </Column>
+                        </Expander>
+                      ) : null
+                    }
                   />
                   {membershipUnknown ? (
                     <CardContent>
@@ -513,29 +543,6 @@ export function Networks({
                       </>
                     ) : null}
                   </Column>
-                  {network.kind !== 'builtin' ? (
-                    <CardContent key="danger-zone">
-                      <Expander label="Danger zone" variant="outline" width="content">
-                        <Column gap={1}>
-                          <Text
-                            label="Removing this network disconnects it from the workspace and cannot be undone."
-                            color="text-dim"
-                            wrap
-                          />
-                          <Row>
-                            <ConfirmAction
-                              authorityKey={`network:${id}:remove`}
-                              label="Remove"
-                              confirmLabel="Confirm remove"
-                              pendingLabel="Confirm remove"
-                              question={`Remove immutable network ${id} (${network.name})?`}
-                              onConfirm={() => remove(network)}
-                            />
-                          </Row>
-                        </Column>
-                      </Expander>
-                    </CardContent>
-                  ) : null}
                 </Card>
               );
             })}

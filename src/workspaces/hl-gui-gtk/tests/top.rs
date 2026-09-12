@@ -657,7 +657,26 @@ mod unix {
                 let danger = find_expander(&network_card, "Danger zone");
                 assert!(danger.has_css_class("variant-outline"));
                 assert_eq!(danger.height(), 28, "{width_name} network danger disclosure stays compact");
+                assert_eq!(
+                    danger.tooltip_text().as_deref(),
+                    Some("Remove this network from the workspace")
+                );
                 assert!(danger.grab_focus(), "network danger disclosure is keyboard reachable");
+                assert!(
+                    network_card.height() <= 80,
+                    "{width_name} collapsed network record split danger into a {}px second band",
+                    network_card.height()
+                );
+                let manage_bounds = manage
+                    .compute_bounds(&network_card)
+                    .expect("Manage connections belongs to network card");
+                let danger_bounds = danger
+                    .compute_bounds(&network_card)
+                    .expect("Danger zone belongs to network card");
+                assert!(
+                    (manage_bounds.y() - danger_bounds.y()).abs() <= 2.0,
+                    "{width_name} network actions split across rows: manage={manage_bounds:?}, danger={danger_bounds:?}"
+                );
                 let widgets = [
                     entry.clone().upcast::<gtk::Widget>(),
                     create.clone().upcast(),
@@ -680,6 +699,26 @@ mod unix {
                 assert!(create.allocation().x() < refresh.allocation().x());
                 assert!(vertical_end(&root, refresh.upcast_ref()) <= 240);
                 if width == 1_200 {
+                    assert!(!danger.is_expanded(), "network danger disclosure starts collapsed");
+                    danger.emit_by_name::<()>("activate", &[]);
+                    settle_toolkit();
+                    assert!(danger.is_expanded(), "network danger disclosure opens in place");
+                    root.measure(gtk::Orientation::Horizontal, -1);
+                    root.measure(gtk::Orientation::Vertical, width);
+                    root.allocate(width, 1_600, -1, None);
+                    settle_frame();
+                    let remove = find_button(&network_card, "Remove");
+                    assert!(remove.has_css_class("size-small"));
+                    assert_eq!(remove.height(), 28, "expanded network removal stays compact");
+                    assert!(remove.grab_focus(), "expanded network removal is keyboard reachable");
+                    capture_stable(&window, "network-danger-wide", width, 800);
+                    assert!(
+                        danger.grab_focus(),
+                        "focus returns to network disclosure before its focused child is removed"
+                    );
+                    danger.emit_by_name::<()>("activate", &[]);
+                    settle_toolkit();
+                    assert!(!danger.is_expanded(), "network danger disclosure closes in place");
                     assert_labels_painted(
                         &window,
                         &root,
@@ -795,7 +834,26 @@ mod unix {
                 let danger = find_expander(&card, "Danger zone");
                 assert!(danger.has_css_class("variant-outline"));
                 assert_eq!(danger.height(), 28, "{width_name} image danger disclosure stays compact");
+                assert_eq!(
+                    danger.tooltip_text().as_deref(),
+                    Some("Remove this image from the workspace image store")
+                );
                 assert!(danger.grab_focus(), "image danger disclosure is keyboard reachable");
+                assert!(
+                    card.height() <= 80,
+                    "{width_name} collapsed image record split danger into a {}px second band",
+                    card.height()
+                );
+                let inspect_bounds = inspect
+                    .compute_bounds(&card)
+                    .expect("Inspect belongs to image card");
+                let danger_bounds = danger
+                    .compute_bounds(&card)
+                    .expect("Danger zone belongs to image card");
+                assert!(
+                    (inspect_bounds.y() - danger_bounds.y()).abs() <= 2.0,
+                    "{width_name} image actions split across rows: inspect={inspect_bounds:?}, danger={danger_bounds:?}"
+                );
                 if width == 1_200 {
                     let size = find_label(&card, "7.8 MiB")
                         .compute_bounds(&card)
@@ -807,6 +865,26 @@ mod unix {
                         (size.y() - action.y()).abs() <= 8.0,
                         "wide image metadata and action split into separate bands: size={size:?} action={action:?}"
                     );
+                    assert!(!danger.is_expanded(), "image danger disclosure starts collapsed");
+                    danger.emit_by_name::<()>("activate", &[]);
+                    settle_toolkit();
+                    assert!(danger.is_expanded(), "image danger disclosure opens in place");
+                    root.measure(gtk::Orientation::Horizontal, -1);
+                    root.measure(gtk::Orientation::Vertical, width);
+                    root.allocate(width, 1_600, -1, None);
+                    settle_frame();
+                    let remove = find_button(&card, "Remove");
+                    assert!(remove.has_css_class("size-small"));
+                    assert_eq!(remove.height(), 28, "expanded image removal stays compact");
+                    assert!(remove.grab_focus(), "expanded image removal is keyboard reachable");
+                    capture_stable(&window, "image-danger-wide", width, 800);
+                    assert!(
+                        danger.grab_focus(),
+                        "focus returns to image disclosure before its focused child is removed"
+                    );
+                    danger.emit_by_name::<()>("activate", &[]);
+                    settle_toolkit();
+                    assert!(!danger.is_expanded(), "image danger disclosure closes in place");
                 }
             }
             if fixture == "populated" && name == "executions" {
@@ -1111,7 +1189,12 @@ mod unix {
             if fixture == "error" && name == "workspace" {
                 assert_overview_recovery(&root, width, width_name);
             }
-            capture(&window, &format!("{capture_fixture}-{name}-{width_name}"), width, 800);
+            capture_stable(
+                &window,
+                &format!("{capture_fixture}-{name}-{width_name}"),
+                width,
+                800,
+            );
             if fixture == "error" && name == "workspace" {
                 let disclosure = find_expander(&root, "Technical details");
                 assert!(
@@ -1555,7 +1638,7 @@ mod unix {
             assert!(!find_expander(&expanded_root, "Danger zone").is_expanded());
             assert_label_order(
                 &expanded_root,
-                &["Network details", "Container attachment", "Danger zone"],
+                &["Danger zone", "Network details", "Container attachment"],
             );
 
             let selector = find_toggle(&expanded_root, "Choose…");
@@ -1690,20 +1773,20 @@ mod unix {
             assert_label_order(
                 &success_root,
                 &[
+                    "Danger zone",
                     "Network details",
                     "Container attachment",
                     &success,
                     "Technical details",
-                    "Danger zone",
                 ],
             );
             assert_focus_order(
                 &success_root,
                 &[
+                    "Danger zone",
                     "api-worker · aaaaaaaaaaaa · exited",
                     "Disconnect",
                     "Technical details",
-                    "Danger zone",
                 ],
             );
             find_expander(&success_root, "Technical details").set_expanded(true);

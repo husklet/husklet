@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement as h } from 'react';
-import { Containers, Executions, Images, Volumes } from '../dist/app.js';
+import { Containers, Executions, Images, Networks, Volumes } from '../dist/app.js';
 import { host } from './host.js';
 
 const resource = (data) => ({ data, loading: false, error: null, reload: async () => {} });
@@ -62,8 +62,13 @@ test('image inventory is a full-width compact summary with secondary inspection 
     'inspection remains a secondary action rather than competing with image pull',
   );
   assert.deepEqual(ancestorTags(stage, 'Inspect').slice(0, 3), ['Row', 'Row', 'CardContent']);
+  assert.deepEqual(ancestorTags(stage, 'Danger zone').slice(0, 3), ['Row', 'Row', 'CardContent']);
   assert.deepEqual(property(stage, 'Danger zone', 'Variant'), { Variant: 'Outline' });
   assert.deepEqual(property(stage, 'Danger zone', 'Width'), { Length: 'Content' });
+  assert.deepEqual(property(stage, 'Danger zone', 'Tooltip'), {
+    Text: 'Remove this image from the workspace image store',
+  });
+  assert.deepEqual(property(stage, 'Remove', 'Size'), { ControlSize: 'Small' });
   invoke(stage, 'Inspect');
   await settled();
   assert.ok(
@@ -72,6 +77,38 @@ test('image inventory is a full-width compact summary with secondary inspection 
       'Verify that the image still exists and that this extension has access to it, then retry inspection.',
     ),
   );
+});
+
+test('network inventory keeps management and destructive disclosure in one compact summary row', () => {
+  const stage = host();
+  stage.render(
+    h(Networks, {
+      api: { networks: {} },
+      resource: resource([
+        {
+          id: 'a'.repeat(32),
+          name: 'development',
+          driver: 'bridge',
+          scope: 'local',
+          kind: 'custom',
+          endpoints: { containers: [], truncated: false },
+        },
+      ]),
+      containers: resource([]),
+      onOpenExtensions: () => {},
+    }),
+  );
+
+  assert.deepEqual(ancestorTags(stage, 'Manage connections').slice(0, 3), [
+    'Row',
+    'Row',
+    'CardContent',
+  ]);
+  assert.deepEqual(ancestorTags(stage, 'Danger zone').slice(0, 3), ['Row', 'Row', 'CardContent']);
+  assert.deepEqual(property(stage, 'Danger zone', 'Tooltip'), {
+    Text: 'Remove this network from the workspace',
+  });
+  assert.deepEqual(property(stage, 'Remove', 'Size'), { ControlSize: 'Small' });
 });
 
 test('volume authority refusal gives one recovery path and withholds removal', async () => {

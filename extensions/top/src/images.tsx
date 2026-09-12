@@ -6,6 +6,7 @@ import {
   CardContent,
   CardHeader,
   Column,
+  ConfirmAction,
   Entry,
   Expander,
   FormControl,
@@ -325,6 +326,31 @@ export function Images({
                   onInvoke={() => inspect(item)}
                 />
               }
+              overflow={
+                <Expander
+                  label="Danger zone"
+                  variant="outline"
+                  width="content"
+                  align="start"
+                  tooltip="Remove this image from the workspace image store"
+                >
+                  <Column gap={1}>
+                    <Text label="Removing this image cannot be undone." color="text-dim" wrap />
+                    <Row>
+                      <ConfirmAction
+                        authorityKey={`image:${item.id}:remove`}
+                        label="Remove"
+                        confirmLabel="Confirm remove"
+                        pendingLabel="Confirm remove"
+                        question={`Remove ${item.reference || '<untagged>'} (${shortId(item.id)})?`}
+                        size="small"
+                        enabled={!busy}
+                        onConfirm={() => remove(item)}
+                      />
+                    </Row>
+                  </Column>
+                </Expander>
+              }
             />
             {inspection.id === item.id ? (
               <CardContent>
@@ -358,39 +384,6 @@ export function Images({
                 ) : null}
               </CardContent>
             ) : null}
-            <CardContent>
-              <Expander label="Danger zone" variant="outline" width="content" align="start">
-                <Column gap={1}>
-                  <Text label="Removing this image cannot be undone." color="text-dim" wrap />
-                  {confirm === item.id ? (
-                    <Row gap={1} wrap>
-                      <Text
-                        label={`Remove ${item.reference || '<untagged>'} (${shortId(item.id)})?`}
-                        color="warning"
-                        wrap
-                      />
-                      <Button
-                        label="Confirm remove"
-                        enabled={!busy}
-                        tone="danger"
-                        destructive
-                        onInvoke={() => remove(item)}
-                      />
-                      <Button label="Cancel" enabled={!busy} onInvoke={() => setConfirm('')} />
-                    </Row>
-                  ) : (
-                    <Row>
-                      <Button
-                        label="Remove"
-                        variant="outline"
-                        enabled={!busy}
-                        onInvoke={() => setConfirm(item.id)}
-                      />
-                    </Row>
-                  )}
-                </Column>
-              </Expander>
-            </CardContent>
           </Card>
         ))}
         <Omitted count={view.omitted} />

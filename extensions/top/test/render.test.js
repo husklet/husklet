@@ -5289,9 +5289,14 @@ test('volume and network panels render bounded real inventories and controls', (
   );
   assert.equal(
     networkFrame.patches.filter((patch) => patch.Create?.tag === 'CardContent').length,
-    3,
-    'custom-network danger controls stay in a separate subordinate content band',
+    2,
+    'custom-network danger controls share the compact summary rather than adding a footer band',
   );
+  assert.deepEqual(ancestorTags(networkInventoryStage, 'Danger zone').slice(0, 3), [
+    'Row',
+    'Row',
+    'CardContent',
+  ]);
   assert.ok(
     !labels(networkFrame).includes('Disconnect'),
     'destructive endpoint action waits for a target',
@@ -7688,13 +7693,13 @@ test('successful network attachment retains its receipt and verified expanded me
       ].includes(label),
     ),
     [
+      'Danger zone',
       'Network details',
       'Container attachment',
       'Connected container-1 to private',
       'Technical details',
-      'Danger zone',
     ],
-    'reinspection retains the daily attachment workflow and its receipt before destructive controls',
+    'reinspection retains the summary action before the daily attachment workflow and its receipt',
   );
   assert.notDeepEqual(taggedProperty(stage, 'Danger zone', 'Expander', 'Expanded'), {
     Flag: true,
@@ -7803,13 +7808,13 @@ test('successful disconnect retains its receipt and verified empty membership', 
       ].includes(label),
     ),
     [
+      'Danger zone',
       'Network details',
       'Container attachment',
       'Disconnected container-1 from private',
       'Technical details',
-      'Danger zone',
     ],
-    'disconnect reinspection retains its receipt before the final destructive disclosure',
+    'disconnect reinspection retains the summary action and its verified receipt',
   );
   assert.notDeepEqual(taggedProperty(stage, 'Danger zone', 'Expander', 'Expanded'), {
     Flag: true,
