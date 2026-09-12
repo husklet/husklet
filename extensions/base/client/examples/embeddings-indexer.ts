@@ -161,7 +161,18 @@ try {
   });
   if (!caughtUp.caughtUp)
     throw new Error('filesystem catch-up exceeded its bound; resume before publishing');
-  if (caughtUp.changes.length > 0) {
+  const scopedCatchUp = host.files.scopeChanges(
+    {
+      changes: caughtUp.changes,
+      journal: caughtUp.cursor.journal,
+      next: caughtUp.cursor.revision,
+      current: caughtUp.current,
+      more: !caughtUp.caughtUp,
+      truncated: false,
+    },
+    roots,
+  );
+  if (scopedCatchUp.changes.length > 0) {
     throw new Error('document changed after inventory; refusing a stale checkpoint');
   }
   checkpoint = (
@@ -176,8 +187,9 @@ try {
   if (!configuration.once) {
     const stop = await host.files.watchLatestChanges(
       async (page, signal) => {
-        if (page.truncated) throw new Error('filesystem journal gap requires a full rescan');
-        for (const change of page.changes) {
+        const scopedPage = host.files.scopeChanges(page, roots);
+        if (scopedPage.truncated) throw new Error('filesystem journal gap requires a full rescan');
+        for (const change of scopedPage.changes) {
           if (change.entry && wanted(change.entry)) await index(change.entry, true, signal);
           if (!change.entry && checkpoint.documents[change.path]) {
             const { [change.path]: _removed, ...documents } = checkpoint.documents;
@@ -185,7 +197,7 @@ try {
             checkpoint = (
               await host.state.updateJson(checkpointCodec, (current) => ({
                 ...current,
-                revision: page.next,
+                revision: scopedPage.next,
                 documents,
               }))
             ).value;
@@ -194,8 +206,8 @@ try {
         checkpoint = (
           await host.state.updateJson(checkpointCodec, (current) => ({
             ...current,
-            journal: page.journal,
-            revision: page.next,
+            journal: scopedPage.journal,
+            revision: scopedPage.next,
           }))
         ).value;
       },

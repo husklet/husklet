@@ -95,6 +95,30 @@ test('fragmented greeting exposes only the caller filesystem grant as immutable 
     assert.equal(files.pathGrant('write', 'state/index.json'), 'exact');
     assert.equal(files.pathGrant('write', 'state/index.json.tmp'), null);
     assert.throws(() => files.pathGrant('read', '../secret'), /parent traversal/);
+    const scoped = files.scopeChanges(
+      {
+        journal: 'a'.repeat(32),
+        changes: [
+          { revision: 8, kind: 'modify', path: 'src/app.ts', entry: null },
+          { revision: 9, kind: 'modify', path: 'src2/private.ts', entry: null },
+          { revision: 10, kind: 'modify', path: 'README.md', entry: null },
+          { revision: 11, kind: 'modify', path: 'README.md.bak', entry: null },
+        ],
+        next: 11,
+        current: 11,
+        more: false,
+        truncated: false,
+      },
+      [
+        { path: 'src', grant: 'subtree' },
+        { path: 'README.md', grant: 'exact' },
+      ],
+    );
+    assert.deepEqual(
+      scoped.changes.map(({ path }) => path),
+      ['src/app.ts', 'README.md'],
+    );
+    assert.equal(scoped.next, 11, 'filtering preserves the global journal cursor');
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(requests.length, 0, 'grant planning never probes the host');
     assert.equal((await files.stat('README.md')).identity, 'readme-v1');

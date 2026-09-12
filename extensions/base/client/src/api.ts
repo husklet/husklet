@@ -1844,6 +1844,11 @@ export interface WorkspaceApi {
       entries: AsyncGenerator<FileEntry, void, void>;
     }>;
     changes(cursor: FileCursor, limit?: number): Promise<FileChangePage>;
+    /** Restrict a host page to configured exact/subtree roots without losing its journal cursor. */
+    scopeChanges(
+      page: FileChangePage,
+      roots: readonly { path: string; grant: 'exact' | 'subtree' }[],
+    ): FileChangePage;
     /**
      * Drain a finite, bounded portion of filesystem history. An incomplete result carries the exact
      * continuation cursor; journal replacement throws FilesystemJournalGapError with its rescan cursor.

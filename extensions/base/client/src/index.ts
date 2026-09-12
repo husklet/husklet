@@ -3094,6 +3094,26 @@ export function workspace(session: ClientSession, { signal }: CallOptions = {}):
           throw new TypeError('host returned an inconsistent filesystem change page');
         return page;
       },
+      scopeChanges: (page, roots) => {
+        if (!Array.isArray(roots) || roots.length < 1 || roots.length > 256)
+          throw new RangeError('filesystem change scope must contain between 1 and 256 roots');
+        const selected = roots.map(({ path, grant }) => {
+          encodeRequest('filesystem_stat', { path });
+          if (grant !== 'exact' && grant !== 'subtree')
+            throw new TypeError('filesystem change root grant must be exact or subtree');
+          return { path, grant };
+        });
+        return {
+          ...page,
+          changes: page.changes.filter((change) =>
+            selected.some(({ path, grant }) =>
+              grant === 'exact'
+                ? change.path === path
+                : filesystemSelectorPermits({ subtree: path }, change.path),
+            ),
+          ),
+        };
+      },
       catchUpChanges: async ({
         cursor,
         pageSize = 256,
@@ -6097,6 +6117,7 @@ export const protocolCoverage = Object.freeze({
       'inventory',
       'beginWalk',
       'changes',
+      'scopeChanges',
       'catchUpChanges',
       'changePages',
       'watchChanges',

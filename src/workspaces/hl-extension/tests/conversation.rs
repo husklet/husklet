@@ -408,6 +408,40 @@ fn a_scoped_symlink_target_crosses_the_real_socket_without_following_it() {
 }
 
 #[test]
+fn an_exact_index_root_refuses_adjacent_file_reads_over_a_real_socket() {
+    let (host_end, extension_end) = connected_pair();
+    let host = Host::new();
+    let mut session = Session::new(Authority::new(
+        ExtensionName::new("embeddings-indexer").unwrap(),
+        Grant::new([Capability::FilesystemRead]),
+        Vec::new(),
+    ))
+    .with_filesystem(hl_extension::FilesystemGrant {
+        read: vec![hl_extension::FilesystemSelector::Exact {
+            exact: RelativePath::new("README.md").unwrap(),
+        }],
+        ..hl_extension::FilesystemGrant::default()
+    });
+    let request = Request::FilesystemRead {
+        path: RelativePath::new("README.md.bak").unwrap(),
+    };
+    let mut sender = hl_extension::Wire::new(extension_end);
+    let mut receiver = hl_extension::Wire::new(host_end);
+
+    sender.send(&codec::request(&request).unwrap()).unwrap();
+    let decoded = codec::read_request(&receiver.receive().unwrap()).unwrap();
+    let failure = session
+        .dispatch(&decoded, &services(&host))
+        .expect_err("exact indexing authority must not widen by path prefix");
+    receiver.send(&codec::failure(&failure).unwrap()).unwrap();
+
+    assert!(matches!(
+        codec::read_failure(&sender.receive().unwrap()),
+        Ok(Failure::Denied { capability, .. }) if capability == Capability::FilesystemRead.as_str()
+    ));
+}
+
+#[test]
 fn observed_file_mutations_reject_a_stale_agent_and_keep_the_real_socket_usable() {
     let (host_end, extension_end) = connected_pair();
     let host = Host::new();
