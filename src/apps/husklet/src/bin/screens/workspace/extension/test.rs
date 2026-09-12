@@ -943,11 +943,17 @@ fn disabled_and_hidden_controls_are_not_advertised_as_actions() {
     );
 
     let button = fixture
+        .tagged(Tag::Button)
+        .expect("disabled control is still rendered")
+        .downcast::<gtk::Button>()
+        .expect("a button tag builds a button");
+    let caption = fixture
         .widgets()
         .into_iter()
-        .filter_map(|widget| widget.downcast::<gtk::Button>().ok())
-        .find(|button| button.label().as_deref() == Some("Unavailable"))
-        .expect("disabled control is still visibly explained");
+        .filter_map(|widget| widget.downcast::<gtk::Label>().ok())
+        .find(|label| label.has_css_class("hl-caption") && label.text() == "Unavailable")
+        .expect("disabled control keeps its visible caption");
+    assert!(caption.is_visible(), "the disabled explanation remains visible");
     assert!(!button.is_sensitive(), "GTK and semantic actionability agree");
 }
 
