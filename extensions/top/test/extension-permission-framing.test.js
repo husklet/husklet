@@ -67,8 +67,10 @@ test('persisted exact-file authority reaches Top unchanged over real Unix framin
     session = await connect({ path: socketPath });
     stage = host();
     stage.render(h(Extensions, { api: workspace(session) }));
-    await until(() => labelled(stage, 'Modify existing contents file · settings/index.json'));
-    assert.ok(labelled(stage, 'View contents folder · documents/ and everything inside'));
+    await until(() =>
+      labelled(stage, 'Only this file · modify existing contents · settings/index.json'),
+    );
+    assert.ok(labelled(stage, 'This folder subtree · view contents · documents/'));
     assert.equal(
       labelled(stage, 'Modify existing contents folder · settings/ and everything inside'),
       undefined,

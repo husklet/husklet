@@ -125,8 +125,8 @@ function filesystemSelectorKey(selector: FilesystemSelector): string {
 
 function filesystemConsentLabel(selector: FilesystemSelector, action: string): string {
   return 'exact' in selector
-    ? `${action} file · ${selector.exact}`
-    : `${action} folder · ${selector.subtree || 'workspace root'}/ and everything inside`;
+    ? `Only this file · ${action.toLocaleLowerCase()} · ${selector.exact}`
+    : `This folder subtree · ${action.toLocaleLowerCase()} · ${selector.subtree || 'workspace root'}/`;
 }
 
 function filesystemGrantCount(grant: FilesystemGrant): number {
@@ -328,7 +328,7 @@ function FilesystemConsent({
   return (
     <Column gap={1}>
       <Text
-        label="Each switch grants only the named action and root, and includes the matching file capability. Modify cannot create, delete, or rename."
+        label="File access is granted per action and path. A file means only that file; a folder subtree includes everything below it. Modify cannot create, delete, or rename."
         color="text-dim"
         wrap
       />
@@ -336,42 +336,57 @@ function FilesystemConsent({
         label={`${filesystemGrantCount(granted)}/${requestCount} workspace paths allowed`}
         color="text-dim"
       />
-      {FILESYSTEM_VERBS.flatMap(({ key, label }) =>
-        filesystemRoots(requested, key).map((selector) => (
-          <FormControlLabel
-            key={`${key}:${filesystemSelectorKey(selector)}`}
-            label={filesystemConsentLabel(selector, label)}
-            gap={2}
-          >
-            <Switch
-              checked={filesystemRoots(granted, key).some(
-                (candidate) => filesystemSelectorKey(candidate) === filesystemSelectorKey(selector),
-              )}
-              onToggle={(event: Change) => {
-                const roots = filesystemRoots(granted, key);
-                const next = {
-                  ...granted,
-                  [key]: event.value
-                    ? [...roots, selector]
-                    : roots.filter(
-                        (candidate) =>
-                          filesystemSelectorKey(candidate) !== filesystemSelectorKey(selector),
-                      ),
-                };
-                const capability = key === 'read' ? 'filesystem:read' : 'filesystem:write';
-                const enabled =
-                  capability === 'filesystem:read'
-                    ? filesystemRoots(next, 'read').length > 0
-                    : (['write', 'create', 'delete', 'rename'] as const).some(
-                        (verb) => filesystemRoots(next, verb).length > 0,
-                      );
-                onCapabilityChange(capability, enabled);
-                onChange(next);
-              }}
-            />
-          </FormControlLabel>
-        )),
-      )}
+      {filesystemRoots(requested, 'delete').length + filesystemRoots(requested, 'rename').length >
+      0 ? (
+        <InlineMessage
+          label="Destructive file access requested. Delete and rename can permanently change files within the selected paths."
+          tone="warning"
+        />
+      ) : null}
+      {FILESYSTEM_VERBS.map(({ key, label }) => {
+        const selectors = filesystemRoots(requested, key);
+        if (selectors.length === 0) return null;
+        const selected = filesystemRoots(granted, key);
+        return (
+          <Column key={key} gap={1}>
+            <Text label={`${label} · ${selected.length}/${selectors.length}`} color="text-dim" />
+            {selectors.map((selector) => (
+              <FormControlLabel
+                key={`${key}:${filesystemSelectorKey(selector)}`}
+                label={filesystemConsentLabel(selector, label)}
+                gap={2}
+              >
+                <Switch
+                  checked={selected.some(
+                    (candidate) =>
+                      filesystemSelectorKey(candidate) === filesystemSelectorKey(selector),
+                  )}
+                  onToggle={(event: Change) => {
+                    const next = {
+                      ...granted,
+                      [key]: event.value
+                        ? [...selected, selector]
+                        : selected.filter(
+                            (candidate) =>
+                              filesystemSelectorKey(candidate) !== filesystemSelectorKey(selector),
+                          ),
+                    };
+                    const capability = key === 'read' ? 'filesystem:read' : 'filesystem:write';
+                    const enabled =
+                      capability === 'filesystem:read'
+                        ? filesystemRoots(next, 'read').length > 0
+                        : (['write', 'create', 'delete', 'rename'] as const).some(
+                            (verb) => filesystemRoots(next, verb).length > 0,
+                          );
+                    onCapabilityChange(capability, enabled);
+                    onChange(next);
+                  }}
+                />
+              </FormControlLabel>
+            ))}
+          </Column>
+        );
+      })}
     </Column>
   );
 }
@@ -2457,9 +2472,9 @@ function selectorKey(selector: ContainerSelector): string {
 }
 
 function selectorLabel(selector: ContainerSelector): string {
-  if ('all' in selector) return 'All workspace containers';
-  if ('id' in selector) return `Exact container ${selector.id}`;
-  return `Container named ${selector.name}`;
+  if ('all' in selector) return 'Every workspace container · broad access';
+  if ('id' in selector) return `One container · exact ID ${selector.id}`;
+  return `One container · name ${selector.name}`;
 }
 
 function networkSelectorKey(selector: NetworkSelector): string {
@@ -2469,9 +2484,9 @@ function networkSelectorKey(selector: NetworkSelector): string {
 }
 
 function networkSelectorLabel(selector: NetworkSelector): string {
-  if ('all' in selector) return 'All workspace networks';
-  if ('id' in selector) return `Exact network ${selector.id}`;
-  return `Network named ${selector.name}`;
+  if ('all' in selector) return 'Every workspace network · broad access';
+  if ('id' in selector) return `One network · exact ID ${selector.id}`;
+  return `One network · name ${selector.name}`;
 }
 
 function volumeSelectorKey(selector: VolumeSelector): string {
@@ -2479,7 +2494,9 @@ function volumeSelectorKey(selector: VolumeSelector): string {
 }
 
 function volumeSelectorLabel(selector: VolumeSelector): string {
-  return 'all' in selector ? 'All workspace volumes' : `Volume named ${selector.name}`;
+  return 'all' in selector
+    ? 'Every workspace volume · broad access'
+    : `One volume · name ${selector.name}`;
 }
 
 function imageSelectorKey(selector: ImageSelector): string {

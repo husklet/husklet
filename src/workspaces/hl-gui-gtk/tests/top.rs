@@ -2784,7 +2784,7 @@ mod unix {
             || None,
         );
         let review_root = surface.widget().clone().upcast::<gtk::Widget>();
-        let exact = find_label(&review_root, "View contents file · README.md")
+        let exact = find_label(&review_root, "Only this file · view contents · README.md")
             .mnemonic_widget()
             .and_then(|widget| widget.downcast::<gtk::Switch>().ok())
             .expect("exact-file label names its native switch");
@@ -2830,7 +2830,7 @@ mod unix {
             || None,
         );
         let review_root = surface.widget().clone().upcast::<gtk::Widget>();
-        let exact = find_label(&review_root, "View contents file · README.md")
+        let exact = find_label(&review_root, "Only this file · view contents · README.md")
             .mnemonic_widget()
             .and_then(|widget| widget.downcast::<gtk::Switch>().ok())
             .expect("cleared exact-file label names its native switch");
@@ -3181,6 +3181,15 @@ mod unix {
                     environment.grab_focus(),
                     "{width_name} visible permission accepts focus"
                 );
+                assert!(
+                    has_label(root, "View contents · 1/1"),
+                    "{width_name} file scopes retain their compact action group"
+                );
+                assert!(
+                    has_label(root, "Only this file · view contents · README.md"),
+                    "{width_name} exact-file authority is stated without implying subtree access"
+                );
+                assert!(update.grab_focus(), "{width_name} sticky decision accepts focus");
             }
             capture(&capture_window, &format!("extensions-{state}-{width_name}"), width, 800);
             capture_window.set_child(None::<&gtk::Widget>);

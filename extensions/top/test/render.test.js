@@ -2821,25 +2821,39 @@ for (const updating of [false, true]) {
       labelled(stage, 'Container access starts off. Select only what this extension needs.'),
     );
     for (const label of [
-      'Container named database',
-      `Exact container ${'c'.repeat(64)}`,
-      'All workspace containers',
+      'One container · name database',
+      `One container · exact ID ${'c'.repeat(64)}`,
+      'Every workspace container · broad access',
       'Create new containers',
     ])
       assert.ok(labelled(stage, label), label);
+    for (const group of [
+      'View contents · 0/2',
+      'Modify existing contents · 0/1',
+      'Create new entries · 0/1',
+      'Delete entries · 0/1',
+      'Rename or move entries · 0/1',
+    ])
+      assert.ok(labelled(stage, group), group);
     assert.ok(
       labelled(
         stage,
-        'Each switch grants only the named action and root, and includes the matching file capability. Modify cannot create, delete, or rename.',
+        'Destructive file access requested. Delete and rename can permanently change files within the selected paths.',
+      ),
+    );
+    assert.ok(
+      labelled(
+        stage,
+        'File access is granted per action and path. A file means only that file; a folder subtree includes everything below it. Modify cannot create, delete, or rename.',
       ),
     );
     for (const label of [
-      'View contents folder · src/ and everything inside',
-      'View contents file · README.md',
-      'Modify existing contents file · src/config.json',
-      'Create new entries folder · generated/ and everything inside',
-      'Delete entries folder · cache/ and everything inside',
-      'Rename or move entries folder · migrations/ and everything inside',
+      'This folder subtree · view contents · src/',
+      'Only this file · view contents · README.md',
+      'Only this file · modify existing contents · src/config.json',
+      'This folder subtree · create new entries · generated/',
+      'This folder subtree · delete entries · cache/',
+      'This folder subtree · rename or move entries · migrations/',
     ])
       assert.ok(labelled(stage, label), label);
     assert.ok(labelled(stage, 'Requested access'));
@@ -2869,8 +2883,9 @@ for (const updating of [false, true]) {
     assert.ok(labelled(stage, '3/6 workspace paths allowed'));
     assert.ok(labelled(stage, 'Review decision · 8/13 selected'));
     assert.ok(
-      ancestorTags(stage, 'View contents file · README.md').filter((tag) => tag === 'Scroll')
-        .length === 1,
+      ancestorTags(stage, 'Only this file · view contents · README.md').filter(
+        (tag) => tag === 'Scroll',
+      ).length === 1,
       'permission choices remain inside the scrolling review region',
     );
     assert.ok(
@@ -2969,9 +2984,9 @@ test('extension review grants one exact network without workspace-wide network a
   assert.ok(
     labelled(stage, 'Network access starts off. Select only the networks this extension needs.'),
   );
-  assert.ok(labelled(stage, 'Network named database'));
-  assert.ok(labelled(stage, 'Network named internal'));
-  assert.ok(labelled(stage, 'Volume named data'));
+  assert.ok(labelled(stage, 'One network · name database'));
+  assert.ok(labelled(stage, 'One network · name internal'));
+  assert.ok(labelled(stage, 'One volume · name data'));
   assert.ok(labelled(stage, 'Create new volumes'));
   toggleSwitch(stage, 1, true);
   toggleSwitch(stage, 4, true);
@@ -3594,8 +3609,8 @@ test('installed extensions distinguish durable exact-file and subtree authority'
   assert.ok(labelled(stage, 'Container · exact name database'));
   assert.ok(labelled(stage, `Container · exact ID ${'c'.repeat(64)}`));
   assert.ok(labelled(stage, 'Containers · create new containers'));
-  assert.ok(labelled(stage, 'View contents folder · documents/ and everything inside'));
-  assert.ok(labelled(stage, 'Modify existing contents file · settings/index.json'));
+  assert.ok(labelled(stage, 'This folder subtree · view contents · documents/'));
+  assert.ok(labelled(stage, 'Only this file · modify existing contents · settings/index.json'));
   assert.ok(labelled(stage, 'Environment · read REGISTRY_USER in workspace daily'));
   assert.ok(labelled(stage, 'Environment · write all names'));
   assert.equal(
