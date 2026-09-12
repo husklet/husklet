@@ -82,6 +82,15 @@ const definitions = ${JSON.stringify(schema.definitions, null, 2)};
 const roots = ${JSON.stringify(schema.roots, null, 2)};
 
 function fail(path, expected) { throw new TypeError(\`\${path} must be \${expected}\`); }
+function validateRelativePath(value, path) {
+  if (typeof value !== 'string') fail(path, 'a string');
+  if (value.length === 0) fail(path, 'a nonempty relative path');
+  if (new TextEncoder().encode(value).length > 4096) fail(path, 'at most 4096 UTF-8 bytes');
+  if (value.includes('\\0')) fail(path, 'NUL-free');
+  if (value.startsWith('/') || value.startsWith('\\\\') || /^[A-Za-z]:[\\/\\\\]/.test(value))
+    fail(path, 'relative');
+  if (value.split(/[\\/\\\\]/).includes('..')) fail(path, 'free of parent traversal');
+}
 function validate(schema, value, path) {
   switch (schema.kind) {
     case 'unit': if (value !== undefined && value !== null) fail(path, 'absent'); return;
@@ -99,7 +108,9 @@ function validate(schema, value, path) {
       fields.forEach((field, index) => validate(field, value[index], \`\${path}[\${index}]\`)); return;
     }
     case 'map': if (!value || typeof value !== 'object' || Array.isArray(value)) fail(path, 'an object map'); for (const [key, entry] of Object.entries(value)) { validate(schema.key, key, path); validate(schema.value, entry, \`\${path}.\${key}\`); } return;
-    case 'ref': return validate(definitions[schema.name], value, path);
+    case 'ref':
+      if (schema.name === 'RelativePath') return validateRelativePath(value, path);
+      return validate(definitions[schema.name], value, path);
     case 'struct':
       if (!value || typeof value !== 'object' || Array.isArray(value)) fail(path, 'an object');
       for (const field of schema.fields) {

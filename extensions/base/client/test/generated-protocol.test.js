@@ -75,6 +75,26 @@ test('generated validators follow authoritative request/reply/failure/snapshot r
   );
 });
 
+test('generated RelativePath validation matches the Rust authority boundary', () => {
+  const request = (path) => validateRequest({ call: 'filesystem_read', with: { path } });
+  assert.deepEqual(request('./src//index.ts'), {
+    call: 'filesystem_read',
+    with: { path: './src//index.ts' },
+  });
+  for (const path of [
+    '',
+    '/etc/passwd',
+    '\\\\host\\share',
+    'C:\\Windows',
+    '../secret',
+    'a\\..\\secret',
+    'a\0b',
+  ])
+    assert.throws(() => request(path), TypeError, path);
+  assert.throws(() => request('é'.repeat(2049)), /4096 UTF-8 bytes/);
+  assert.doesNotThrow(() => request('é'.repeat(2048)));
+});
+
 test('generated declarations correlate every authoritative request with its exact reply', () => {
   const declarations = fs.readFileSync(
     new URL('../src/generated-protocol.d.ts', import.meta.url),
@@ -99,10 +119,7 @@ test('generated failure validation preserves unavailable as a typed wire categor
     error: 'unavailable',
     detail: 'socket refused',
   });
-  assert.throws(
-    () => validateFailure({ error: 'unavailable' }),
-    /detail must be present/,
-  );
+  assert.throws(() => validateFailure({ error: 'unavailable' }), /detail must be present/);
 });
 
 test('integer widths and the cross-language lossless boundary are enforced before framing', () => {
@@ -219,10 +236,11 @@ test('container consent selectors are exact and ambiguous shapes fail closed', (
     { all: true, name: 'data' },
   ]) {
     assert.throws(
-      () => validateRequest({
-        ...base,
-        with: { ...base.with, volumes: { selectors: [selector], create: false } },
-      }),
+      () =>
+        validateRequest({
+          ...base,
+          with: { ...base.with, volumes: { selectors: [selector], create: false } },
+        }),
       /untagged variant|all/i,
     );
   }
