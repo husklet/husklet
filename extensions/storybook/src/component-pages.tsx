@@ -18,6 +18,7 @@ import { FormControlWorkbench } from './form-control.js';
 import { HeadingWorkbench } from './heading.js';
 import { IconButtonWorkbench } from './icon-button.js';
 import { InlineMessageWorkbench } from './inline-message.js';
+import { InlineButtonWorkbench } from './inline-button.js';
 import { JsonTreeStory } from './json-tree.js';
 import { RadioWorkbench } from './radio.js';
 import { RadioGroupWorkbench } from './radio-group.js';
@@ -48,6 +49,7 @@ type NativeWorkbenchName =
   | 'Heading'
   | 'IconButton'
   | 'InlineMessage'
+  | 'InlineButton'
   | 'NumberEntry'
   | 'PasswordEntry'
   | 'Radio'
@@ -107,6 +109,7 @@ const nativeWorkbenchPages = {
   Heading: HeadingWorkbench,
   IconButton: IconButtonWorkbench,
   InlineMessage: InlineMessageWorkbench,
+  InlineButton: InlineButtonWorkbench,
   NumberEntry: NumberEntryWorkbench,
   PasswordEntry: PasswordEntryWorkbench,
   Radio: RadioWorkbench,

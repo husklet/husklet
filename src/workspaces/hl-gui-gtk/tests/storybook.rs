@@ -18,6 +18,7 @@ mod unix {
     const STORIES: &[&str] = &[
         "Autocomplete",
         "Button",
+        "InlineButton",
         "Card",
         "CardActions",
         "IconButton",
@@ -231,6 +232,7 @@ mod unix {
         let narrow_story = matches!(
             story,
             "Button"
+                | "InlineButton"
                 | "IconButton"
                 | "Entry"
                 | "Select"
@@ -1146,6 +1148,37 @@ mod unix {
             root.allocate(width, 1_600, -1, None);
             assert_eq!(root.width(), width, "{story} did not accept the {width}px allocation");
             assert_contained(&root, story);
+            if story == "InlineButton" {
+                let actions = descendants::<gtk::Button>(&root)
+                    .into_iter()
+                    .filter(|button| button.has_css_class("hl-inline-button"))
+                    .collect::<Vec<_>>();
+                assert_eq!(actions.len(), 11, "InlineButton page lost a canonical specimen");
+                for action in &actions {
+                    assert_eq!(action.accessible_role(), gtk::AccessibleRole::Button);
+                    assert!(action.is_focusable(), "InlineButton left keyboard focus order");
+                    assert!(
+                        action.height() >= 44,
+                        "{width}px InlineButton target shrank to {}px",
+                        action.height()
+                    );
+                    let chrome = descendants::<gtk::Box>(action.upcast_ref())
+                        .into_iter()
+                        .find(|child| child.has_css_class("hl-inline-button-chrome"))
+                        .expect("InlineButton owns visual chrome");
+                    assert!(
+                        chrome.height() <= 30,
+                        "{width}px InlineButton chrome expanded to {}px",
+                        chrome.height()
+                    );
+                }
+                let inspect = find::<gtk::Button>(&root, |button| {
+                    button_caption(button).as_deref() == Some("Inspect resource")
+                });
+                assert!(inspect.grab_focus(), "enabled InlineButton accepts keyboard focus");
+                assert!(inspect.has_focus(), "InlineButton exposes native focus state");
+                let _ = surface.reports().drain();
+            }
             if let Some((paned, body)) = &responsive {
                 let layout = paned.parent().expect("responsive paned remains in its layout");
                 let compact = layout.first_child().expect("responsive shell keeps compact navigation");
@@ -1852,6 +1885,9 @@ mod unix {
             });
             capture_story(&realized_window, "RecoveryState partial expanded");
         }
+        if story == "InlineButton" {
+            find::<gtk::Label>(&root, |label| label.text() == "Inspect resource invoked");
+        }
         if story == "Search" {
             let search = find::<gtk::SearchEntry>(&root, |entry| {
                 entry.tooltip_text().as_deref() == Some("Find extensions")
@@ -2356,6 +2392,12 @@ mod unix {
             "Button" => {
                 find::<gtk::Button>(root, |button| button_caption(button).as_deref() == Some("Run task"))
                     .emit_clicked();
+            }
+            "InlineButton" => {
+                find::<gtk::Button>(root, |button| {
+                    button_caption(button).as_deref() == Some("Inspect resource")
+                })
+                .emit_clicked();
             }
             "IconButton" => {
                 find::<gtk::Button>(root, |button| button.tooltip_text().as_deref() == Some("Refresh")).emit_clicked();
