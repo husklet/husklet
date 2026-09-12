@@ -756,7 +756,7 @@ function NetworkSummaryDetail({ network }: { network: NetworkSummary }) {
           tone="warning"
         />
       ) : containers.length === 0 ? (
-        <EmptyState label="No connected containers" detail="This network has no endpoints." />
+        <Text label="No containers connected." color="text-dim" />
       ) : (
         containers.map((container) => (
           <Text key={container} label={`Container · ${shortId(container)}`} tooltip={container} />

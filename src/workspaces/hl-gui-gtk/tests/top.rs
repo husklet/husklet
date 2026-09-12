@@ -1070,6 +1070,16 @@ mod unix {
                 window.queue_draw();
                 settle_frame();
                 assert_contained(&expanded_root, &format!("expanded/networks/{width_name}"));
+                let card = widgets_with_class(&expanded_root, "hl-card")
+                    .into_iter()
+                    .next()
+                    .expect("expanded network remains in its card");
+                assert!(
+                    card.height() <= 270,
+                    "{width_name} empty membership inflated the network card to {}px",
+                    card.height()
+                );
+                find_labelled(&expanded_root, "No containers connected.");
                 capture(&window, &format!("expanded-networks-{width_name}"), width, 800);
             }
             assert!(has_label(&expanded_root, "Connected containers · 0"));

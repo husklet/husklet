@@ -7591,7 +7591,8 @@ test('successful disconnect retains its receipt and verified empty membership', 
   assert.ok(labelled(stage, 'Disconnected container-1 from private'));
   assert.equal(labelled(stage, 'Aliases, comma-separated (optional)'), undefined);
   assert.ok(labelled(stage, 'Connected containers · 0'));
-  assert.ok(labelled(stage, 'No connected containers'));
+  assert.ok(labelled(stage, 'No containers connected.'));
+  assert.equal(ancestorTags(stage, 'No containers connected.').includes('EmptyState'), false);
   assert.deepEqual(
     orderedLabels(stage).filter((label) =>
       [
