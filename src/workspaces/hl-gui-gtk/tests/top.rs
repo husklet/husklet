@@ -1067,10 +1067,13 @@ mod unix {
             assert!(has_label(&discover_root, "19 of 20 extensions"));
             let review = find_tooltip_button(&discover_root, "Review the 1.0.0 update for Developer Tool 01");
             let review_access = find_tooltip_button(&discover_root, "Review access requested by Developer Tool 02");
+            let third_review = find_tooltip_button(&discover_root, "Review access requested by Developer Tool 03");
             let review_card = ancestor_with_class(review.upcast_ref(), "hl-card")
                 .expect("Discover update action belongs to its card");
             let access_card = ancestor_with_class(review_access.upcast_ref(), "hl-card")
                 .expect("Discover access action belongs to its card");
+            let third_card = ancestor_with_class(third_review.upcast_ref(), "hl-card")
+                .expect("third Discover action belongs to its card");
             assert!(review.is_sensitive(), "compatible Discover update is actionable");
             for (label, action) in [("update", &review), ("access", &review_access)] {
                 assert_eq!(action.accessible_role(), gtk::AccessibleRole::Button);
@@ -1096,6 +1099,21 @@ mod unix {
                         "{width_name} Discover {label} action control height"
                     );
                 }
+                let description = find_mapped_labelled(
+                    &review_card,
+                    "A bounded daily developer workflow for task 01.",
+                );
+                let description_bounds = description
+                    .compute_bounds(&review_card)
+                    .expect("Discover description belongs to its card");
+                let review_bounds_in_card = review
+                    .compute_bounds(&review_card)
+                    .expect("Discover action belongs to its card");
+                assert!(
+                    review_bounds_in_card.y()
+                        >= description_bounds.y() + description_bounds.height(),
+                    "{width_name} Discover action remained embedded in identity/content: description={description_bounds:?} action={review_bounds_in_card:?}"
+                );
                 if width == 1_200 {
                     let review_card_bounds = review_card
                         .compute_bounds(&discover_root)
@@ -1127,12 +1145,21 @@ mod unix {
                     );
                     assert!(
                         (review_card.width() - access_card.width()).abs() <= 1,
-                        "wide Discover columns must share the available content width"
+                        "wide Discover columns must share the available content width: update={} access={}",
+                        review_card.width(),
+                        access_card.width()
+                    );
+                    let third_card_bounds = third_card
+                        .compute_bounds(&discover_root)
+                        .expect("third Discover card belongs to Top root");
+                    assert!(
+                        third_card_bounds.y() >= review_card_bounds.y() + review_card_bounds.height(),
+                        "wide Discover packed three cramped cards into one row: first={review_card_bounds:?} third={third_card_bounds:?}"
                     );
                 } else {
                     let heights = [review_card.height(), access_card.height()];
                     assert!(
-                        heights.iter().all(|height| *height <= 180),
+                        heights.iter().all(|height| *height <= 240),
                         "narrow Discover cards stretched sparse content into {heights:?}px panels"
                     );
                     assert_eq!(

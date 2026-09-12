@@ -4,6 +4,7 @@ import {
   Badge,
   Button,
   Card,
+  CardActions,
   CardContent,
   CardHeader,
   Column,
@@ -1209,53 +1210,15 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                         return (
                           <Card
                             key={entry.id}
-                            width={{ minimum: { chars: 38 }, maximum: 'fill' }}
+                            width={{ minimum: { chars: 62 }, maximum: 'fill' }}
                             variant="outline"
                           >
-                            <Row gap={2} align="center" justify="start" wrap width="fill">
-                              <CardHeader
-                                label={entry.title}
-                                detail={`${entry.publisher} · Version ${entry.version}`}
-                                align="start"
-                                width="fill"
-                                grow
-                              />
-                              <Row gap={1} align="center" wrap>
-                                {updateAvailable ? (
-                                  <Button
-                                    label="Review update"
-                                    tooltip={`Review the ${entry.version} update for ${entry.title}`}
-                                    size="small"
-                                    variant="filled"
-                                    tone="accent"
-                                    enabled={!busy && compatibility.compatible !== false}
-                                    onInvoke={() => inspect(entry.reference, entry)}
-                                  />
-                                ) : !installedExtension ? (
-                                  <Button
-                                    label="Review access"
-                                    tooltip={`Review access requested by ${entry.title}`}
-                                    size="small"
-                                    variant="filled"
-                                    tone="accent"
-                                    enabled={!busy && compatibility.compatible !== false}
-                                    onInvoke={() => inspect(entry.reference, entry)}
-                                  />
-                                ) : (
-                                  <>
-                                    {provider ? providerAction(installedExtension, provider) : null}
-                                    <Button
-                                      label="Check current image"
-                                      tooltip={`Inspect ${entry.reference} again and compare its immutable digest`}
-                                      size="small"
-                                      variant="outline"
-                                      enabled={!busy && compatibility.compatible !== false}
-                                      onInvoke={() => inspect(entry.reference, entry)}
-                                    />
-                                  </>
-                                )}
-                              </Row>
-                            </Row>
+                            <CardHeader
+                              label={entry.title}
+                              detail={`${entry.publisher} · Version ${entry.version}`}
+                              align="start"
+                              width="fill"
+                            />
                             <CardContent gap={1}>
                               <Text label={entry.description} color="text-dim" wrap />
                               <Row gap={1} width="fill" wrap align="center" justify="start">
@@ -1321,6 +1284,41 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                                 </Expander>
                               ) : null}
                             </CardContent>
+                            <CardActions gap={1} align="start" justify="start" width="fill">
+                              {updateAvailable ? (
+                                <Button
+                                  label="Review update"
+                                  tooltip={`Review the ${entry.version} update for ${entry.title}`}
+                                  size="small"
+                                  variant="filled"
+                                  tone="accent"
+                                  enabled={!busy && compatibility.compatible !== false}
+                                  onInvoke={() => inspect(entry.reference, entry)}
+                                />
+                              ) : !installedExtension ? (
+                                <Button
+                                  label="Review access"
+                                  tooltip={`Review access requested by ${entry.title}`}
+                                  size="small"
+                                  variant="filled"
+                                  tone="accent"
+                                  enabled={!busy && compatibility.compatible !== false}
+                                  onInvoke={() => inspect(entry.reference, entry)}
+                                />
+                              ) : (
+                                <>
+                                  {provider ? providerAction(installedExtension, provider) : null}
+                                  <Button
+                                    label="Check current image"
+                                    tooltip={`Inspect ${entry.reference} again and compare its immutable digest`}
+                                    size="small"
+                                    variant="outline"
+                                    enabled={!busy && compatibility.compatible !== false}
+                                    onInvoke={() => inspect(entry.reference, entry)}
+                                  />
+                                </>
+                              )}
+                            </CardActions>
                           </Card>
                         );
                       })}

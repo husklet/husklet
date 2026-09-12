@@ -845,14 +845,18 @@ test('Top owns workspace settings and extension management in the same tab', asy
   assert.ok(labelled(stage, 'Verified publisher · Husklet'));
   assert.ok(labelled(stage, 'Compatibility undeclared'));
   assert.equal(labelled(stage, 'Review requested access before anything is installed.'), undefined);
-  assert.deepEqual(ancestorTags(stage, 'Review access').slice(0, 4), ['Row', 'Row', 'Card', 'Row']);
+  assert.deepEqual(
+    ancestorTags(stage, 'Review access').slice(0, 4),
+    ['CardActions', 'Card', 'Row', 'Column'],
+    'catalogue actions follow identity and content in the card action region',
+  );
   assert.equal(
     ancestorProperty(stage, 'Component playground', 'Card', 'Justify'),
     undefined,
     'extension cards fill their responsive column instead of overriding width with start alignment',
   );
   assert.deepEqual(ancestorProperty(stage, 'Component playground', 'Card', 'Width'), {
-    Bounds: { minimum: { Chars: 38 }, maximum: 'Fill' },
+    Bounds: { minimum: { Chars: 62 }, maximum: 'Fill' },
   });
   assert.deepEqual(
     taggedProperty(stage, 'Refresh installed extensions', 'IconButton', 'Icon'),
