@@ -2411,7 +2411,16 @@ mod unix {
             "failure body does not repeat the header identity"
         );
         let retry = find_button(&failure_root, "Retry inspection");
+        let back = find_button(&failure_root, "Back to catalogue");
         let technical = find_expander(&failure_root, "Technical details");
+        assert!(
+            has_label(
+                &failure_root,
+                "Registry access denied. Sign in with credentials that can read this image, or verify that the image is public."
+            ),
+            "failure leads with bounded recovery language"
+        );
+        assert!(!technical.is_expanded(), "raw inspection diagnostics start collapsed");
         let ready_deadline = Instant::now() + DEADLINE;
         while !retry.is_sensitive() && Instant::now() < ready_deadline {
             match receive_until(
@@ -2445,6 +2454,11 @@ mod unix {
             window.set_child(Some(&failure_root));
             window.present();
             settle_toolkit();
+            failure_root.measure(gtk::Orientation::Horizontal, -1);
+            failure_root.measure(gtk::Orientation::Vertical, width);
+            failure_root.allocate(width, 800, -1, None);
+            window.queue_draw();
+            settle_frame();
             assert_contained(&failure_root, &format!("extension-acquisition-failure/{width_name}"));
             let retry_bounds = retry
                 .compute_bounds(&failure_root)
@@ -2456,6 +2470,11 @@ mod unix {
                 retry_bounds.y() < detail_bounds.y(),
                 "{width_name} Retry must precede secondary details"
             );
+            for (label, action) in [("retry", &retry), ("back", &back)] {
+                assert!(action.has_css_class("size-small"), "{width_name} {label} action is compact");
+                assert_eq!(action.height(), 28, "{width_name} {label} action height");
+                assert!(action.is_focusable(), "{width_name} {label} action is keyboard reachable");
+            }
             capture(
                 window,
                 &format!("extension-acquisition-failure-{width_name}"),

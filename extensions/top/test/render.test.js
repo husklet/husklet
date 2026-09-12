@@ -2438,6 +2438,12 @@ test('extension inspection keeps invalid and failed references recoverable with 
   );
   assert.ok(labelled(stage, 'Retry inspection'));
   assert.ok(labelled(stage, 'Back to catalogue'));
+  assert.deepEqual(taggedProperty(stage, 'Retry inspection', 'Button', 'Size'), {
+    ControlSize: 'Small',
+  });
+  assert.deepEqual(taggedProperty(stage, 'Back to catalogue', 'Button', 'Size'), {
+    ControlSize: 'Small',
+  });
   assert.ok(labelled(stage, 'Technical details'));
   assert.ok(
     labelled(stage, 'Retry inspection').SetProp.id <
@@ -2522,15 +2528,25 @@ test('extension acquisition phases and failures remain actionable without raw en
     acquisitionFailure(
       'extension image sha256:a is linux/arm64, but this workspace requires linux/amd64',
     ),
-    /^Architecture mismatch:/,
+    /^Architecture mismatch\./,
   );
   assert.match(
     acquisitionFailure('workspace execution domain failed: Engine(Load(Inspect))'),
     /^Workspace image service is unavailable\./,
   );
+  assert.doesNotMatch(
+    acquisitionFailure('workspace execution domain failed: Engine(Load(Inspect))'),
+    /Engine|Load|Inspect/,
+    'engine diagnostics stay behind Technical details',
+  );
   assert.match(
     acquisitionFailure("the image's manifest archive is unreadable"),
-    /^Extension manifest could not be validated:/,
+    /^Extension manifest could not be validated\./,
+  );
+  assert.equal(
+    acquisitionFailure('rpc frame 73 exploded at InternalThing::poll'),
+    'The image could not be inspected. Verify its registry, name, version, and visibility, then retry.',
+    'unknown failures remain actionable without leaking raw engine prose',
   );
   assert.equal(acquisitionTechnicalDetail('first\\nsecond'), 'first\nsecond');
   assert.match(acquisitionTechnicalDetail('x'.repeat(5_000)), /technical detail truncated$/);

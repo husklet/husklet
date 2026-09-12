@@ -2005,6 +2005,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                           <Row gap={1} wrap>
                             <Button
                               label="Retry inspection"
+                              size="small"
                               variant="filled"
                               tone="accent"
                               enabled={!busy}
@@ -2012,6 +2013,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                             />
                             <Button
                               label="Back to catalogue"
+                              size="small"
                               variant="ghost"
                               enabled={!busy}
                               onInvoke={dismissReview}
@@ -2031,6 +2033,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                           <Text label={acquisitionLabel(acquisition)} color="text-dim" wrap />
                           <Button
                             label="Back to catalogue"
+                            size="small"
                             variant="ghost"
                             enabled={!busy}
                             onInvoke={dismissReview}
@@ -2548,6 +2551,9 @@ export function acquisitionProgressFraction(
 export function acquisitionFailure(detail: string): string {
   const normalized = detail.replaceAll('\\n', ' ').replaceAll(/\s+/g, ' ').trim();
   const registryMessage = /"message"\s*:\s*"([^"]+)"/.exec(normalized)?.[1];
+  const architecture = /linux\/([A-Za-z0-9_-]+).*requires linux\/([A-Za-z0-9_-]+)/i.exec(
+    normalized,
+  );
   if (/unauthorized|denied|authentication required|insufficient_scope/i.test(normalized)) {
     return 'Registry access denied. Sign in with credentials that can read this image, or verify that the image is public.';
   }
@@ -2557,25 +2563,16 @@ export function acquisitionFailure(detail: string): string {
       300,
     );
   }
-  if (/requires linux\/|but this workspace requires linux\//i.test(normalized)) {
-    return `Architecture mismatch: ${normalized} Choose an image published for this workspace architecture.`.slice(
-      0,
-      300,
-    );
+  if (architecture) {
+    return `Architecture mismatch. This image is linux/${architecture[1]}, but the workspace is linux/${architecture[2]}. Choose an image published for this workspace architecture.`;
   }
   if (/manifest/i.test(normalized)) {
-    return `Extension manifest could not be validated: ${normalized} Check the image's Husklet manifest label and protocol version.`.slice(
-      0,
-      300,
-    );
+    return "Extension manifest could not be validated. Check the image's Husklet manifest label and protocol version.";
   }
   if (/workspace (execution domain|resources) (failed|unavailable)|Engine\(/i.test(normalized)) {
-    return `Workspace image service is unavailable. Reopen the workspace resources, then retry inspection. ${normalized}`.slice(
-      0,
-      300,
-    );
+    return 'Workspace image service is unavailable. Reopen the workspace, then retry inspection.';
   }
-  return normalized.slice(0, 300);
+  return 'The image could not be inspected. Verify its registry, name, version, and visibility, then retry.';
 }
 
 export function acquisitionTechnicalDetail(detail: string): string {
