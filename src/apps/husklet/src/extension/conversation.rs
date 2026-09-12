@@ -251,6 +251,7 @@ impl Conversation {
             stream,
             authority,
             "test",
+            hl_extension::ExecutionOwnership::default(),
             workspace,
             queue,
             hl_extension::ContainerGrant {
@@ -288,6 +289,7 @@ impl Conversation {
         stream: UnixStream,
         authority: Authority,
         extension_identity: impl Into<String>,
+        execution_ownership: hl_extension::ExecutionOwnership,
         workspace: impl Into<String>,
         queue: Queue,
         containers: hl_extension::ContainerGrant,
@@ -306,6 +308,7 @@ impl Conversation {
             // surfaces are acquired explicitly through the terminal port.
             session: Session::new(authority)
                 .with_extension_identity(extension_identity)
+                .with_execution_ownership(execution_ownership)
                 .with_containers(containers)
                 .with_images(images)
                 .with_networks(networks)
@@ -349,6 +352,7 @@ impl Conversation {
             stream,
             authority,
             "test",
+            hl_extension::ExecutionOwnership::default(),
             workspace,
             queue,
             containers,

@@ -51,7 +51,16 @@ pub struct Session {
     filesystem: FilesystemGrant,
     workspace_environment: crate::WorkspaceEnvironmentGrant,
     notification_ids: std::collections::BTreeSet<String>,
+    /// Detached executions created by this authenticated extension incarnation.
+    ///
+    /// A container grant scopes *where* an extension may execute; it must not
+    /// turn an opaque execution ID learned through read access into authority
+    /// over a process started by the user or another extension.
+    owned_executions: ExecutionOwnership,
 }
+
+/// Execution-control ownership shared by reconnecting sockets of one extension incarnation.
+pub type ExecutionOwnership = std::sync::Arc<std::sync::Mutex<std::collections::BTreeSet<String>>>;
 
 /// One reconciliation frame and the surface that owns its sequence.
 #[derive(Clone, Debug, PartialEq)]
@@ -285,6 +294,7 @@ impl Session {
             filesystem: FilesystemGrant::default(),
             workspace_environment: crate::WorkspaceEnvironmentGrant::default(),
             notification_ids: std::collections::BTreeSet::new(),
+            owned_executions: ExecutionOwnership::default(),
         }
     }
 
@@ -316,6 +326,14 @@ impl Session {
     #[must_use]
     pub fn with_extension_identity(mut self, identity: impl Into<String>) -> Self {
         self.extension_identity = identity.into();
+        self
+    }
+
+    /// Shares execution authority across reconnecting sockets belonging to the
+    /// same already-authenticated extension incarnation.
+    #[must_use]
+    pub fn with_execution_ownership(mut self, ownership: ExecutionOwnership) -> Self {
+        self.owned_executions = ownership;
         self
     }
 
@@ -591,6 +609,22 @@ impl Session {
         let execution = port.execution(id)?;
         self.resolve_container(&execution.container_id, port)?;
         Ok(execution)
+    }
+
+    fn require_owned_execution(&self, id: &str) -> Result<(), Failure> {
+        immutable_identity(id, &[32], "execution")?;
+        if self
+            .owned_executions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains(id)
+        {
+            return Ok(());
+        }
+        Err(Failure::Denied {
+            capability: Capability::ContainerExecute.as_str().into(),
+            detail: "execution control is limited to processes created by this extension incarnation".into(),
+        })
     }
 
     /// Adds a surface the host already owns, such as the workspace overview.
@@ -940,7 +974,7 @@ impl Session {
         }
     }
 
-    fn control(&self, request: &Request, services: &Services<'_>) -> Result<Reply, Failure> {
+    fn control(&mut self, request: &Request, services: &Services<'_>) -> Result<Reply, Failure> {
         if let Request::ContainerCreate { spec } = request {
             validate_container_create(spec)?;
             if !self.containers.create {
@@ -1031,6 +1065,7 @@ impl Session {
             }
             Request::ExecutionKill { id, signal } => {
                 bounded_signal(signal)?;
+                self.require_owned_execution(id)?;
                 self.resolve_execution(id, services.containers)?;
                 port.execution_kill(id, signal)
                     .map(|()| Reply::Done)
@@ -1043,14 +1078,21 @@ impl Session {
                         detail: "execution cancellation timeout_ms must be between 1 and 30000".into(),
                     });
                 }
+                self.require_owned_execution(id)?;
                 self.resolve_execution(id, services.containers)?;
                 port.execution_cancel(id, signal, *timeout_ms)
                     .map(|()| Reply::Done)
                     .map_err(Failure::from)
             }
             Request::ExecutionRemove { id } => {
+                self.require_owned_execution(id)?;
                 self.resolve_execution(id, services.containers)?;
-                port.execution_remove(id).map(|()| Reply::Done).map_err(Failure::from)
+                port.execution_remove(id).map_err(Failure::from)?;
+                self.owned_executions
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .remove(id);
+                Ok(Reply::Done)
             }
             Request::ExecutionWrite { id, contents } => {
                 immutable_identity(id, &[32], "execution")?;
@@ -1095,7 +1137,7 @@ impl Session {
                 }
                 validate_exec_environment(environment)?;
                 let target = self.resolve_mutation_container(id, services.containers)?;
-                Ok(Reply::Identity(port.execute(
+                let execution = port.execute(
                     id,
                     &target.id,
                     *generation,
@@ -1104,7 +1146,13 @@ impl Session {
                     user.as_deref(),
                     working_directory.as_deref(),
                     *stdin,
-                )?))
+                )?;
+                immutable_identity(&execution, &[32], "execution")?;
+                self.owned_executions
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .insert(execution.clone());
+                Ok(Reply::Identity(execution))
             }
             Request::ContainerExecCredential {
                 id,
@@ -1146,7 +1194,7 @@ impl Session {
                     resolved.push((variable.clone(), crate::ExecEnvironmentValue::new(value)));
                 }
                 validate_exec_environment(&resolved)?;
-                Ok(Reply::Identity(port.execute(
+                let execution = port.execute(
                     id,
                     &target.id,
                     *generation,
@@ -1155,7 +1203,13 @@ impl Session {
                     user.as_deref(),
                     working_directory.as_deref(),
                     *stdin,
-                )?))
+                )?;
+                immutable_identity(&execution, &[32], "execution")?;
+                self.owned_executions
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .insert(execution.clone());
+                Ok(Reply::Identity(execution))
             }
             _ => Err(Failure::Unsupported {
                 call: "container control".into(),

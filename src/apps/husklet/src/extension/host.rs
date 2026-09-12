@@ -825,8 +825,9 @@ fn attendant<S: Supply>(
     let queue = queue.clone();
     let voice = voice.clone();
     let held = Arc::new(plan.clone());
+    let execution_ownership = hl_extension::ExecutionOwnership::default();
     move |stream| {
-        let reason = converse(&supply, &held, &queue, &voice, stream);
+        let reason = converse(&supply, &held, &queue, &voice, execution_ownership.clone(), stream);
         // A full channel means an earlier conversation's ending is still
         // waiting to be read, which is the one this would replace anyway.
         let _ = finish.try_send(reason);
@@ -834,11 +835,19 @@ fn attendant<S: Supply>(
 }
 
 /// Serves one connection and reports how it ended.
-fn converse<S: Supply>(supply: &Arc<S>, plan: &Plan, queue: &Queue, voice: &Voice, stream: UnixStream) -> String {
+fn converse<S: Supply>(
+    supply: &Arc<S>,
+    plan: &Plan,
+    queue: &Queue,
+    voice: &Voice,
+    execution_ownership: hl_extension::ExecutionOwnership,
+    stream: UnixStream,
+) -> String {
     let opened = Conversation::new_scoped_owned(
         stream,
         plan.authority(),
         plan.record.incarnation.clone(),
+        execution_ownership,
         plan.workspace.clone(),
         queue.clone(),
         plan.record.containers.clone(),

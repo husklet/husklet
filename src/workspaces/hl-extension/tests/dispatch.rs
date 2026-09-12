@@ -361,7 +361,7 @@ impl ContainerControl for Host {
 
     fn execute(
         &self,
-        id: &str,
+        _id: &str,
         _expected_id: &str,
         _generation: u64,
         _command: &[String],
@@ -371,7 +371,7 @@ impl ContainerControl for Host {
         _stdin: bool,
     ) -> Result<String, HostError> {
         self.ledger.note("containers.exec");
-        Ok(if id == "workspace" { "e".repeat(32) } else { "e1".into() })
+        Ok("e".repeat(32))
     }
 }
 
@@ -2377,6 +2377,25 @@ fn every_call_succeeds_with_its_capability_and_fails_without_it() {
                 read: Vec::new(),
                 write: vec![hl_extension::WorkspaceEnvironmentSelector::All { all: true }],
             });
+        if matches!(
+            request,
+            Request::ExecutionKill { .. } | Request::ExecutionCancel { .. } | Request::ExecutionRemove { .. }
+        ) {
+            granted
+                .dispatch(
+                    &Request::ContainerExec {
+                        id: "c".repeat(64),
+                        generation: 4,
+                        command: vec!["true".into()],
+                        environment: Vec::new(),
+                        user: None,
+                        working_directory: None,
+                        stdin: false,
+                    },
+                    &services(&host),
+                )
+                .unwrap();
+        }
         assert!(
             granted.dispatch(&request, &services(&host)).is_ok(),
             "{request:?} must be permitted by {capability:?}"
@@ -2983,13 +3002,76 @@ fn execution_removal_refuses_aliases_before_control_authority() {
     assert!(host.ledger.reached().is_empty());
 
     let id = "e".repeat(32);
+    session
+        .dispatch(
+            &Request::ContainerExec {
+                id: "c".repeat(64),
+                generation: 4,
+                command: vec!["true".into()],
+                environment: Vec::new(),
+                user: None,
+                working_directory: None,
+                stdin: false,
+            },
+            &services(&host),
+        )
+        .unwrap();
     assert_eq!(
         session.dispatch(&Request::ExecutionRemove { id }, &services(&host)),
         Ok(Reply::Done)
     );
     assert_eq!(
         host.ledger.reached(),
-        ["executions.inspect", "containers.list", "executions.remove"]
+        [
+            "containers.list",
+            "containers.exec",
+            "executions.inspect",
+            "containers.list",
+            "executions.remove"
+        ]
+    );
+}
+
+#[test]
+fn execution_control_cannot_be_borrowed_from_readable_inventory_but_survives_reconnect() {
+    let host = Host::new();
+    let id = "e".repeat(32);
+
+    for mut session in [session(&[Capability::ContainerRead, Capability::ContainerExecute], &[])] {
+        assert_eq!(
+            session.dispatch(&Request::ExecutionRemove { id: id.clone() }, &services(&host),),
+            Err(Failure::Denied {
+                capability: "containers:execute".into(),
+                detail: "execution control is limited to processes created by this extension incarnation".into(),
+            })
+        );
+    }
+    assert!(
+        host.ledger.reached().is_empty(),
+        "ownership is checked before inventory so a foreign ID leaks no existence"
+    );
+
+    let ownership = hl_extension::ExecutionOwnership::default();
+    let mut first = session(&[Capability::ContainerExecute], &[]).with_execution_ownership(ownership.clone());
+    first
+        .dispatch(
+            &Request::ContainerExec {
+                id: "c".repeat(64),
+                generation: 4,
+                command: vec!["true".into()],
+                environment: Vec::new(),
+                user: None,
+                working_directory: None,
+                stdin: false,
+            },
+            &services(&host),
+        )
+        .unwrap();
+    drop(first);
+    let mut reconnected = session(&[Capability::ContainerExecute], &[]).with_execution_ownership(ownership);
+    assert_eq!(
+        reconnected.dispatch(&Request::ExecutionRemove { id }, &services(&host)),
+        Ok(Reply::Done)
     );
 }
 
@@ -3100,8 +3182,22 @@ fn lifecycle_controls_refuse_snapshot_pids_names_and_prefixes_before_control_aut
         .unwrap();
     session
         .dispatch(
+            &Request::ContainerExec {
+                id: "c".repeat(64),
+                generation: 4,
+                command: vec!["true".into()],
+                environment: Vec::new(),
+                user: None,
+                working_directory: None,
+                stdin: false,
+            },
+            &services(&host),
+        )
+        .unwrap();
+    session
+        .dispatch(
             &Request::ExecutionKill {
-                id: "b".repeat(32),
+                id: "e".repeat(32),
                 signal: "SIGTERM".into(),
             },
             &services(&host),
@@ -3116,6 +3212,8 @@ fn lifecycle_controls_refuse_snapshot_pids_names_and_prefixes_before_control_aut
             "containers.remove",
             "containers.list",
             "containers.kill",
+            "containers.list",
+            "containers.exec",
             "executions.inspect",
             "containers.list",
             "executions.kill"
@@ -4176,7 +4274,7 @@ fn container_exec_returns_the_real_execution_identity() {
             &services(&host),
         )
         .expect("exec starts");
-    assert_eq!(reply, Reply::Identity("e1".into()));
+    assert_eq!(reply, Reply::Identity("e".repeat(32)));
     assert_eq!(host.ledger.reached(), vec!["containers.list", "containers.exec"]);
 }
 
@@ -4202,7 +4300,7 @@ fn retaining_execution_stdin_requires_input_authority_in_addition_to_execute() {
     let mut interactive = session(&[Capability::ContainerExecute, Capability::ContainerInput], &[]);
     assert_eq!(
         interactive.dispatch(&request, &services(&host)),
-        Ok(Reply::Identity("e1".into()))
+        Ok(Reply::Identity("e".repeat(32)))
     );
 }
 
@@ -4283,7 +4381,7 @@ fn exec_environment_is_bounded_unique_and_redacted_before_service_access() {
             &services(&host),
         )
         .expect("valid environment reaches exec");
-    assert_eq!(reply, Reply::Identity("e1".into()));
+    assert_eq!(reply, Reply::Identity("e".repeat(32)));
     assert!(!format!("{reply:?}").contains(secret));
 }
 
@@ -4311,7 +4409,7 @@ fn credential_execution_requires_both_grants_and_resolves_only_inside_the_host()
 
     let mut granted = session(&[Capability::ContainerExecute, Capability::CredentialInject], &[]);
     assert!(
-        matches!(granted.dispatch(&request, &services_with_state(&host, &state)), Ok(Reply::Identity(id)) if id == "e1")
+        matches!(granted.dispatch(&request, &services_with_state(&host, &state)), Ok(Reply::Identity(id)) if id == "e".repeat(32))
     );
     assert!(state.read.get());
     assert_eq!(host.ledger.reached(), vec!["containers.list", "containers.exec"]);
