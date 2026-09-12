@@ -301,9 +301,12 @@ fn a_button_keeps_its_label_beside_its_icon() {
         .expect("the button is reachable")
         .downcast::<gtk::Button>()
         .expect("a button is a button");
-    let children = offspring(button.upcast_ref());
-    let content = children.first().expect("the button has composed content");
-    let content = offspring(content);
+    let chrome = button.first_child().expect("the button retains its visual chrome");
+    assert!(chrome.has_css_class("hl-button-chrome"));
+    let content = chrome
+        .first_child()
+        .expect("the visual chrome retains composed content");
+    let content = offspring(&content);
     let icon = content
         .iter()
         .find_map(|child| child.clone().downcast::<gtk::Image>().ok())
