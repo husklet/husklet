@@ -199,6 +199,7 @@ function catalogueEntryMatches(
   architecture: string,
   query: string,
   filter: CatalogueFilter,
+  category: string,
 ) {
   const installedExtension = installed.find((extension) => extension.name === entry.id);
   const updateAvailable = Boolean(
@@ -213,11 +214,21 @@ function catalogueEntryMatches(
     (filter === 'updates' && updateAvailable) ||
     (filter === 'incompatible' && incompatible);
   if (!statusMatches) return false;
+  if (category && !(entry.categories ?? []).includes(category)) return false;
   const needle = query.trim().toLocaleLowerCase();
   if (!needle) return true;
-  return [entry.title, entry.id, entry.publisher, entry.description].some((value) =>
-    value.toLocaleLowerCase().includes(needle),
-  );
+  return [
+    entry.title,
+    entry.id,
+    entry.publisher,
+    entry.description,
+    entry.version,
+    entry.source,
+    entry.reference,
+    ...(entry.categories ?? []),
+    ...(entry.architectures ?? []),
+    entry.publisher_verified ? 'verified publisher' : 'community publisher',
+  ].some((value) => value.toLocaleLowerCase().includes(needle));
 }
 
 export function filterCatalogueEntries(
@@ -226,9 +237,12 @@ export function filterCatalogueEntries(
   architecture: string,
   query: string,
   filter: CatalogueFilter,
+  category = '',
 ) {
   return entries
-    .filter((entry) => catalogueEntryMatches(entry, installed, architecture, query, filter))
+    .filter((entry) =>
+      catalogueEntryMatches(entry, installed, architecture, query, filter, category),
+    )
     .sort(compareCatalogueEntries);
 }
 
@@ -524,6 +538,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
   const [providerFailure, setProviderFailure] = React.useState<ProviderFailure | null>(null);
   const [catalogueQuery, setCatalogueQuery] = React.useState('');
   const [catalogueFilter, setCatalogueFilter] = React.useState<CatalogueFilter>('discover');
+  const [catalogueCategory, setCatalogueCategory] = React.useState('');
   const [catalogueLimit, setCatalogueLimit] = React.useState(CATALOGUE_PAGE_SIZE);
   const [installedQuery, setInstalledQuery] = React.useState('');
   const [installedFilter, setInstalledFilter] = React.useState<InstalledFilter>('all');
@@ -543,6 +558,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
     setMode(next);
     setCatalogueQuery('');
     setCatalogueFilter('discover');
+    setCatalogueCategory('');
     setCatalogueLimit(CATALOGUE_PAGE_SIZE);
     setInstalledQuery('');
     setInstalledFilter('all');
@@ -973,6 +989,10 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
     ...emptyFilesystemGrant(),
   };
   const catalogueEntries = React.useMemo(() => catalogue?.entries ?? [], [catalogue]);
+  const catalogueCategories = React.useMemo(
+    () => [...new Set(catalogueEntries.flatMap((entry) => entry.categories ?? []))].sort(),
+    [catalogueEntries],
+  );
   const visibleCatalogueEntries = React.useMemo(
     () =>
       filterCatalogueEntries(
@@ -981,8 +1001,16 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
         workspaceArchitecture,
         catalogueQuery,
         catalogueFilter,
+        catalogueCategory,
       ),
-    [catalogueEntries, catalogueFilter, catalogueQuery, installed, workspaceArchitecture],
+    [
+      catalogueCategory,
+      catalogueEntries,
+      catalogueFilter,
+      catalogueQuery,
+      installed,
+      workspaceArchitecture,
+    ],
   );
   const renderedCatalogueEntries = visibleCatalogueEntries.slice(0, catalogueLimit);
   const visibleInstalled = React.useMemo(
@@ -1178,6 +1206,25 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                           color="text-dim"
                         />
                       </Row>
+                      <Row gap={1} width="fill" align="center" justify="start">
+                        <Text label="Category" color="text-dim" />
+                        <Select
+                          value={catalogueCategory}
+                          tooltip="Filter extension catalogue by category"
+                          width={{ minimum: { chars: 18 }, maximum: { chars: 22 } }}
+                          choices={[
+                            { value: '', label: 'All categories' },
+                            ...catalogueCategories.map((category) => ({
+                              value: category,
+                              label: category,
+                            })),
+                          ]}
+                          onChange={(event: Change) => {
+                            setCatalogueCategory(String(event.value ?? ''));
+                            setCatalogueLimit(CATALOGUE_PAGE_SIZE);
+                          }}
+                        />
+                      </Row>
                     </Column>
                   ) : null}
                   {catalogueState === 'loading' && (
@@ -1205,6 +1252,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                         onInvoke={() => {
                           setCatalogueQuery('');
                           setCatalogueFilter('discover');
+                          setCatalogueCategory('');
                           setCatalogueLimit(CATALOGUE_PAGE_SIZE);
                         }}
                       />
@@ -1274,6 +1322,11 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                                 <Column gap={1}>
                                   <Text
                                     label={`Catalogue source · ${entry.source}`}
+                                    color="text-dim"
+                                    wrap
+                                  />
+                                  <Text
+                                    label={`Categories · ${(entry.categories ?? []).join(', ')}`}
                                     color="text-dim"
                                     wrap
                                   />

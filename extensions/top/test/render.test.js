@@ -219,6 +219,7 @@ const firstPartyCatalogue = async () => ({
       reference: FIRST_PARTY_REFERENCE,
       publisher: 'Husklet',
       source: 'husklet:first-party/storybook',
+      categories: ['Developer tools', 'Design'],
       publisher_verified: true,
     },
   ],
@@ -234,6 +235,7 @@ const largeCatalogueEntries = [
     reference: 'registry/database:2',
     publisher: 'Acme Data',
     source: 'community/database',
+    categories: ['Data'],
     protocol: 1,
     architectures: ['amd64'],
   },
@@ -245,6 +247,7 @@ const largeCatalogueEntries = [
     reference: 'registry/storybook:2',
     publisher: 'Husklet',
     source: 'husklet:first-party/storybook',
+    categories: ['Developer tools', 'Design'],
     publisher_verified: true,
     protocol: 1,
     architectures: ['amd64'],
@@ -257,6 +260,7 @@ const largeCatalogueEntries = [
     reference: 'registry/future:1',
     publisher: 'Future Tools',
     source: 'community/future',
+    categories: ['Developer tools'],
     protocol: 999,
     architectures: ['amd64'],
   },
@@ -268,6 +272,7 @@ const largeCatalogueEntries = [
     reference: `registry/tool-${index + 1}:1`,
     publisher: index === 8 ? 'Searchable Labs' : 'Community',
     source: `community/tool-${index + 1}`,
+    categories: [index === 8 ? 'AI' : 'Developer tools'],
     protocol: 1,
     architectures: ['amd64'],
   })),
@@ -1240,6 +1245,40 @@ test('large extension catalogues search and filter deterministic lifecycle proje
       'incompatible',
     ).map((entry) => entry.id),
     ['future'],
+  );
+  assert.deepEqual(
+    filterCatalogueEntries(
+      largeCatalogueEntries,
+      largeCatalogueInstalled,
+      'amd64',
+      '',
+      'all',
+      'Data',
+    ).map((entry) => entry.id),
+    ['database'],
+    'category navigation composes with lifecycle state',
+  );
+  assert.deepEqual(
+    filterCatalogueEntries(
+      largeCatalogueEntries,
+      largeCatalogueInstalled,
+      'amd64',
+      'verified publisher',
+      'all',
+    ).map((entry) => entry.id),
+    ['storybook'],
+    'trust state is searchable without relying on publisher wording',
+  );
+  assert.deepEqual(
+    filterCatalogueEntries(
+      largeCatalogueEntries,
+      largeCatalogueInstalled,
+      'amd64',
+      '2.0.0',
+      'all',
+    ).map((entry) => entry.id),
+    ['storybook', 'database'],
+    'advertised versions are searchable',
   );
 });
 

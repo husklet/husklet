@@ -2199,6 +2199,16 @@
           }
         },
         {
+          "name": "categories",
+          "optional": true,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "kind": "string"
+            }
+          }
+        },
+        {
           "name": "publisher_verified",
           "optional": true,
           "schema": {
@@ -14723,7 +14733,7 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:c057b391ddacee0b",
+  "source_fingerprint": "fnv1a64:45606818f3186543",
   "specification_version": 1,
   "topics": [
     {

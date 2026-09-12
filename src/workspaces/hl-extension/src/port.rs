@@ -942,6 +942,10 @@ pub struct ExtensionCatalogueEntry {
     pub reference: String,
     pub publisher: String,
     pub source: String,
+    /// Bounded human-facing discovery facets. These are navigation metadata,
+    /// never installation authority.
+    #[serde(default)]
+    pub categories: Vec<String>,
     /// True only when the host authenticated this publisher; display strings never imply trust.
     #[serde(default)]
     pub publisher_verified: bool,
@@ -971,6 +975,7 @@ impl ExtensionCatalogue {
         for entry in &self.entries {
             let id = entry.id.as_bytes();
             let architectures = entry.architectures.iter().collect::<std::collections::BTreeSet<_>>();
+            let categories = entry.categories.iter().collect::<std::collections::BTreeSet<_>>();
             if id.is_empty()
                 || id.len() > 64
                 || !id
@@ -983,6 +988,10 @@ impl ExtensionCatalogue {
                 || !bounded_text(&entry.publisher, 128)
                 || !bounded_text(&entry.reference, 512)
                 || !bounded_text(&entry.source, 512)
+                || entry.categories.is_empty()
+                || entry.categories.len() > 8
+                || categories.len() != entry.categories.len()
+                || entry.categories.iter().any(|category| !bounded_text(category, 48))
                 || entry.architectures.len() > 8
                 || architectures.len() != entry.architectures.len()
                 || entry.architectures.iter().any(|architecture| {
@@ -1847,6 +1856,7 @@ mod tests {
             publisher: "Husklet".into(),
             source: "husklet:first-party/storybook".into(),
             publisher_verified: true,
+            categories: vec!["Developer tools".into()],
             protocol: crate::PROTOCOL,
             architectures: vec!["amd64".into()],
         };
@@ -1888,6 +1898,23 @@ mod tests {
             .validate()
             .is_err()
         );
+        for categories in [
+            Vec::new(),
+            vec!["Data".into(), "Data".into()],
+            vec!["unsafe\ncategory".into()],
+        ] {
+            assert!(
+                super::ExtensionCatalogue {
+                    entries: vec![super::ExtensionCatalogueEntry {
+                        categories,
+                        ..entry.clone()
+                    }],
+                    complete: true,
+                }
+                .validate()
+                .is_err()
+            );
+        }
         assert!(
             super::ExtensionCatalogue {
                 entries: vec![super::ExtensionCatalogueEntry {

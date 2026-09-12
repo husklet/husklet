@@ -1582,6 +1582,17 @@ mod unix {
                     width,
                     &format!("discover/{width_name}"),
                 );
+                assert_extension_filter(
+                    &discover_root,
+                    "Search extensions",
+                    "All categories",
+                    width,
+                    &format!("discover/categories/{width_name}"),
+                );
+                assert!(
+                    has_label(&discover_root, "Developer tools") && has_label(&discover_root, "Data"),
+                    "{width_name} Discover omitted category navigation or card facets"
+                );
             }
             exercise_extension_update(&mut wire, &mut tree, &mut surface, &window);
         }
@@ -3215,6 +3226,7 @@ mod unix {
             publisher: "Husklet".into(),
             source: "Built in".into(),
             publisher_verified: true,
+            categories: vec!["Developer tools".into(), "Design".into()],
             protocol: PROTOCOL,
             architectures: vec!["amd64".into(), "arm64".into()],
         }];
@@ -3234,6 +3246,7 @@ mod unix {
             publisher: if index % 2 == 0 { "Acme" } else { "Community" }.into(),
             source: format!("community/developer-tool-{index:02}"),
             publisher_verified: false,
+            categories: vec![if index % 3 == 0 { "Data" } else { "Developer tools" }.into()],
             protocol: if index == 19 { PROTOCOL + 1 } else { PROTOCOL },
             architectures: vec!["amd64".into(), "arm64".into()],
         }));

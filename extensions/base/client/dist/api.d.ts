@@ -177,6 +177,8 @@ export interface ExtensionCatalogueEntry {
     reference: string;
     publisher: string;
     source: string;
+    /** Bounded, host-curated discovery facets; never installation authority. */
+    categories: string[];
     /** Host-attested publisher identity. Names and source labels never imply verification. */
     publisher_verified: boolean;
     /** Discovery hint only; the acquired manifest remains authoritative. */
