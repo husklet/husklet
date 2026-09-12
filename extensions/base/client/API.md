@@ -181,6 +181,7 @@ order; the JavaScript client's checks are never treated as a security boundary.
 - `host.terminal.ratioAndWait(...)` — arms pane observation before a generation/revision-bound ratio change, then verifies the advanced pane and resulting topology (allowing host pixel quantization); requires `panes:observe`, `terminals:read`, and `terminals:layout-control`.
 - `host.terminal.openTabAndWait(...)` — arms pane observation before opening the session-owned tab and verifies a pane under the exact returned tab identity; post-creation observation failures retain `{ tab, title }` in `TerminalOperationError`; requires `panes:observe`, `terminals:layout-control`, and `terminals:process-control`.
 - A supervised terminal command remains inspectable, readable, writable, waitable, and cancellable by its immutable returned identity after its originating pane is replaced or the extension reconnects. The pane snapshot fences creation only.
+- Every supervised command carries its authenticated extension owner. All follow-up calls echo that owner and the Rust host rejects a copied command from another extension before execution lookup, while reconnects under the same extension identity remain valid.
 - `host.terminal.commandText(...)` throws `TerminalCommandOperationError` after any post-start failure, preserving the immutable command, failed phase, and last completely consumed output cursor so reconnecting callers can resume without relaunching or guessing.
 
 ## Files

@@ -6620,6 +6620,13 @@
           }
         },
         {
+          "name": "owner",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
           "name": "slot",
           "optional": false,
           "schema": {
@@ -6719,6 +6726,13 @@
       "fields": [
         {
           "name": "id",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "owner",
           "optional": false,
           "schema": {
             "kind": "string"
@@ -11770,6 +11784,13 @@
                 }
               },
               {
+                "name": "owner",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
                 "name": "slot",
                 "optional": false,
                 "schema": {
@@ -11808,6 +11829,13 @@
             "fields": [
               {
                 "name": "id",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "owner",
                 "optional": false,
                 "schema": {
                   "kind": "string"
@@ -11880,6 +11908,13 @@
                 }
               },
               {
+                "name": "owner",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
                 "name": "slot",
                 "optional": false,
                 "schema": {
@@ -11929,6 +11964,13 @@
             "fields": [
               {
                 "name": "id",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "owner",
                 "optional": false,
                 "schema": {
                   "kind": "string"
@@ -11997,6 +12039,13 @@
                 }
               },
               {
+                "name": "owner",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
                 "name": "slot",
                 "optional": false,
                 "schema": {
@@ -12049,6 +12098,13 @@
             "fields": [
               {
                 "name": "id",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "owner",
                 "optional": false,
                 "schema": {
                   "kind": "string"
@@ -14431,7 +14487,7 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:66b7b164c742682f",
+  "source_fingerprint": "fnv1a64:99abd7077f1d54e5",
   "specification_version": 1,
   "topics": [
     {

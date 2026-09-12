@@ -677,6 +677,7 @@ fn supervised_terminal_command_has_owned_identity_output_input_and_completion_wi
         panic!("wrong start reply")
     };
     assert_eq!(started.id, "e".repeat(32));
+    assert_eq!(started.owner, "sample");
     assert_eq!(
         (started.slot.as_str(), started.generation, started.revision),
         ("s1", 0, 0)
@@ -691,6 +692,7 @@ fn supervised_terminal_command_has_owned_identity_output_input_and_completion_wi
         .dispatch(
             &Request::TerminalCommandWrite {
                 id: started.id.clone(),
+                owner: "sample".into(),
                 slot: "s1".into(),
                 generation: 0,
                 revision: 0,
@@ -711,6 +713,7 @@ fn supervised_terminal_command_has_owned_identity_output_input_and_completion_wi
         .dispatch(
             &Request::TerminalCommandOutput {
                 id: started.id.clone(),
+                owner: "sample".into(),
                 slot: "s1".into(),
                 generation: 0,
                 revision: 0,
@@ -730,6 +733,7 @@ fn supervised_terminal_command_has_owned_identity_output_input_and_completion_wi
         .dispatch(
             &Request::TerminalCommandWait {
                 id: started.id.clone(),
+                owner: "sample".into(),
                 slot: "s1".into(),
                 generation: 0,
                 revision: 0,
@@ -744,10 +748,31 @@ fn supervised_terminal_command_has_owned_identity_output_input_and_completion_wi
     assert!(!completed.running);
     assert_eq!(completed.exit_code, 17);
 
+    host.ledger.clear();
+    let foreign = Session::new(Authority::new(
+        ExtensionName::new("foreign").expect("name"),
+        Grant::new([Capability::TerminalOutput]),
+        Vec::new(),
+    ))
+    .with_extension_identity("foreign")
+    .dispatch(
+        &Request::TerminalCommandInspect {
+            id: started.id.clone(),
+            owner: started.owner.clone(),
+            slot: "s1".into(),
+            generation: 0,
+            revision: 0,
+        },
+        &services(&host),
+    );
+    assert!(matches!(foreign, Err(Failure::Denied { .. })));
+    assert!(host.ledger.reached().is_empty(), "foreign ownership must be fenced before host lookup");
+
     let resumed = session(&[Capability::TerminalOutput], &[])
         .dispatch(
             &Request::TerminalCommandInspect {
                 id: started.id,
+                owner: "sample".into(),
                 slot: "s1".into(),
                 generation: 0,
                 revision: 0,
@@ -768,6 +793,7 @@ fn supervised_terminal_command_has_owned_identity_output_input_and_completion_wi
         .dispatch(
             &Request::TerminalCommandCancel {
                 id: resumed.id,
+                owner: "sample".into(),
                 slot: "s1".into(),
                 generation: 0,
                 revision: 0,
@@ -801,6 +827,7 @@ fn pane_snapshot_fences_command_creation_but_not_its_durable_identity() {
     let resumed = session(&[Capability::TerminalOutput], &[]).dispatch(
         &Request::TerminalCommandInspect {
             id: "e".repeat(32),
+            owner: "sample".into(),
             slot: "s1".into(),
             generation: 0,
             revision: 1,
@@ -815,6 +842,7 @@ fn pane_snapshot_fences_command_creation_but_not_its_durable_identity() {
     let output = session(&[Capability::TerminalOutput], &[]).dispatch(
         &Request::TerminalCommandOutput {
             id: "e".repeat(32),
+            owner: "sample".into(),
             slot: "s1".into(),
             generation: 0,
             revision: 1,
@@ -1262,6 +1290,7 @@ fn session(capabilities: &[Capability], roots: &[&str]) -> Session {
         Grant::new(capabilities.iter().copied()),
         roots.clone(),
     ))
+    .with_extension_identity("sample")
     .with_containers(hl_extension::ContainerGrant {
         selectors: vec![hl_extension::ContainerSelector::All { all: true }],
         create: true,
@@ -1769,6 +1798,7 @@ fn calls() -> Vec<(Request, Capability)> {
         (
             Request::TerminalCommandInspect {
                 id: "e".repeat(32),
+                owner: "sample".into(),
                 slot: "s1".into(),
                 generation: 0,
                 revision: 0,
@@ -1778,6 +1808,7 @@ fn calls() -> Vec<(Request, Capability)> {
         (
             Request::TerminalCommandOutput {
                 id: "e".repeat(32),
+                owner: "sample".into(),
                 slot: "s1".into(),
                 generation: 0,
                 revision: 0,
@@ -1789,6 +1820,7 @@ fn calls() -> Vec<(Request, Capability)> {
         (
             Request::TerminalCommandWait {
                 id: "e".repeat(32),
+                owner: "sample".into(),
                 slot: "s1".into(),
                 generation: 0,
                 revision: 0,
@@ -1799,6 +1831,7 @@ fn calls() -> Vec<(Request, Capability)> {
         (
             Request::TerminalCommandCancel {
                 id: "e".repeat(32),
+                owner: "sample".into(),
                 slot: "s1".into(),
                 generation: 0,
                 revision: 0,
@@ -1810,6 +1843,7 @@ fn calls() -> Vec<(Request, Capability)> {
         (
             Request::TerminalCommandWrite {
                 id: "e".repeat(32),
+                owner: "sample".into(),
                 slot: "s1".into(),
                 generation: 0,
                 revision: 0,
@@ -1820,6 +1854,7 @@ fn calls() -> Vec<(Request, Capability)> {
         (
             Request::TerminalCommandCloseInput {
                 id: "e".repeat(32),
+                owner: "sample".into(),
                 slot: "s1".into(),
                 generation: 0,
                 revision: 0,

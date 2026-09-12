@@ -143,6 +143,8 @@ pub struct ExecutionOutputPage {
 pub struct TerminalCommand {
     /// Immutable execution identity. It remains valid if the pane is replaced.
     pub id: String,
+    /// Authenticated extension identity that owns every follow-up operation.
+    pub owner: String,
     /// Pane identity against which creation was fenced.
     pub slot: String,
     pub generation: u64,
@@ -157,6 +159,7 @@ pub struct TerminalCommand {
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct TerminalCommandOutput {
     pub id: String,
+    pub owner: String,
     pub slot: String,
     pub generation: u64,
     pub revision: u64,

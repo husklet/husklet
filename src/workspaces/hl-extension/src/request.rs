@@ -353,12 +353,14 @@ pub enum Request {
     },
     TerminalCommandInspect {
         id: String,
+        owner: String,
         slot: String,
         generation: u64,
         revision: u64,
     },
     TerminalCommandOutput {
         id: String,
+        owner: String,
         slot: String,
         generation: u64,
         revision: u64,
@@ -367,6 +369,7 @@ pub enum Request {
     },
     TerminalCommandWait {
         id: String,
+        owner: String,
         slot: String,
         generation: u64,
         revision: u64,
@@ -374,6 +377,7 @@ pub enum Request {
     },
     TerminalCommandCancel {
         id: String,
+        owner: String,
         slot: String,
         generation: u64,
         revision: u64,
@@ -382,6 +386,7 @@ pub enum Request {
     },
     TerminalCommandWrite {
         id: String,
+        owner: String,
         slot: String,
         generation: u64,
         revision: u64,
@@ -389,6 +394,7 @@ pub enum Request {
     },
     TerminalCommandCloseInput {
         id: String,
+        owner: String,
         slot: String,
         generation: u64,
         revision: u64,

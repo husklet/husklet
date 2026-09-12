@@ -8,9 +8,11 @@ import { connect, TerminalCommandOperationError, workspace } from '../dist/index
 import { CONTROL, KIND, Reader, encode } from '../dist/wire.js';
 
 const id = 'e'.repeat(32);
+const owner = 'sample';
 const pane = { slot: 'term-1', generation: 3, revision: 9 };
 const running = {
   id,
+  owner,
   ...pane,
   running: true,
   exit_code: 0,
@@ -46,7 +48,7 @@ test('supervised terminal command is authoritative over fragmented real Unix fra
           });
           payload = { reply: 'terminal_command', with: running };
         } else if (call === 'terminal_command_write') {
-          assert.deepEqual(frame.payload.with, { id, ...pane, contents: [113, 10] });
+          assert.deepEqual(frame.payload.with, { id, owner, ...pane, contents: [113, 10] });
           payload = { reply: 'terminal_command_input', with: { id, committed: 2 } };
         } else if (call === 'terminal_command_close_input') {
           payload = { reply: 'done' };
@@ -56,6 +58,7 @@ test('supervised terminal command is authoritative over fragmented real Unix fra
             reply: 'terminal_command_output',
             with: {
               id,
+              owner,
               ...pane,
               output: {
                 entries:
@@ -143,6 +146,7 @@ test('supervised command output survives reconnect and originating pane replacem
                 reply: 'terminal_command_output',
                 with: {
                   id,
+                  owner,
                   ...pane,
                   output: {
                     entries: [
@@ -182,7 +186,7 @@ test('supervised command output survives reconnect and originating pane replacem
     assert.equal(new TextDecoder().decode(Uint8Array.from(page.output.entries[0].bytes)), 'done\n');
     assert.deepEqual(requests[1], {
       call: 'terminal_command_output',
-      with: { id, ...pane, after: 7, limit: 1 },
+      with: { id, owner, ...pane, after: 7, limit: 1 },
     });
     assert.equal(accepted, 2);
     await resumed.close();
@@ -227,6 +231,7 @@ test('large Git review output exposes an exact reconnect cursor after fragmented
                 reply: 'terminal_command_output',
                 with: {
                   id,
+                  owner,
                   ...pane,
                   output: {
                     entries: [
@@ -258,6 +263,7 @@ test('large Git review output exposes an exact reconnect cursor after fragmented
               reply: 'terminal_command_output',
               with: {
                 id,
+                owner,
                 ...pane,
                 output: {
                   entries: [
@@ -320,7 +326,7 @@ test('large Git review output exposes an exact reconnect cursor after fragmented
     assert.equal(remainder.output.eof, true);
     assert.deepEqual(requests.at(-1), {
       call: 'terminal_command_output',
-      with: { id, ...pane, after: 1, limit: 1 },
+      with: { id, owner, ...pane, after: 1, limit: 1 },
     });
     await resumed.close();
   } finally {

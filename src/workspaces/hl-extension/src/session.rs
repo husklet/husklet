@@ -197,12 +197,14 @@ fn validate_preferences(preferences: &crate::port::ExtensionPreferences) -> Resu
 
 fn terminal_command_summary(
     execution: crate::port::ExecutionSummary,
+    owner: &str,
     slot: &str,
     generation: u64,
     revision: u64,
 ) -> crate::port::TerminalCommand {
     crate::port::TerminalCommand {
         id: execution.id,
+        owner: owner.to_owned(),
         slot: slot.to_owned(),
         generation,
         revision,
@@ -1641,21 +1643,24 @@ impl Session {
             }
             return Ok(Reply::TerminalCommand(terminal_command_summary(
                 execution,
+                &self.extension_identity,
                 slot,
                 *generation,
                 *revision,
             )));
         }
 
-        let (id, slot, generation, revision) = match request {
+        let (id, owner, slot, generation, revision) = match request {
             Request::TerminalCommandInspect {
                 id,
+                owner,
                 slot,
                 generation,
                 revision,
             }
             | Request::TerminalCommandOutput {
                 id,
+                owner,
                 slot,
                 generation,
                 revision,
@@ -1663,6 +1668,7 @@ impl Session {
             }
             | Request::TerminalCommandWait {
                 id,
+                owner,
                 slot,
                 generation,
                 revision,
@@ -1670,6 +1676,7 @@ impl Session {
             }
             | Request::TerminalCommandCancel {
                 id,
+                owner,
                 slot,
                 generation,
                 revision,
@@ -1677,6 +1684,7 @@ impl Session {
             }
             | Request::TerminalCommandWrite {
                 id,
+                owner,
                 slot,
                 generation,
                 revision,
@@ -1684,13 +1692,23 @@ impl Session {
             }
             | Request::TerminalCommandCloseInput {
                 id,
+                owner,
                 slot,
                 generation,
                 revision,
-            } => (id, slot, *generation, *revision),
+            } => (id, owner, slot, *generation, *revision),
             _ => unreachable!(),
         };
         immutable_identity(id, &[32], "terminal command")?;
+        crate::ExtensionName::new(owner.clone()).map_err(|_| Failure::Conflict {
+            detail: "terminal command owner is not a bounded extension identity".into(),
+        })?;
+        if owner != &self.extension_identity {
+            return Err(Failure::Denied {
+                capability: request.capability().as_str().into(),
+                detail: "terminal command belongs to another extension".into(),
+            });
+        }
         // The pane snapshot fences creation. Once started, the returned command ID is the durable
         // authority: replacing or closing its originating pane must not make output, completion,
         // input shutdown, or cancellation unreachable.
@@ -1698,7 +1716,7 @@ impl Session {
             Request::TerminalCommandInspect { .. } => {
                 let execution = services.containers.execution(id)?;
                 Ok(Reply::TerminalCommand(terminal_command_summary(
-                    execution, slot, generation, revision,
+                    execution, owner, slot, generation, revision,
                 )))
             }
             Request::TerminalCommandOutput { after, limit, .. } => {
@@ -1711,6 +1729,7 @@ impl Session {
                 validate_execution_output(&page, *after, *limit)?;
                 Ok(Reply::TerminalCommandOutput(crate::port::TerminalCommandOutput {
                     id: id.clone(),
+                    owner: owner.clone(),
                     slot: slot.clone(),
                     generation,
                     revision,
@@ -1725,7 +1744,7 @@ impl Session {
                 }
                 let execution = services.containers.execution_wait(id, *timeout_ms)?;
                 Ok(Reply::TerminalCommand(terminal_command_summary(
-                    execution, slot, generation, revision,
+                    execution, owner, slot, generation, revision,
                 )))
             }
             Request::TerminalCommandCancel { signal, timeout_ms, .. } => {
@@ -1738,7 +1757,7 @@ impl Session {
                 services.control.execution_cancel(id, signal, *timeout_ms)?;
                 let execution = services.containers.execution(id)?;
                 Ok(Reply::TerminalCommand(terminal_command_summary(
-                    execution, slot, generation, revision,
+                    execution, owner, slot, generation, revision,
                 )))
             }
             Request::TerminalCommandWrite { contents, .. } => {

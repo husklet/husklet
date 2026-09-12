@@ -757,7 +757,11 @@ function exactExecutionInput(input) {
 }
 function exactTerminalCommand(command) {
     const id = immutableIdentity(command?.id, [32], 'terminal command');
-    if (typeof command?.slot !== 'string' ||
+    if (typeof command?.owner !== 'string' ||
+        command.owner.length === 0 ||
+        command.owner.length > 64 ||
+        !/^[a-z0-9][a-z0-9._-]*$/.test(command.owner) ||
+        typeof command?.slot !== 'string' ||
         command.slot.length === 0 ||
         !Number.isSafeInteger(command.generation) ||
         command.generation < 0 ||
@@ -774,6 +778,7 @@ function exactTerminalCommand(command) {
 function sameTerminalCommand(expected, actual) {
     const command = exactTerminalCommand(actual);
     if (command.id !== expected.id ||
+        command.owner !== expected.owner ||
         command.slot !== expected.slot ||
         command.generation !== expected.generation ||
         command.revision !== expected.revision) {
@@ -1945,6 +1950,7 @@ export function workspace(session, { signal } = {}) {
             },
             commandInspect: async (command) => sameTerminalCommand(exactTerminalCommand(command), expect(await session.call('terminal_command_inspect', {
                 id: immutableIdentity(command.id, [32], 'terminal command'),
+                owner: command.owner,
                 slot: command.slot,
                 generation: command.generation,
                 revision: command.revision,
@@ -1959,6 +1965,7 @@ export function workspace(session, { signal } = {}) {
                 }
                 const result = expect(await session.call('terminal_command_output', {
                     id: command.id,
+                    owner: command.owner,
                     slot: command.slot,
                     generation: command.generation,
                     revision: command.revision,
@@ -1966,6 +1973,7 @@ export function workspace(session, { signal } = {}) {
                     limit,
                 }), 'terminal_command_output');
                 if (result.id !== command.id ||
+                    result.owner !== command.owner ||
                     result.slot !== command.slot ||
                     result.generation !== command.generation ||
                     result.revision !== command.revision) {
@@ -1983,6 +1991,7 @@ export function workspace(session, { signal } = {}) {
                 }
                 return sameTerminalCommand(command, expect(await session.call('terminal_command_wait', {
                     id: command.id,
+                    owner: command.owner,
                     slot: command.slot,
                     generation: command.generation,
                     revision: command.revision,
@@ -1999,6 +2008,7 @@ export function workspace(session, { signal } = {}) {
                 }
                 return sameTerminalCommand(command, expect(await session.call('terminal_command_cancel', {
                     id: command.id,
+                    owner: command.owner,
                     slot: command.slot,
                     generation: command.generation,
                     revision: command.revision,
@@ -2011,6 +2021,7 @@ export function workspace(session, { signal } = {}) {
                 const contents = exactExecutionInput(input);
                 const receipt = expect(await session.call('terminal_command_write', {
                     id: command.id,
+                    owner: command.owner,
                     slot: command.slot,
                     generation: command.generation,
                     revision: command.revision,
@@ -2025,6 +2036,7 @@ export function workspace(session, { signal } = {}) {
                 command = exactTerminalCommand(command);
                 return done('terminal_command_close_input', {
                     id: command.id,
+                    owner: command.owner,
                     slot: command.slot,
                     generation: command.generation,
                     revision: command.revision,

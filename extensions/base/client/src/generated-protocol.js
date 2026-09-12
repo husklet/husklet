@@ -1,5 +1,5 @@
 // Generated from Rust hl-extension protocol/v1.json. Do not edit.
-// Protocol artifact fnv1a64:ec45f495d3461b05
+// Protocol artifact fnv1a64:1d54ca208fe97de6
 export const PROTOCOL_SPECIFICATION_VERSION = 1;
 export const PROTOCOL_VERSION = 1;
 export const PROTOCOL_BOUNDS = Object.freeze({
@@ -6965,6 +6965,13 @@ const definitions = {
         }
       },
       {
+        "name": "owner",
+        "optional": false,
+        "schema": {
+          "kind": "string"
+        }
+      },
+      {
         "name": "slot",
         "optional": false,
         "schema": {
@@ -7064,6 +7071,13 @@ const definitions = {
     "fields": [
       {
         "name": "id",
+        "optional": false,
+        "schema": {
+          "kind": "string"
+        }
+      },
+      {
+        "name": "owner",
         "optional": false,
         "schema": {
           "kind": "string"
@@ -10987,6 +11001,13 @@ const roots = {
               }
             },
             {
+              "name": "owner",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            },
+            {
               "name": "slot",
               "optional": false,
               "schema": {
@@ -11025,6 +11046,13 @@ const roots = {
           "fields": [
             {
               "name": "id",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            },
+            {
+              "name": "owner",
               "optional": false,
               "schema": {
                 "kind": "string"
@@ -11097,6 +11125,13 @@ const roots = {
               }
             },
             {
+              "name": "owner",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            },
+            {
               "name": "slot",
               "optional": false,
               "schema": {
@@ -11146,6 +11181,13 @@ const roots = {
           "fields": [
             {
               "name": "id",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            },
+            {
+              "name": "owner",
               "optional": false,
               "schema": {
                 "kind": "string"
@@ -11214,6 +11256,13 @@ const roots = {
               }
             },
             {
+              "name": "owner",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            },
+            {
               "name": "slot",
               "optional": false,
               "schema": {
@@ -11266,6 +11315,13 @@ const roots = {
           "fields": [
             {
               "name": "id",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            },
+            {
+              "name": "owner",
               "optional": false,
               "schema": {
                 "kind": "string"
