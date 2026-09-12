@@ -8855,6 +8855,10 @@ test('real Unix signalExecutionAndWait ignores initial state and awaits exact im
     pid,
     command: ['sleep', '30'],
     user: 'root',
+    created_at_ms: 1,
+    started_at_ms: 2,
+    finished_at_ms: running ? null : 3,
+    result: running ? null : { kind: 'signal', value: exitCode - 128 },
   });
   const initial = summary(true, 0);
   const exited = summary(false, 143);

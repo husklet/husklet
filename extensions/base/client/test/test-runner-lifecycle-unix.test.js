@@ -46,6 +46,10 @@ test('test runner refuses output EOF from a live execution, cancels it, and reus
                       pid: 42,
                       command: ['npm', 'test', '--', '--reporter=jsonl'],
                       user: 'runner',
+                      created_at_ms: 1,
+                      started_at_ms: 2,
+                      finished_at_ms: null,
+                      result: null,
                     },
                   }
                 : frame.payload.call === 'execution_cancel'
