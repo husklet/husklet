@@ -62,6 +62,13 @@ export declare class TerminalOperationError extends Error {
     readonly result: any;
     constructor(operation: any, result: any, cause: any);
 }
+/** A supervised terminal command failed after creation, retaining exact recovery state. */
+export declare class TerminalCommandOperationError extends Error {
+    readonly command: any;
+    readonly phase: any;
+    readonly after: any;
+    constructor(command: any, phase: any, after: any, cause: any);
+}
 /** A terminal text request cannot be represented by the host's bounded pane tail. */
 export declare class TerminalReadLimitError extends RangeError {
     readonly requested: any;

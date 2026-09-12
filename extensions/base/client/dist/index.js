@@ -237,6 +237,20 @@ export class TerminalOperationError extends Error {
         this.cause = cause;
     }
 }
+/** A supervised terminal command failed after creation, retaining exact recovery state. */
+export class TerminalCommandOperationError extends Error {
+    command;
+    phase;
+    after;
+    constructor(command, phase, after, cause) {
+        super(`terminal command ${command.id} ${phase} failed after sequence ${after}: ${cause instanceof Error ? cause.message : String(cause)}`);
+        this.name = 'TerminalCommandOperationError';
+        this.command = Object.freeze({ ...command, command: Object.freeze([...command.command]) });
+        this.phase = phase;
+        this.after = after;
+        this.cause = cause;
+    }
+}
 /** A terminal text request cannot be represented by the host's bounded pane tail. */
 export class TerminalReadLimitError extends RangeError {
     requested;
@@ -2031,6 +2045,7 @@ export function workspace(session, { signal } = {}) {
                 };
                 let total = 0;
                 let after = 0;
+                let phase = 'start';
                 const abort = async () => {
                     if (owned?.running) {
                         owned = await api.terminal.commandCancel(owned, {
@@ -2047,10 +2062,12 @@ export function workspace(session, { signal } = {}) {
                         stdin: input !== undefined,
                     });
                     if (input !== undefined) {
+                        phase = 'input';
                         await api.terminal.commandWrite(owned, input);
                         await api.terminal.commandCloseInput(owned);
                     }
                     for (;;) {
+                        phase = 'output';
                         if (abortSignal?.aborted)
                             throw abortSignal.reason ?? new DOMException('Aborted', 'AbortError');
                         const page = await api.terminal.commandOutput(owned, { after, limit: pageLimit });
@@ -2070,7 +2087,9 @@ export function workspace(session, { signal } = {}) {
                             await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
                         }
                     }
+                    phase = 'wait';
                     owned = await api.terminal.commandWait(owned);
+                    phase = 'decode';
                     const decode = (parts) => {
                         const bytes = new Uint8Array(parts.reduce((sum, part) => sum + part.byteLength, 0));
                         let offset = 0;
@@ -2089,6 +2108,8 @@ export function workspace(session, { signal } = {}) {
                     catch {
                         // Preserve the operation failure; the immutable command ID remains on `owned`.
                     }
+                    if (owned)
+                        throw new TerminalCommandOperationError(owned, phase, after, cause);
                     throw cause;
                 }
             },

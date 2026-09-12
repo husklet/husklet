@@ -129,6 +129,7 @@ groups
   .get('Terminal and panes')
   .push(
     '- A supervised terminal command remains inspectable, readable, writable, waitable, and cancellable by its immutable returned identity after its originating pane is replaced or the extension reconnects. The pane snapshot fences creation only.',
+    '- `host.terminal.commandText(...)` throws `TerminalCommandOperationError` after any post-start failure, preserving the immutable command, failed phase, and last completely consumed output cursor so reconnecting callers can resume without relaunching or guessing.',
   );
 groups
   .get('Semantics')

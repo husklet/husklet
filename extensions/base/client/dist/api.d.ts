@@ -822,6 +822,13 @@ export declare class TerminalOperationError extends Error {
     }>;
     readonly cause: unknown;
 }
+/** A supervised command failed after creation; reconnect using `command` and resume output at `after`. */
+export declare class TerminalCommandOperationError extends Error {
+    readonly command: Readonly<TerminalCommand>;
+    readonly phase: 'input' | 'output' | 'wait' | 'decode';
+    readonly after: number;
+    readonly cause: unknown;
+}
 /** A terminal text request cannot be represented by the host's bounded pane tail. */
 export declare class TerminalReadLimitError extends RangeError {
     readonly requested: number;
@@ -1540,7 +1547,11 @@ export interface WorkspaceApi {
         /** Returns only after the whole input chunk was flushed by the host transport. */
         commandWrite(command: TerminalCommand, input: string | Iterable<number>): Promise<TerminalCommandInput>;
         commandCloseInput(command: TerminalCommand): Promise<void>;
-        /** Run, collect bounded UTF-8 output, and return authoritative process completion. */
+        /**
+         * Run, collect bounded UTF-8 output, and return authoritative process completion.
+         * Post-start failures throw `TerminalCommandOperationError`, preserving the immutable
+         * command and last completely consumed output cursor for reconnect-safe recovery.
+         */
         commandText(pane: Pick<PaneText, 'slot' | 'generation' | 'revision'>, options: {
             command: string[];
             workingDirectory?: string;

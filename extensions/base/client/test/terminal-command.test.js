@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { mkdtemp, rm } from 'node:fs/promises';
 import test from 'node:test';
-import { connect, workspace } from '../dist/index.js';
+import { connect, TerminalCommandOperationError, workspace } from '../dist/index.js';
 import { CONTROL, KIND, Reader, encode } from '../dist/wire.js';
 
 const id = 'e'.repeat(32);
@@ -185,6 +185,143 @@ test('supervised command output survives reconnect and originating pane replacem
       with: { id, ...pane, after: 7, limit: 1 },
     });
     assert.equal(accepted, 2);
+    await resumed.close();
+  } finally {
+    for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('large Git review output exposes an exact reconnect cursor after fragmented disconnect', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-git-review-resume-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const connections = new Set();
+  const requests = [];
+  let accepted = 0;
+  let firstOutput = true;
+  const gitCommand = ['git', 'diff', '--no-ext-diff', '--src-prefix=a/', '--dst-prefix=b/'];
+  const server = net.createServer((socket) => {
+    accepted += 1;
+    connections.add(socket);
+    socket.on('close', () => connections.delete(socket));
+    const connection = accepted;
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.kind !== KIND.request) continue;
+        requests.push(frame.payload);
+        if (frame.payload.call === 'terminal_command_start') {
+          fragmented(socket, {
+            channel: frame.channel,
+            kind: KIND.response,
+            payload: { reply: 'terminal_command', with: { ...running, command: gitCommand } },
+          });
+        } else if (frame.payload.call === 'terminal_command_output' && connection === 1) {
+          if (firstOutput) {
+            firstOutput = false;
+            fragmented(socket, {
+              channel: frame.channel,
+              kind: KIND.response,
+              payload: {
+                reply: 'terminal_command_output',
+                with: {
+                  id,
+                  ...pane,
+                  output: {
+                    entries: [
+                      {
+                        sequence: 1,
+                        timestamp_ms: 1,
+                        stream: 'stdout',
+                        bytes: Array.from(new TextEncoder().encode('diff --git a/a b/a\n')),
+                      },
+                    ],
+                    next: 1,
+                    more: false,
+                    eof: false,
+                    gap: false,
+                  },
+                },
+              },
+            });
+          } else {
+            socket.destroy();
+          }
+        } else if (frame.payload.call === 'terminal_command_cancel' && connection === 1) {
+          socket.destroy();
+        } else if (frame.payload.call === 'terminal_command_output' && connection === 2) {
+          fragmented(socket, {
+            channel: frame.channel,
+            kind: KIND.response,
+            payload: {
+              reply: 'terminal_command_output',
+              with: {
+                id,
+                ...pane,
+                output: {
+                  entries: [
+                    {
+                      sequence: 2,
+                      timestamp_ms: 2,
+                      stream: 'stderr',
+                      bytes: Array.from(new TextEncoder().encode('warning: recovered\n')),
+                    },
+                  ],
+                  next: 2,
+                  more: false,
+                  eof: true,
+                  gap: false,
+                },
+              },
+            },
+          });
+        }
+      }
+    });
+    fragmented(socket, {
+      channel: CONTROL,
+      kind: KIND.open,
+      payload: {
+        protocol: 1,
+        peer: `git-review-${connection}`,
+        granted: ['terminals:process-control', 'terminals:output'],
+      },
+    });
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const first = await connect({ path: socketPath });
+    let failure;
+    try {
+      await workspace(first).terminal.commandText(pane, {
+        command: gitCommand,
+        maxBytes: 1024 * 1024,
+        pageLimit: 1,
+        pollIntervalMs: 10,
+      });
+    } catch (error) {
+      failure = error;
+    }
+    assert(failure instanceof TerminalCommandOperationError, `${failure?.constructor?.name}: ${failure}`);
+    assert.equal(failure.phase, 'output');
+    assert.equal(failure.after, 1);
+    assert.equal(failure.command.id, id);
+    assert.deepEqual(failure.command.command, gitCommand);
+    assert(Object.isFrozen(failure.command));
+    assert(Object.isFrozen(failure.command.command));
+
+    const resumed = await connect({ path: socketPath });
+    const remainder = await workspace(resumed).terminal.commandOutput(failure.command, {
+      after: failure.after,
+      limit: 1,
+    });
+    assert.equal(remainder.output.next, 2);
+    assert.equal(remainder.output.eof, true);
+    assert.deepEqual(requests.at(-1), {
+      call: 'terminal_command_output',
+      with: { id, ...pane, after: 1, limit: 1 },
+    });
     await resumed.close();
   } finally {
     for (const connection of connections) connection.destroy();
