@@ -1894,9 +1894,10 @@ test('installed management can detect a republished image at the same release ve
   await settled();
 
   assert.equal(labelled(stage, 'Review update'), undefined);
-  assert.deepEqual(taggedProperty(stage, 'Check image', 'IconButton', 'Size'), {
+  assert.deepEqual(taggedProperty(stage, 'Check for changes', 'Button', 'Size'), {
     ControlSize: 'Small',
   });
+  assert.deepEqual(ancestorTags(stage, 'Check for changes').slice(0, 2), ['Row', 'CardContent']);
   invokeByTooltip(stage, 'Check storybook image for changes');
   await settled();
   await settled();

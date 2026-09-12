@@ -104,7 +104,7 @@ test('installed extension detects a republished same-version image over real Uni
     session = await connect({ path: socketPath });
     stage = host();
     stage.render(h(Extensions, { api: workspace(session) }));
-    await until(() => labelled(stage, 'Check image'));
+    await until(() => labelled(stage, 'Check for changes'));
     invokeByTooltip(stage, 'Check storybook image for changes');
     await until(() => labelled(stage, 'Update with selected access'));
     await until(() =>

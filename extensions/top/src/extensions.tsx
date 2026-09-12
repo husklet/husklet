@@ -2076,6 +2076,13 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                         ? catalogueCompatibility(catalogueEntry, workspaceArchitecture)
                         : null;
                       const provider = extension.pane_providers?.[0];
+                      const hasCardAction = Boolean(
+                        update ||
+                        (extension.name !== 'top' &&
+                          (extension.status.startsWith('fault:') || !extension.enabled)) ||
+                        provider ||
+                        catalogueEntry,
+                      );
                       return (
                         <Card
                           key={`${extension.name}:${extension.image_digest}`}
@@ -2107,54 +2114,59 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                                       : 'neutral'
                                 }
                               />
-                              {update && (
-                                <Button
-                                  key="review-update"
-                                  label="Review update"
-                                  size="small"
-                                  variant="filled"
-                                  tone="accent"
-                                  enabled={!busy && updateCompatibility?.compatible !== false}
-                                  onInvoke={() => inspect(update.reference, update)}
-                                />
-                              )}
-                              {!update &&
-                              extension.name !== 'top' &&
-                              extension.status.startsWith('fault:') ? (
-                                <Button
-                                  key="lifecycle"
-                                  label="Retry"
-                                  size="small"
-                                  variant="outline"
-                                  tone="accent"
-                                  enabled={!busy}
-                                  onInvoke={() => lifecycle(extension, 'retry')}
-                                />
-                              ) : !update && extension.name !== 'top' && !extension.enabled ? (
-                                <Button
-                                  key="lifecycle"
-                                  label="Enable"
-                                  size="small"
-                                  variant="outline"
-                                  tone="accent"
-                                  enabled={!busy}
-                                  onInvoke={() => lifecycle(extension, 'enable')}
-                                />
-                              ) : !update && provider ? (
-                                providerAction(extension, provider)
-                              ) : null}
-                              {!update && catalogueEntry ? (
-                                <IconButton
-                                  label="Check image"
-                                  tooltip={`Check ${extension.name} image for changes`}
-                                  icon="view-refresh-symbolic"
-                                  size="small"
-                                  variant="ghost"
-                                  enabled={!busy && currentCompatibility?.compatible !== false}
-                                  onInvoke={() => inspect(catalogueEntry.reference, catalogueEntry)}
-                                />
-                              ) : null}
                             </Row>
+                            {hasCardAction ? (
+                              <Row gap={1} align="center" justify="start" width="fill" wrap>
+                                {update && (
+                                  <Button
+                                    key="review-update"
+                                    label="Review update"
+                                    size="small"
+                                    variant="filled"
+                                    tone="accent"
+                                    enabled={!busy && updateCompatibility?.compatible !== false}
+                                    onInvoke={() => inspect(update.reference, update)}
+                                  />
+                                )}
+                                {!update &&
+                                extension.name !== 'top' &&
+                                extension.status.startsWith('fault:') ? (
+                                  <Button
+                                    key="lifecycle"
+                                    label="Retry"
+                                    size="small"
+                                    variant="outline"
+                                    tone="accent"
+                                    enabled={!busy}
+                                    onInvoke={() => lifecycle(extension, 'retry')}
+                                  />
+                                ) : !update && extension.name !== 'top' && !extension.enabled ? (
+                                  <Button
+                                    key="lifecycle"
+                                    label="Enable"
+                                    size="small"
+                                    variant="outline"
+                                    tone="accent"
+                                    enabled={!busy}
+                                    onInvoke={() => lifecycle(extension, 'enable')}
+                                  />
+                                ) : !update && provider ? (
+                                  providerAction(extension, provider)
+                                ) : null}
+                                {!update && catalogueEntry ? (
+                                  <Button
+                                    label="Check for changes"
+                                    tooltip={`Check ${extension.name} image for changes`}
+                                    size="small"
+                                    variant="ghost"
+                                    enabled={!busy && currentCompatibility?.compatible !== false}
+                                    onInvoke={() =>
+                                      inspect(catalogueEntry.reference, catalogueEntry)
+                                    }
+                                  />
+                                ) : null}
+                              </Row>
+                            ) : null}
                             <ExtensionFault extension={extension} />
                             {updateCompatibility ? (
                               <Text

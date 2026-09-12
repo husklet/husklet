@@ -10,9 +10,9 @@ mod unix {
 
     use gtk::prelude::*;
     use hl_extension::{
-        Capability, ChannelId, ExtensionName, Frame, Grant, Hello, Kind, PROTOCOL, Reply, Request, Welcome, Wire, codec,
+        codec, Capability, ChannelId, ExtensionName, Frame, Grant, Hello, Kind, Reply, Request, Welcome, Wire, PROTOCOL,
     };
-    use hl_gui::{LOG_VIEW_CHARACTER_LIMIT, Renderer as _, SourceMutation, Theme, Tree};
+    use hl_gui::{Renderer as _, SourceMutation, Theme, Tree, LOG_VIEW_CHARACTER_LIMIT};
     use hl_gui_gtk::Surface;
 
     const STORIES: &[&str] = &[
@@ -133,8 +133,10 @@ mod unix {
                 peer: ExtensionName::new("storybook").expect("valid extension name"),
                 granted: Grant::new([Capability::Interface]),
                 filesystem: hl_extension::FilesystemGrant::default(),
-                containers: hl_extension::ContainerGrant::default(), images: hl_extension::ImageGrant::default(),
-                networks: hl_extension::NetworkGrant::default(), volumes: hl_extension::VolumeGrant::default(),
+                containers: hl_extension::ContainerGrant::default(),
+                images: hl_extension::ImageGrant::default(),
+                networks: hl_extension::NetworkGrant::default(),
+                volumes: hl_extension::VolumeGrant::default(),
                 workspace_environment: hl_extension::WorkspaceEnvironmentGrant::default(),
                 limits: hl_extension::Limits::default(),
             })
@@ -1448,12 +1450,14 @@ mod unix {
                 .into_iter()
                 .filter(|frame| frame.has_css_class("hl-card"))
                 .collect::<Vec<_>>();
-            assert_eq!(cards.len(), 6, "Card workbench must render six bounded live specimens");
-            assert!(
-                cards
-                    .iter()
-                    .all(|card| card.accessible_role() != gtk::AccessibleRole::Generic)
+            assert_eq!(
+                cards.len(),
+                7,
+                "Card workbench must render seven bounded live specimens"
             );
+            assert!(cards
+                .iter()
+                .all(|card| card.accessible_role() != gtk::AccessibleRole::Generic));
             for card in &cards {
                 let header = card
                     .label_widget()
@@ -1510,6 +1514,21 @@ mod unix {
                         .any(|label| label.text() == "Inventory record")
                 })
                 .expect("fill-width inventory Card crossed the real extension socket");
+            let management = cards
+                .iter()
+                .find(|card| {
+                    descendants::<gtk::Label>(card.upcast_ref())
+                        .iter()
+                        .any(|label| label.text() == "extension-storybook")
+                })
+                .expect("Card action hierarchy specimen crossed the real extension socket");
+            for label in ["Review update", "Check for changes"] {
+                let action = find::<gtk::Button>(management.upcast_ref(), |button| {
+                    button_caption(button).as_deref() == Some(label)
+                });
+                assert_eq!(action.height(), 28, "{label} does not use the compact action tier");
+                assert!(action.is_focusable(), "{label} is not keyboard reachable");
+            }
             assert!(inventory.hexpands(), "inventory Card must retain native fill authority");
             assert!(!compact.hexpands(), "32ch Card must not inherit native fill authority");
             assert!(

@@ -103,6 +103,24 @@ export function CardWorkbench() {
         </Card>
       </DocumentationSection>
 
+      <DocumentationSection title="Action hierarchy">
+        <Text
+          label="Keep identity and state separate from actions. Put the immediate next step first, then use a quiet explicit verb for maintenance; never make developers decode an unlabeled glyph."
+          color="text-dim"
+          wrap
+        />
+        <Card variant="outline" width={{ chars: 36 }}>
+          <CardHeader label="extension-storybook" detail="Version 2.0.0 · Running" />
+          <CardContent>
+            <Text label="Update available · Version 2.1.0" color="text-dim" />
+          </CardContent>
+          <CardActions>
+            <Button label="Review update" size="small" tone="accent" />
+            <Button label="Check for changes" size="small" variant="ghost" />
+          </CardActions>
+        </Card>
+      </DocumentationSection>
+
       <DocumentationSection title="Wrapping">
         <Card variant="outline" width="fill">
           <CardHeader

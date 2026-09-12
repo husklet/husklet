@@ -40,19 +40,20 @@ test('Card owns a dedicated single-component document with canonical anatomy', (
   assert.equal(componentPages.Card, CardWorkbench);
   const frame = host().render(h(CardWorkbench));
   const headings = creations(frame, 'Heading').map((id) => props(frame, id).Label?.Text);
-  assert.deepEqual(headings.slice(0, 7), [
+  assert.deepEqual(headings.slice(0, 8), [
     'Card',
     'Overview',
     'Anatomy',
     'Variants',
     'Sizing',
     'Inventory layout',
+    'Action hierarchy',
     'Wrapping',
   ]);
   assert(headings.includes('API'));
 
   const cards = creations(frame, 'Card');
-  assert.equal(cards.length, 6);
+  assert.equal(cards.length, 7);
   const variants = cards.map((id) => props(frame, id).Variant?.Variant);
   assert(variants.includes('Outline'));
   assert(variants.includes('Filled'));
@@ -77,6 +78,8 @@ test('Card examples keep compact explicit actions and long copy inside the compo
   assert(buttonLabels.includes('More actions'));
   assert(buttonLabels.includes('Inspect'));
   assert(buttonLabels.includes('Remove'));
+  assert(buttonLabels.includes('Review update'));
+  assert(buttonLabels.includes('Check for changes'));
   assert(
     frame.patches.some(
       (patch) =>

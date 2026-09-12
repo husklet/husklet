@@ -16,10 +16,10 @@ mod unix {
         NetworkInventory, NetworkKind, NetworkSummary,
     };
     use hl_extension::{
-        Capability, ChannelId, ExtensionName, ExtensionPreferences, ExtensionSummary, FilesystemGrant,
-        FilesystemSelector, Frame, Grant, Hello, ImageGrant, ImageSelector, PROTOCOL, PaneProvider, PreferenceValue,
+        codec, Capability, ChannelId, ExtensionName, ExtensionPreferences, ExtensionSummary, FilesystemGrant,
+        FilesystemSelector, Frame, Grant, Hello, ImageGrant, ImageSelector, PaneProvider, PreferenceValue,
         RelativePath, Reply, Request, Snapshot, VolumeGrant, Welcome, Wire, WorkspaceConfiguration,
-        WorkspaceEnvironmentGrant, WorkspaceEnvironmentSelector, WorkspaceInfo, WorkspaceTerminal, codec,
+        WorkspaceEnvironmentGrant, WorkspaceEnvironmentSelector, WorkspaceInfo, WorkspaceTerminal, PROTOCOL,
     };
     use hl_gui::{Renderer as _, SourceMutation, Theme, Tree};
     use hl_gui_gtk::Surface;
@@ -143,8 +143,10 @@ mod unix {
                     Capability::TerminalRead,
                 ]),
                 filesystem: hl_extension::FilesystemGrant::default(),
-                containers: hl_extension::ContainerGrant::default(), images: hl_extension::ImageGrant::default(),
-                networks: hl_extension::NetworkGrant::default(), volumes: hl_extension::VolumeGrant::default(),
+                containers: hl_extension::ContainerGrant::default(),
+                images: hl_extension::ImageGrant::default(),
+                networks: hl_extension::NetworkGrant::default(),
+                volumes: hl_extension::VolumeGrant::default(),
                 workspace_environment: hl_extension::WorkspaceEnvironmentGrant::default(),
                 limits: hl_extension::Limits::default(),
             })
@@ -979,6 +981,56 @@ mod unix {
             );
             let cards = widgets_with_class(&root, "hl-card");
             assert_installed_density(&root, &cards, 1_200, "wide-after-narrow");
+        }
+        if fixture == "populated" && name == "extensions" && !catalogue_empty {
+            let search = find_search_with_placeholder(&root, "Search installed");
+            search.set_text("storybook");
+            settle_toolkit();
+            let change = send_report(&surface, &mut wire, 97, |event| {
+                matches!(event, hl_gui::Event::Change { .. })
+            });
+            let hl_gui::Event::Change { value, .. } = change else {
+                unreachable!()
+            };
+            assert_eq!(value, hl_gui::PropValue::Text("storybook".into()));
+            apply_until(&mut wire, &mut tree, &mut surface, "Check for changes", |request| {
+                panic!("unexpected installed image-check render request: {request:?}")
+            });
+            let filtered_root = surface.widget().clone().upcast::<gtk::Widget>();
+            for (width_name, width) in [("wide", 1_200), ("narrow", 600)] {
+                window.set_default_size(width, 800);
+                window.set_size_request(width, 800);
+                settle_toolkit();
+                filtered_root.measure(gtk::Orientation::Horizontal, -1);
+                filtered_root.measure(gtk::Orientation::Vertical, width);
+                filtered_root.allocate(width, 1_600, -1, None);
+                window.queue_draw();
+                settle_frame();
+                let check = find_button(&filtered_root, "Check for changes");
+                let card = ancestor_with_class(check.upcast_ref(), "hl-card")
+                    .expect("image check action belongs to the installed extension card");
+                let state = find_mapped_labelled(&card, "Running");
+                let check_bounds = check
+                    .compute_bounds(&card)
+                    .expect("image check action belongs to its card");
+                let state_bounds = state
+                    .compute_bounds(&card)
+                    .expect("installed state belongs to its card");
+                assert_eq!(check.accessible_role(), gtk::AccessibleRole::Button);
+                assert!(check.has_css_class("size-small"));
+                assert_eq!(check.height(), 28, "{width_name} image check uses the compact tier");
+                assert!(check.is_focusable(), "{width_name} image check is keyboard reachable");
+                assert!(
+                    check_bounds.y() >= state_bounds.y() + state_bounds.height(),
+                    "{width_name} image check was crowded into the identity/state row: state={state_bounds:?}, action={check_bounds:?}"
+                );
+                assert!(
+                    check_bounds.x() >= 0.0 && check_bounds.x() + check_bounds.width() <= card.width() as f32,
+                    "{width_name} image check escaped its card: card={} action={check_bounds:?}",
+                    card.width()
+                );
+                capture(&window, &format!("installed-image-check-{width_name}"), width, 800);
+            }
         }
         if fixture == "populated" && name == "extensions" && !catalogue_empty {
             find_toggle(&root, "Discover").set_active(true);
@@ -1826,11 +1878,7 @@ mod unix {
             .compute_bounds(&progress_root)
             .expect("progress toolbar belongs to the progress surface");
         assert!(
-            (cancel_bounds.x() + cancel_bounds.width()
-                - toolbar_bounds.x()
-                - toolbar_bounds.width())
-                .abs()
-                <= 1.0,
+            (cancel_bounds.x() + cancel_bounds.width() - toolbar_bounds.x() - toolbar_bounds.width()).abs() <= 1.0,
             "cancel action is stranded beside progress text: cancel={cancel_bounds:?}, toolbar={toolbar_bounds:?}"
         );
 
