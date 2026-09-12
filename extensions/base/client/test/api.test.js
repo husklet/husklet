@@ -398,7 +398,7 @@ test('an already-aborted typed facade emits no Unix request frame', async () => 
     new Promise((resolve) => setTimeout(() => resolve(false), 20)),
   ]);
   assert.equal(wrote, false);
-  await stage.session.close();
+  stage.session.close();
   stage.host.destroy();
   stage.server.close();
 });
@@ -436,7 +436,7 @@ test('aborting a bound watcher releases its shared subscription without closing 
     }),
   );
   assert.equal((await info).name, 'dev');
-  await stage.session.close();
+  stage.session.close();
   stage.host.destroy();
   stage.server.close();
 });
@@ -3468,6 +3468,10 @@ test('deep container methods and subscriptions use exact protocol request shapes
         pid: 2,
         command: ['true'],
         user: 'root',
+        created_at_ms: 1,
+        started_at_ms: 2,
+        finished_at_ms: null,
+        result: null,
       },
     },
     { reply: 'executions', with: { executions: [], truncated: false } },
@@ -3502,6 +3506,10 @@ test('deep container methods and subscriptions use exact protocol request shapes
         pid: 2,
         command: ['true'],
         user: 'root',
+        created_at_ms: 1,
+        started_at_ms: 2,
+        finished_at_ms: 3,
+        result: { kind: 'code', value: 0 },
       },
     },
     ...Array(10).fill({ reply: 'done' }),
@@ -3536,7 +3544,7 @@ test('deep container methods and subscriptions use exact protocol request shapes
   );
   assert.equal(results[5].next, 42);
   assert.equal(results[17], 'e2');
-  stage.session.close();
+  await stage.session.close();
   stage.host.destroy();
   stage.server.close();
 });
@@ -5097,7 +5105,7 @@ test('semantic action refusal still releases its armed pane subscription', async
   assert.equal((await next()).payload.call, 'event_unsubscribe');
   stage.host.write(encode({ channel: 2, kind: KIND.response, payload: { reply: 'done' } }));
   await assert.rejects(pending, /pane changed/);
-  stage.session.close();
+  await stage.session.close();
   stage.host.destroy();
   stage.server.close();
 });
