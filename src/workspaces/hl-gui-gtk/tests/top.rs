@@ -375,6 +375,16 @@ mod unix {
                     "{width_name} container card collapsed to {}px instead of using the page width",
                     card.width()
                 );
+                for label in ["Details", "Start"] {
+                    let action = find_button(&card, label);
+                    assert!(action.has_css_class("size-small"));
+                    assert!(
+                        action.height() <= 32,
+                        "{width_name} container action {label:?} exceeded 32px: {}",
+                        action.height()
+                    );
+                    assert!(action.grab_focus(), "{label} remains keyboard reachable");
+                }
             }
             if fixture == "populated" && name == "settings" {
                 let label = find_label(&root, "Execution lifetime");

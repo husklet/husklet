@@ -19,6 +19,7 @@ mod unix {
         "Autocomplete",
         "Button",
         "Card",
+        "CardActions",
         "IconButton",
         "Entry",
         "Search",
@@ -1570,6 +1571,46 @@ mod unix {
             );
             assert!(long.width() <= 552, "long Card copy escaped 16px narrow insets");
             capture_story(&realized_window, "Card narrow");
+            let (status, stderr) = child.stop();
+            assert!(stderr.is_empty(), "{story} wrote warnings/errors: {stderr}");
+            assert!(
+                !status.success(),
+                "the long-running entrypoint should only end when killed"
+            );
+            std::fs::remove_file(socket).expect("test socket is removed");
+            return;
+        }
+        if story == "CardActions" {
+            let rows = descendants::<gtk::Box>(&root)
+                .into_iter()
+                .filter(|row| row.has_css_class("hl-cardactions"))
+                .collect::<Vec<_>>();
+            assert_eq!(rows.len(), 6, "every CardActions specimen crossed the real socket");
+            assert!(rows.iter().all(|row| row.valign() == gtk::Align::Center));
+            let buttons = descendants::<gtk::Button>(&root)
+                .into_iter()
+                .filter(|button| button.has_css_class("size-small"))
+                .collect::<Vec<_>>();
+            assert!(buttons.len() >= 10, "CardActions omitted its compact controls");
+            assert!(
+                buttons.iter().all(|button| button.height() == 28),
+                "CardActions stretched a compact control: {:?}",
+                buttons.iter().map(|button| button.height()).collect::<Vec<_>>()
+            );
+            for button in &buttons {
+                assert!(button.is_focusable(), "CardActions contains an unreachable command");
+            }
+            assert_contained(&root, "CardActions wide");
+            capture_story(&realized_window, "CardActions wide");
+            realized_window.set_size_request(600, 800);
+            realized_window.set_default_size(600, 800);
+            settle_window_width(&realized_window, 600);
+            assert_contained(&root, "CardActions narrow");
+            assert!(
+                buttons.iter().all(|button| button.height() == 28),
+                "CardActions stretched a compact control after resize"
+            );
+            capture_story(&realized_window, "CardActions narrow");
             let (status, stderr) = child.stop();
             assert!(stderr.is_empty(), "{story} wrote warnings/errors: {stderr}");
             assert!(

@@ -8,6 +8,7 @@ import {
 import { ButtonWorkbench } from './button.js';
 import { AutocompleteWorkbench } from './autocomplete.js';
 import { CardWorkbench } from './card.js';
+import { CardActionsWorkbench } from './card-actions.js';
 import { CheckboxWorkbench } from './checkbox.js';
 import { CommandPaletteStory } from './command-palette.js';
 import { ConfirmationStory } from './confirmation.js';
@@ -39,6 +40,7 @@ type NativeWorkbenchName =
   | 'Autocomplete'
   | 'Button'
   | 'Card'
+  | 'CardActions'
   | 'Checkbox'
   | 'Entry'
   | 'Expander'
@@ -97,6 +99,7 @@ const nativeWorkbenchPages = {
   Autocomplete: AutocompleteWorkbench,
   Button: ButtonWorkbench,
   Card: CardWorkbench,
+  CardActions: CardActionsWorkbench,
   Checkbox: CheckboxWorkbench,
   Entry: EntryWorkbench,
   Expander: ExpanderWorkbench,

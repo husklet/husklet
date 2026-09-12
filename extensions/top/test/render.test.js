@@ -6543,12 +6543,17 @@ test('container controls follow the real daemon lifecycle states', () => {
   assert.equal(labelled(stage, 'Remove'), undefined, 'running cards omit an invalid remove action');
   assert.equal(taggedProperty(stage, 'More actions', 'Expander', 'Expanded')?.Flag, false);
   assert.equal(taggedProperty(stage, 'Details', 'Button', 'Variant')?.Variant, 'Filled');
+  assert.equal(taggedProperty(stage, 'Details', 'Button', 'Size')?.ControlSize, 'Small');
+  assert.deepEqual(ancestorProperty(stage, 'Details', 'CardActions', 'Align'), {
+    Align: 'Center',
+  });
 
   stage = host();
   stage.render(h(Containers, { api, resource: inventory('created') }));
   assert.equal(isEnabled(stage, 'Remove'), true, 'created containers are removable');
   assert.equal(isEnabled(stage, 'Start'), true, 'created containers are startable');
   assert.equal(taggedProperty(stage, 'Start', 'Button', 'Variant')?.Variant, 'Outline');
+  assert.equal(taggedProperty(stage, 'Start', 'Button', 'Size')?.ControlSize, 'Small');
 
   stage = host();
   stage.render(h(Containers, { api, resource: inventory('exited') }));

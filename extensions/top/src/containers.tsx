@@ -222,8 +222,8 @@ export function Containers({
                   <Text label={`ID ${shortId(item.id)}`} color="text-dim" />
                 </Row>
               </CardContent>
-              <CardActions gap={1} align="start" justify="start" width="fill">
-                <Row gap={1} wrap justify="start">
+              <CardActions gap={1} align="center" justify="start" width="fill">
+                <Row gap={1} wrap align="center" justify="start">
                   {selected === item.id &&
                   inspection.state === 'error' &&
                   isAuthorityDenial(inspection.error) ? null : (
@@ -239,6 +239,7 @@ export function Containers({
                       }
                       variant="filled"
                       tone="accent"
+                      size="small"
                       enabled={busy === ''}
                       onInvoke={() => toggleDetails(item)}
                     />
@@ -247,6 +248,7 @@ export function Containers({
                     <Button
                       label="Start"
                       variant="outline"
+                      size="small"
                       enabled={busy === ''}
                       onInvoke={() => act('start', item.id, undefined, item.generation)}
                     />
