@@ -6542,6 +6542,9 @@ test('container controls follow the real daemon lifecycle states', () => {
   assert.equal(taggedProperty(stage, 'Refresh', 'IconButton', 'Size')?.ControlSize, 'Small');
   assert.equal(labelled(stage, 'Remove'), undefined, 'running cards omit an invalid remove action');
   assert.equal(taggedProperty(stage, 'More actions', 'Expander', 'Expanded')?.Flag, false);
+  assert.equal(taggedProperty(stage, 'More actions', 'Expander', 'Variant')?.Variant, 'Outline');
+  assert.equal(taggedProperty(stage, 'More actions', 'Expander', 'Width')?.Length, 'Content');
+  assert.equal(taggedProperty(stage, 'More actions', 'Expander', 'Justify')?.Align, 'Center');
   assert.equal(taggedProperty(stage, 'Details', 'Button', 'Variant')?.Variant, 'Filled');
   assert.equal(taggedProperty(stage, 'Details', 'Button', 'Size')?.ControlSize, 'Small');
   assert.deepEqual(ancestorProperty(stage, 'Details', 'CardActions', 'Align'), {

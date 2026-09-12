@@ -29,11 +29,12 @@ test('Expander owns one precise component document with meaningful disclosure st
   );
 
   assert.equal(componentPages.Expander, ExpanderWorkbench);
-  assert.deepEqual(headings.slice(0, 6), [
+  assert.deepEqual(headings.slice(0, 7), [
     'Expander',
     'Overview',
     'API',
     'States',
+    'Action disclosure',
     'Behavior',
     'Accessibility',
   ]);
@@ -53,6 +54,16 @@ test('Expander owns one precise component document with meaningful disclosure st
     ),
   );
   assert(examples.some((value) => value.Label?.Text?.startsWith('Connection diagnostics')));
+  assert(
+    examples.some(
+      (value) =>
+        value.Label?.Text === 'More actions' &&
+        value.Variant?.Variant === 'Outline' &&
+        value.Width?.Length === 'Content' &&
+        value.Align?.Align === 'Start',
+    ),
+    'the compact action disclosure is a visibly bounded control',
+  );
   assert(
     created(frame.patches, 'TableRow').length > 0,
     'the generated Expander API remains visible',

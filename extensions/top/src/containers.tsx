@@ -302,7 +302,15 @@ function ContainerActions({
   const running = item.state === 'running';
   const active = running || item.state === 'paused';
   return (
-    <Expander label="More actions" expanded={false} width="fill" align="start">
+    <Expander
+      label="More actions"
+      expanded={false}
+      variant="outline"
+      width="content"
+      align="start"
+      justify="center"
+      tooltip="Rename, restart, pause, stop, or remove this container"
+    >
       <Column gap={1} align="start" width="fill">
         <ContainerRename api={api} container={item} reload={reload} blocked={blocked} />
         <Row gap={1} wrap align="center">
@@ -310,6 +318,7 @@ function ContainerActions({
             <Button
               label="Restart"
               variant="ghost"
+              size="small"
               enabled={!blocked}
               onInvoke={() => act('restart', item.id, undefined, item.generation)}
             />
@@ -318,6 +327,7 @@ function ContainerActions({
             <Button
               label={item.state === 'paused' ? 'Resume' : 'Pause'}
               variant="ghost"
+              size="small"
               enabled={!blocked}
               onInvoke={() =>
                 act(
@@ -337,6 +347,7 @@ function ContainerActions({
               authorityKey={`container:${item.id}:stop`}
               question={`Stop ${item.name || shortId(item.id)} with immutable ID ${item.id}?`}
               enabled={!blocked}
+              size="small"
               onConfirm={() => act('stop', item.id, undefined, item.generation)}
             />
           ) : null}
@@ -348,6 +359,7 @@ function ContainerActions({
               authorityKey={`container:${item.id}:remove`}
               question={`Remove inactive container ${item.name || shortId(item.id)} with immutable ID ${item.id}?`}
               enabled={!blocked}
+              size="small"
               onConfirm={() => remove(item)}
             />
           ) : null}

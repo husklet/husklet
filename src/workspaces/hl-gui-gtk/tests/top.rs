@@ -389,6 +389,24 @@ mod unix {
                     );
                     assert!(action.grab_focus(), "{label} remains keyboard reachable");
                 }
+                let secondary = find_expander(&card, "More actions");
+                assert!(secondary.has_css_class("variant-outline"));
+                assert_eq!(
+                    secondary.height(),
+                    28,
+                    "{width_name} secondary disclosure must remain one compact control row"
+                );
+                assert!(
+                    secondary.width() < card.width() / 2,
+                    "{width_name} secondary disclosure consumed {}px of a {}px card",
+                    secondary.width(),
+                    card.width()
+                );
+                assert_eq!(
+                    secondary.tooltip_text().as_deref(),
+                    Some("Rename, restart, pause, stop, or remove this container")
+                );
+                assert!(secondary.grab_focus(), "More actions remains keyboard reachable");
             }
             if fixture == "populated" && name == "settings" {
                 let label = find_label(&root, "Execution lifetime");
@@ -655,6 +673,22 @@ mod unix {
                     find_button(&card, "Load output").grab_focus(),
                     "execution output action is keyboard reachable"
                 );
+                let secondary = find_expander(&card, "More actions");
+                assert!(secondary.has_css_class("variant-outline"));
+                assert_eq!(
+                    secondary.height(),
+                    28,
+                    "{width_name} execution disclosure must remain one compact control row"
+                );
+                assert!(
+                    secondary.width() < card.width(),
+                    "{width_name} execution disclosure consumed the complete card width"
+                );
+                assert_eq!(
+                    secondary.tooltip_text().as_deref(),
+                    Some("Terminate this process or remove its completed execution record")
+                );
+                assert!(secondary.grab_focus(), "execution disclosure is keyboard reachable");
             }
             if fixture != "error" && name == "processes" && width == 1_200 {
                 settle_toolkit();

@@ -314,7 +314,7 @@ catalogue! {
     AccordionSummary: children, props[Label, Icon, Gap], triggers[],
     AccordionDetails: children, props[Gap], triggers[],
     AccordionActions: children, props[Gap], triggers[],
-    Expander: children, props[Label, Expanded], triggers[Expand],
+    Expander: children, props[Label, Expanded, Variant], triggers[Expand],
 
     // Dialogs and transient surfaces.
     Dialog: children | detached, props[Gap], triggers[],

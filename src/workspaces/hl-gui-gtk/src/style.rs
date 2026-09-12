@@ -289,6 +289,9 @@ fn components(css: &mut String, theme: &Theme) {
          .hl-togglebutton:checked, .hl-togglebutton:checked:hover {{ background: {raised}; color: {text}; border-color: {accent}; box-shadow: inset 0 -3px 0 {accent}; font-weight: 700; }}\n\
          .hl-togglebutton:checked:focus-visible {{ outline: 2px solid {accent}; outline-offset: 2px; box-shadow: inset 0 -3px 0 {accent}; }}\n\
          .hl-expander > title, .hl-accordion > title {{ min-height: 28px; padding: 2px 4px; border: 1px solid transparent; border-radius: {radius}px; }}\n\
+         .hl-expander.variant-outline {{ min-height: 28px; background: transparent; color: inherit; border: none; box-shadow: none; }}\n\
+         .hl-expander.variant-outline > title {{ background: transparent; color: {text}; border-color: {line}; padding: 2px 8px; }}\n\
+         .hl-expander.variant-outline > title:hover {{ background: {raised}; border-color: {accent}; }}\n\
          .hl-expander > title > arrow, .hl-accordion > title > arrow {{ margin-right: 6px; -gtk-icon-size: 12px; }}\n\
          .hl-expander > title:hover, .hl-accordion > title:hover {{ background: {raised}; border-color: {line}; }}\n\
          .hl-expander:focus > title, .hl-expander:focus-visible > title, .hl-accordion:focus > title, .hl-accordion:focus-visible > title {{ background: {raised}; border-color: {accent}; box-shadow: inset 0 0 0 1px {accent}; }}\n\
@@ -436,6 +439,12 @@ mod tests {
         assert!(css.contains(".hl-card > box { padding: 10px"));
         assert!(css.contains(
             ".hl-expander > title, .hl-accordion > title { min-height: 28px; padding: 2px 4px; border: 1px solid transparent; border-radius: 8px;"
+        ));
+        assert!(css.contains(
+            ".hl-expander.variant-outline { min-height: 28px; background: transparent; color: inherit; border: none; box-shadow: none; }"
+        ));
+        assert!(css.contains(
+            ".hl-expander.variant-outline > title { background: transparent; color: #f0f2f5; border-color: #323843; padding: 2px 8px; }"
         ));
         assert!(css.contains(
             ".hl-expander > title > arrow, .hl-accordion > title > arrow { margin-right: 6px; -gtk-icon-size: 12px;"

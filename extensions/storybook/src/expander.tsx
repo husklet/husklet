@@ -75,6 +75,24 @@ export function ExpanderWorkbench() {
         </SpecimenGrid>
       </DocumentationSection>
 
+      <DocumentationSection title="Action disclosure">
+        <Text
+          label="Use the outline variant when a compact disclosure sits beside immediate actions. Its bounded 28px summary reads as a control without turning the disclosed content into a bordered panel."
+          color="text-dim"
+          wrap
+        />
+        <Expander
+          label="More actions"
+          expanded={false}
+          variant="outline"
+          width="content"
+          align="start"
+          tooltip="Show secondary actions"
+        >
+          <Text label="Secondary actions appear here." />
+        </Expander>
+      </DocumentationSection>
+
       <DocumentationSection title="Behavior">
         <Text
           label="Keep the summary short and stable as the disclosure changes. Enter or Space toggles the focused summary; onExpand reports the resulting state once so a controlled Expander can render it back."

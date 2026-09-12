@@ -1051,6 +1051,18 @@ mod unix {
                 bounded.width(),
                 root.width()
             );
+            let action = find::<gtk::Expander>(&root, |expander| {
+                expander.label().as_deref() == Some("More actions")
+            });
+            assert!(action.has_css_class("variant-outline"));
+            assert_eq!(action.height(), 28, "action disclosure is one compact control row");
+            assert!(
+                action.width() < root.width() / 2,
+                "action disclosure consumed {}px of a {}px page",
+                action.width(),
+                root.width()
+            );
+            assert!(action.grab_focus(), "action disclosure remains keyboard reachable");
         }
         if story == "Checkbox" {
             let property = find::<gtk::Label>(&root, |label| label.text() == "Property");

@@ -309,7 +309,13 @@ export function Executions({
               ) : null}
             </CardContent>
             <CardContent>
-              <Expander label="More actions" width="fill" align="start">
+              <Expander
+                label="More actions"
+                variant="outline"
+                width="content"
+                align="start"
+                tooltip="Terminate this process or remove its completed execution record"
+              >
                 <Column gap={1}>
                   <Text
                     label={
@@ -328,6 +334,7 @@ export function Executions({
                       pendingLabel="Confirm SIGTERM"
                       question={`Send SIGTERM to execution ${item.id}?`}
                       enabled={!busy && item.running}
+                      size="small"
                       onConfirm={() => terminate(item)}
                     />
                     <ConfirmAction
@@ -337,6 +344,7 @@ export function Executions({
                       pendingLabel="Confirm removal"
                       question={`Remove execution record ${shortId(item.id)}?`}
                       enabled={!busy && !item.running}
+                      size="small"
                       onConfirm={() => remove(item)}
                     />
                   </Row>
