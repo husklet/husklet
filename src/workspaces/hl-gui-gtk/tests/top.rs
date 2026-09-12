@@ -28,6 +28,7 @@ mod unix {
         ("workspace", "workspace"),
         ("settings", "settings"),
         ("extensions", "extensions"),
+        ("containers", "containers"),
         ("processes", "processes"),
         ("executions", "executions"),
         ("images", "images"),
@@ -231,6 +232,7 @@ mod unix {
             "workspace" => "Workspace",
             "settings" => "Workspace settings",
             "extensions" => "Extensions",
+            "containers" => "Containers",
             "processes" => "Processes",
             "executions" => "Executions",
             "images" => "Images",
@@ -350,6 +352,17 @@ mod unix {
                     .and_then(|child| child.downcast::<gtk::Image>().ok())
                     .expect("process refresh renders its native icon");
                 assert_eq!(icon.icon_name().as_deref(), Some("view-refresh-symbolic"));
+            }
+            if fixture == "populated" && name == "containers" {
+                let refresh = find_tooltip_button(&root, "Refresh containers");
+                assert_eq!(
+                    (refresh.width(), refresh.height()),
+                    (28, 28),
+                    "{width_name} container refresh must remain a compact toolbar icon action"
+                );
+                assert!(refresh.has_css_class("hl-iconbutton"));
+                assert!(refresh.has_css_class("size-small"));
+                assert!(refresh.grab_focus(), "container refresh is keyboard reachable");
             }
             if fixture == "populated" && name == "settings" {
                 let label = find_label(&root, "Execution lifetime");

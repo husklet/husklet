@@ -6442,6 +6442,13 @@ test('container controls follow the real daemon lifecycle states', () => {
     reload: async () => {},
   });
   stage.render(h(Containers, { api, resource: inventory('running') }));
+  assert.deepEqual(taggedProperty(stage, 'Refresh', 'IconButton', 'Icon'), {
+    Text: 'view-refresh-symbolic',
+  });
+  assert.deepEqual(taggedProperty(stage, 'Refresh', 'IconButton', 'Tooltip'), {
+    Text: 'Refresh containers',
+  });
+  assert.equal(taggedProperty(stage, 'Refresh', 'IconButton', 'Size')?.ControlSize, 'Small');
   assert.equal(labelled(stage, 'Remove'), undefined, 'running cards omit an invalid remove action');
   assert.equal(taggedProperty(stage, 'More actions', 'Expander', 'Expanded')?.Flag, false);
   assert.equal(taggedProperty(stage, 'Details', 'Button', 'Variant')?.Variant, 'Filled');

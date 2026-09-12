@@ -58,4 +58,15 @@ test('IconButton owns a focused document with square semantic sizes and accessib
   assert(headings.indexOf('States') < headings.indexOf('API'));
   assert(cellLabels.includes('Focus'));
   assert(cellLabels.includes('Pressed'));
+  assert(cellLabels.includes('Toolbar action'));
+  assert(cellLabels.includes('Refresh containers'));
+  assert(
+    props.some(
+      (value) =>
+        value.Label?.Text === 'Refresh containers' &&
+        value.Size?.ControlSize === 'Small' &&
+        value.Variant?.Variant === 'Ghost',
+    ),
+    'the page-heading specimen uses a compact secondary icon action',
+  );
 });

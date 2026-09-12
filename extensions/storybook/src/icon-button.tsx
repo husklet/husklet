@@ -61,6 +61,23 @@ export function IconButtonWorkbench() {
           align="start"
         />
       </Block>
+      <Block title="Toolbar action">
+        <Row gap={2} align="center">
+          <Heading label="Containers" scale="title" />
+          <IconButton
+            icon="view-refresh-symbolic"
+            label="Refresh containers"
+            tooltip="Refresh containers"
+            size="small"
+            variant="ghost"
+          />
+        </Row>
+        <Text
+          label="Use a compact ghost icon for a familiar secondary action beside a page heading."
+          color="text-dim"
+          wrap
+        />
+      </Block>
       <Row gap={3} wrap width="fill" align="start">
         <Block title="Sizes" width={{ chars: 42 }}>
           <Row gap={2} wrap>
