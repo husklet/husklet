@@ -2895,7 +2895,28 @@ for (const updating of [false, true]) {
       ).filter((tag) => tag === 'Scroll').length === 0,
       'the review decision remains outside the scrolling permission region',
     );
-    invoke(stage, updating ? 'Update with selected access' : 'Install with selected access');
+    const commitLabel = updating ? 'Update with selected access' : 'Install with selected access';
+    assert.ok(
+      sharedAncestor(stage, [commitLabel, 'Cancel review'], 'Row'),
+      'primary and secondary decisions remain one action group',
+    );
+    assert.equal(
+      ancestorTags(stage, commitLabel).filter((tag) => tag === 'Row').length,
+      2,
+      'decision action is nested inside the responsive footer row',
+    );
+    assert.equal(
+      ancestorTags(stage, 'Review decision · 8/13 selected').filter((tag) => tag === 'Row').length,
+      1,
+      'status stays outside the compact action group',
+    );
+    assert.deepEqual(taggedProperty(stage, commitLabel, 'Button', 'Size'), {
+      ControlSize: 'Small',
+    });
+    assert.deepEqual(taggedProperty(stage, 'Cancel review', 'Button', 'Size'), {
+      ControlSize: 'Small',
+    });
+    invoke(stage, commitLabel);
     await settled();
     await settled();
 

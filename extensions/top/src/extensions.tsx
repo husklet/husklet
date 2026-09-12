@@ -2419,7 +2419,14 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
       {acquisition?.candidate ? (
         <Column gap={0}>
           <Separator orientation="horizontal" />
-          <Row gap={1} pad={{ top: 1, end: 2, bottom: 1, start: 2 }} wrap>
+          <Row
+            gap={1}
+            pad={{ top: 1, end: 2, bottom: 1, start: 2 }}
+            width="fill"
+            align="center"
+            justify="stretch"
+            wrap
+          >
             <Text
               label={
                 requestedPermissionCount > 0 && grantedPermissionCount === 0
@@ -2427,33 +2434,45 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                   : `Review decision · ${grantedPermissionCount}/${requestedPermissionCount} selected`
               }
               color="text-dim"
+              wrap={false}
+              width={{ minimum: { chars: 40 }, maximum: { chars: 50 } }}
             />
-            <Button
-              label={
-                busy === 'update'
-                  ? 'Updating…'
-                  : busy === 'install'
-                    ? 'Installing…'
-                    : acquisition.candidate.installed_image_digest
-                      ? 'Update with selected access'
-                      : 'Install with selected access'
-              }
-              enabled={
-                !busy &&
-                acquisition.state === 'ready' &&
-                missingRequiredCapabilities.length === 0 &&
-                !catalogueMismatch
-              }
-              variant="filled"
-              tone="accent"
-              onInvoke={publish}
-            />
-            <Button
-              label="Cancel review"
-              variant="ghost"
-              enabled={!busy}
-              onInvoke={dismissReview}
-            />
+            <Row
+              gap={1}
+              align="center"
+              justify="end"
+              width={{ minimum: { chars: 80 }, maximum: 'fill' }}
+            >
+              <Spacer />
+              <Button
+                label={
+                  busy === 'update'
+                    ? 'Updating…'
+                    : busy === 'install'
+                      ? 'Installing…'
+                      : acquisition.candidate.installed_image_digest
+                        ? 'Update with selected access'
+                        : 'Install with selected access'
+                }
+                size="small"
+                enabled={
+                  !busy &&
+                  acquisition.state === 'ready' &&
+                  missingRequiredCapabilities.length === 0 &&
+                  !catalogueMismatch
+                }
+                variant="filled"
+                tone="accent"
+                onInvoke={publish}
+              />
+              <Button
+                label="Cancel review"
+                size="small"
+                variant="ghost"
+                enabled={!busy}
+                onInvoke={dismissReview}
+              />
+            </Row>
           </Row>
         </Column>
       ) : null}

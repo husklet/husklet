@@ -3139,6 +3139,64 @@ mod unix {
                 let required = find_button(root, "Select required access");
                 assert_standard_action(&required, width_name, "required-access shortcut", 28);
             }
+            if matches!(state, "update-required" | "update-review") {
+                let update = find_button(root, "Update with selected access");
+                let cancel = find_button(root, "Cancel review");
+                assert_standard_action(&update, width_name, "update decision", 28);
+                assert_standard_action(&cancel, width_name, "cancel decision", 28);
+                let update_bounds = update
+                    .compute_bounds(root)
+                    .expect("update decision belongs to review footer");
+                let cancel_bounds = cancel
+                    .compute_bounds(root)
+                    .expect("cancel decision belongs to review footer");
+                assert!(
+                    (update_bounds.y() - cancel_bounds.y()).abs() <= 2.0,
+                    "{width_name} detached the secondary decision: update={update_bounds:?}, cancel={cancel_bounds:?}"
+                );
+                assert!(
+                    update_bounds.x() + update_bounds.width() <= cancel_bounds.x(),
+                    "{width_name} decision actions overlap: update={update_bounds:?}, cancel={cancel_bounds:?}"
+                );
+                assert!(
+                    root.width() as f32 - cancel_bounds.x() - cancel_bounds.width()
+                        <= if width == 600 { 64.0 } else { 128.0 },
+                    "{width_name} decision group is not right aligned: {cancel_bounds:?}"
+                );
+                let status = find_label(
+                    root,
+                    if state == "update-required" {
+                        "No access selected · 10 requested"
+                    } else {
+                        "Review decision · 9/10 selected"
+                    },
+                );
+                let status_bounds = status
+                    .compute_bounds(root)
+                    .expect("decision status belongs to review footer");
+                if width == 600 {
+                    assert!(
+                        status_bounds.y() + status_bounds.height() <= update_bounds.y(),
+                        "narrow decision status does not own its first row: status={status_bounds:?}, actions={update_bounds:?}"
+                    );
+                    assert!(
+                        update_bounds.y() - status_bounds.y() <= 36.0,
+                        "narrow decision footer grew beyond two compact rows: status={status_bounds:?}, actions={update_bounds:?}"
+                    );
+                } else {
+                    assert!(
+                        (status_bounds.y() - update_bounds.y()).abs() <= 8.0,
+                        "wide decision bar no longer shares one row: status={status_bounds:?}, actions={update_bounds:?}"
+                    );
+                }
+            }
+            if state == "update-success" {
+                assert!(
+                    !has_label(root, "Cancel review")
+                        && !has_label(root, "Update with selected access"),
+                    "completed update retained stale review decisions"
+                );
+            }
             if state == "update-review" {
                 let update = find_button(root, "Update with selected access");
                 assert!(
