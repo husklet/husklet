@@ -11,7 +11,8 @@ mod unix {
 
     use gtk::prelude::*;
     use hl_extension::port::{
-        ExecutionSummary, ExtensionAcquisitionJob, ExtensionAcquisitionProgress, ExtensionAcquisitionStatus,
+        ExecutionResult, ExecutionSummary, ExtensionAcquisitionJob, ExtensionAcquisitionProgress,
+        ExtensionAcquisitionStatus,
         ExtensionCandidate, ExtensionCatalogue, ExtensionCatalogueEntry, ImageDetails, NetworkEndpointInventory,
         NetworkInventory, NetworkKind, NetworkSummary,
     };
@@ -909,7 +910,7 @@ mod unix {
                     card.height()
                 );
                 if width == 1_200 {
-                    let status = find_label(&card, "exited 0")
+                    let status = find_label(&card, "exit 0")
                         .compute_bounds(&card)
                         .expect("execution status belongs to its card");
                     let details = find_button(&card, "Details")
@@ -1901,6 +1902,10 @@ mod unix {
                         container_id: "a".repeat(64),
                         running: false,
                         exit_code: 0,
+                        result: Some(ExecutionResult::Code(0)),
+                        created_at_ms: Some(1),
+                        started_at_ms: Some(2),
+                        finished_at_ms: Some(3),
                         pid: 412,
                         command: vec!["/bin/sh".into(), "-lc".into(), "npm test".into()],
                         user: "developer".into(),
