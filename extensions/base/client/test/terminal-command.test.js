@@ -4,7 +4,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { mkdtemp, rm } from 'node:fs/promises';
 import test from 'node:test';
-import { connect, ExtensionError, TerminalCommandOperationError, workspace } from '../dist/index.js';
+import {
+  connect,
+  ExtensionError,
+  TerminalCommandOperationError,
+  workspace,
+} from '../dist/index.js';
 import { CONTROL, KIND, Reader, encode } from '../dist/wire.js';
 
 const id = 'e'.repeat(32);
@@ -64,7 +69,14 @@ test('supervised terminal command is authoritative over fragmented real Unix fra
                 entries:
                   output === 1
                     ? [{ sequence: 1, timestamp_ms: 1, stream: 'stdout', bytes: [114, 101] }]
-                    : [{ sequence: 2, timestamp_ms: 2, stream: 'stdout', bytes: [97, 100, 121, 10] }],
+                    : [
+                        {
+                          sequence: 2,
+                          timestamp_ms: 2,
+                          stream: 'stdout',
+                          bytes: [97, 100, 121, 10],
+                        },
+                      ],
                 next: output,
                 more: false,
                 eof: output === 2,
@@ -198,6 +210,72 @@ test('aborting idle command polling immediately cancels the exact supervised com
   }
 });
 
+test('oversized supervised output is rejected before PostgreSQL-style consumers receive it', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-terminal-output-bound-'));
+  const socketPath = path.join(directory, 'host.sock');
+  let request = 0;
+  const server = net.createServer((socket) => {
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.kind !== KIND.request) continue;
+        request += 1;
+        const response = encode({
+          channel: frame.channel,
+          kind: KIND.response,
+          payload: {
+            reply: 'terminal_command_output',
+            with: {
+              id,
+              owner,
+              ...pane,
+              output: {
+                entries: [
+                  {
+                    sequence: 1,
+                    timestamp_ms: 1,
+                    stream: 'stdout',
+                    bytes: new Array(256 * 1024 + (request === 1 ? 0 : 1)).fill(120),
+                  },
+                ],
+                next: 1,
+                more: false,
+                eof: false,
+                gap: false,
+              },
+            },
+          },
+        });
+        socket.write(response.subarray(0, 13));
+        setImmediate(() => socket.write(response.subarray(13)));
+      }
+    });
+    fragmented(socket, {
+      channel: CONTROL,
+      kind: KIND.open,
+      payload: {
+        protocol: 1,
+        peer: 'terminal-output-bound',
+        granted: ['terminals:output'],
+      },
+    });
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    const boundary = await workspace(session).terminal.commandOutput(running, { limit: 1 });
+    assert.equal(boundary.output.entries[0].bytes.length, 256 * 1024);
+    await assert.rejects(
+      workspace(session).terminal.commandOutput(running, { limit: 1 }),
+      /exceeding 262144 bytes/,
+    );
+    await session.close();
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('supervised command output survives reconnect and originating pane replacement', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-terminal-command-resume-'));
   const socketPath = path.join(directory, 'host.sock');
@@ -224,7 +302,12 @@ test('supervised command output survives reconnect and originating pane replacem
                   ...pane,
                   output: {
                     entries: [
-                      { sequence: 8, timestamp_ms: 8, stream: 'stdout', bytes: [100, 111, 110, 101, 10] },
+                      {
+                        sequence: 8,
+                        timestamp_ms: 8,
+                        stream: 'stdout',
+                        bytes: [100, 111, 110, 101, 10],
+                      },
                     ],
                     next: 8,
                     more: false,
@@ -445,7 +528,10 @@ test('large Git review output exposes an exact reconnect cursor after fragmented
     } catch (error) {
       failure = error;
     }
-    assert(failure instanceof TerminalCommandOperationError, `${failure?.constructor?.name}: ${failure}`);
+    assert(
+      failure instanceof TerminalCommandOperationError,
+      `${failure?.constructor?.name}: ${failure}`,
+    );
     assert.equal(failure.phase, 'output');
     assert.equal(failure.after, 1);
     assert.equal(failure.command.id, id);

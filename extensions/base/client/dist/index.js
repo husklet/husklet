@@ -154,6 +154,10 @@ function exactExecutionLineLimit(limit) {
     return limit;
 }
 function exactExecutionOutputPage(page, limit, executionId, after) {
+    const bytes = page.entries.reduce((total, entry) => total + entry.bytes.length, 0);
+    if (bytes > 256 * 1024) {
+        throw new RangeError('host returned an execution output page exceeding 262144 bytes');
+    }
     if (page.entries.length > limit) {
         throw new TypeError('host returned an execution output page that exceeded its requested entry limit');
     }

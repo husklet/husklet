@@ -1167,6 +1167,7 @@ export interface WorkspaceApi {
             stdout?: boolean;
             stderr?: boolean;
         }): Promise<ContainerOutput>;
+        /** One cursor-addressed page, bounded to 16 entries and 256 KiB before delivery. */
         executionOutput(id: string, options?: {
             after?: number;
             limit?: number;

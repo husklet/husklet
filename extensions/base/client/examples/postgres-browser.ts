@@ -46,6 +46,7 @@ try {
   const timer = setTimeout(() => abort.abort('query timed out'), configuration.timeoutMs ?? 30_000);
   let rows = 0;
   const preview: unknown[] = [];
+  const notices: string[] = [];
   try {
     const result = await workspace(session).networks.withTemporaryConnection(
       configuration.networkId,
@@ -70,6 +71,9 @@ try {
         onStarted: (id) => {
           executionId = id;
         },
+        onStderr: (text) => {
+          if (notices.length < 25) notices.push(text.slice(0, 4_096));
+        },
       }, (value) => {
         rows += 1;
         if (preview.length < 25) preview.push(value);
@@ -86,7 +90,7 @@ try {
         `psql exited with status ${execution.exit_code ?? 'unknown'}: ${new TextDecoder().decode(Uint8Array.from(output.stderr))}`,
       );
     }
-    process.stdout.write(`${JSON.stringify({ rows, preview })}\n`);
+    process.stdout.write(`${JSON.stringify({ rows, preview, notices })}\n`);
   } catch (error) {
     if (error instanceof ExecutionOperationError) executionId = error.executionId;
     throw error;
