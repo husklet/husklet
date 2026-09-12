@@ -1255,6 +1255,16 @@ test('extension discovery reviews the first-party Storybook without requiring a 
     { ControlSize: 'Small' },
     'new-extension review keeps its catalogue card compact',
   );
+  assert.deepEqual(
+    taggedProperty(stage, 'Review access', 'Button', 'Variant'),
+    { Variant: 'Outline' },
+    'available extensions use a quiet review action until access is explicitly approved',
+  );
+  assert.deepEqual(
+    taggedProperty(stage, 'Available', 'Badge', 'Tone'),
+    { Tone: 'Neutral' },
+    'availability does not compete with updates or consent for accent emphasis',
+  );
   invoke(stage, 'Review access');
   await settled();
   await settled();

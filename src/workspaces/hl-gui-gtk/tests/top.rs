@@ -1487,6 +1487,23 @@ mod unix {
             let third_card = ancestor_with_class(third_review.upcast_ref(), "hl-card")
                 .expect("third Discover action belongs to its card");
             assert!(review.is_sensitive(), "compatible Discover update is actionable");
+            assert!(
+                review.has_css_class("variant-filled"),
+                "available update retains the prominent catalogue action"
+            );
+            assert!(
+                review_access.has_css_class("variant-outline"),
+                "new extension access review uses the quieter outlined hierarchy"
+            );
+            let available = ancestor_with_class(
+                &find_mapped_labelled(&access_card, "Available"),
+                "hl-badge",
+            )
+            .expect("available state belongs to a badge");
+            assert!(
+                available.has_css_class("tone-neutral"),
+                "plain availability does not compete with updates for accent emphasis"
+            );
             for (label, action) in [("update", &review), ("access", &review_access)] {
                 assert_eq!(action.accessible_role(), gtk::AccessibleRole::Button);
                 assert!(action.is_focusable(), "Discover {label} action is keyboard reachable");

@@ -1301,7 +1301,11 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                                       : 'Available'
                                   }
                                   tone={
-                                    updateAvailable || !installedExtension ? 'accent' : 'positive'
+                                    updateAvailable
+                                      ? 'accent'
+                                      : installedExtension
+                                        ? 'positive'
+                                        : 'neutral'
                                   }
                                 />
                                 <Text label={trust.label} color="text-dim" />
@@ -1375,7 +1379,7 @@ export function Extensions({ api }: { api: WorkspaceApi }) {
                                   label="Review access"
                                   tooltip={`Review access requested by ${entry.title}`}
                                   size="small"
-                                  variant="filled"
+                                  variant="outline"
                                   tone="accent"
                                   enabled={!busy && compatibility.compatible !== false}
                                   onInvoke={() => inspect(entry.reference, entry)}
