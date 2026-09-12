@@ -179,7 +179,7 @@ impl ContainerInventory for Host {
 
     fn inspect(&self, id: &str) -> Result<ContainerSummary, HostError> {
         self.ledger.note("containers.inspect");
-        if id == "c1" {
+        if matches!(id, "c1" | "workspace") {
             return Ok(Self::container());
         }
         Err(HostError::Absent(id.into()))
@@ -359,7 +359,7 @@ impl ContainerControl for Host {
 
     fn execute(
         &self,
-        _id: &str,
+        id: &str,
         _expected_id: &str,
         _generation: u64,
         _command: &[String],
@@ -369,7 +369,7 @@ impl ContainerControl for Host {
         _stdin: bool,
     ) -> Result<String, HostError> {
         self.ledger.note("containers.exec");
-        Ok("e1".into())
+        Ok(if id == "workspace" { "e".repeat(32) } else { "e1".into() })
     }
 }
 
@@ -647,6 +647,171 @@ fn pane_discovery_requires_observation_without_content_authority() {
     };
     assert_eq!(inventory.panes[0].slot, "workspace");
     assert_eq!(host.ledger.reached(), vec!["terminal.pane_inventory"]);
+}
+
+#[test]
+fn supervised_terminal_command_has_owned_identity_output_input_and_completion_without_container_grants() {
+    let host = Host::new();
+    let mut active = session(
+        &[
+            Capability::TerminalProcessControl,
+            Capability::TerminalOutput,
+            Capability::TerminalInput,
+        ],
+        &[],
+    );
+    let started = active
+        .dispatch(
+            &Request::TerminalCommandStart {
+                slot: "s1".into(),
+                generation: 0,
+                revision: 0,
+                command: vec!["sh".into(), "-lc".into(), "printf ready; exit 17".into()],
+                working_directory: Some("/work".into()),
+                stdin: true,
+            },
+            &services(&host),
+        )
+        .expect("an exact pane snapshot may own a supervised command");
+    let Reply::TerminalCommand(started) = started else {
+        panic!("wrong start reply")
+    };
+    assert_eq!(started.id, "e".repeat(32));
+    assert_eq!(
+        (started.slot.as_str(), started.generation, started.revision),
+        ("s1", 0, 0)
+    );
+    assert_eq!(
+        host.ledger.reached(),
+        vec!["containers.inspect", "containers.exec", "executions.inspect"]
+    );
+
+    host.ledger.clear();
+    let written = active
+        .dispatch(
+            &Request::TerminalCommandWrite {
+                id: started.id.clone(),
+                slot: "s1".into(),
+                generation: 0,
+                revision: 0,
+                contents: b"question\n".to_vec(),
+            },
+            &services(&host),
+        )
+        .expect("owned input");
+    assert_eq!(
+        written,
+        Reply::TerminalCommandInput(hl_extension::port::TerminalCommandInput {
+            id: started.id.clone(),
+            committed: 9,
+        })
+    );
+
+    let output = active
+        .dispatch(
+            &Request::TerminalCommandOutput {
+                id: started.id.clone(),
+                slot: "s1".into(),
+                generation: 0,
+                revision: 0,
+                after: 0,
+                limit: 4,
+            },
+            &services(&host),
+        )
+        .expect("owned output");
+    let Reply::TerminalCommandOutput(output) = output else {
+        panic!("wrong output reply")
+    };
+    assert_eq!((output.slot.as_str(), output.generation, output.revision), ("s1", 0, 0));
+    assert_eq!(output.output.entries[0].bytes, b"row\n");
+
+    let completed = active
+        .dispatch(
+            &Request::TerminalCommandWait {
+                id: started.id.clone(),
+                slot: "s1".into(),
+                generation: 0,
+                revision: 0,
+                timeout_ms: 500,
+            },
+            &services(&host),
+        )
+        .expect("authoritative completion");
+    let Reply::TerminalCommand(completed) = completed else {
+        panic!("wrong wait reply")
+    };
+    assert!(!completed.running);
+    assert_eq!(completed.exit_code, 17);
+
+    let resumed = session(&[Capability::TerminalOutput], &[])
+        .dispatch(
+            &Request::TerminalCommandInspect {
+                id: started.id,
+                slot: "s1".into(),
+                generation: 0,
+                revision: 0,
+            },
+            &services(&host),
+        )
+        .expect("immutable command identity resumes on a reconnected extension session");
+    let Reply::TerminalCommand(resumed) = resumed else {
+        panic!("wrong resume reply")
+    };
+    assert_eq!(
+        (resumed.slot.as_str(), resumed.generation, resumed.revision),
+        ("s1", 0, 0)
+    );
+
+    host.ledger.clear();
+    let cancelled = session(&[Capability::TerminalProcessControl], &[])
+        .dispatch(
+            &Request::TerminalCommandCancel {
+                id: resumed.id,
+                slot: "s1".into(),
+                generation: 0,
+                revision: 0,
+                signal: "SIGTERM".into(),
+                timeout_ms: 500,
+            },
+            &services(&host),
+        )
+        .expect("a reconnected controller can cancel the immutable command");
+    assert!(matches!(cancelled, Reply::TerminalCommand(_)));
+    assert_eq!(host.ledger.reached(), vec!["executions.cancel", "executions.inspect"]);
+}
+
+#[test]
+fn stale_terminal_command_snapshot_reaches_neither_container_inspection_nor_execution() {
+    let host = Host::new();
+    let result = session(&[Capability::TerminalProcessControl], &[]).dispatch(
+        &Request::TerminalCommandStart {
+            slot: "s1".into(),
+            generation: 0,
+            revision: 1,
+            command: vec!["true".into()],
+            working_directory: None,
+            stdin: false,
+        },
+        &services(&host),
+    );
+    assert!(matches!(result, Err(Failure::Conflict { .. })));
+    assert!(host.ledger.reached().is_empty(), "stale authority must execute nothing");
+
+    let resumed = session(&[Capability::TerminalOutput], &[]).dispatch(
+        &Request::TerminalCommandInspect {
+            id: "e".repeat(32),
+            slot: "s1".into(),
+            generation: 0,
+            revision: 1,
+        },
+        &services(&host),
+    );
+    assert!(matches!(resumed, Err(Failure::Conflict { .. })));
+    assert!(
+        host.ledger.reached().is_empty(),
+        "a replacement pane must fence a durable command before execution lookup"
+    );
 }
 
 #[test]
@@ -1574,6 +1739,77 @@ fn calls() -> Vec<(Request, Capability)> {
             Capability::TerminalProcessControl,
         ),
         (
+            Request::TerminalCommandStart {
+                slot: "s1".into(),
+                generation: 0,
+                revision: 0,
+                command: vec!["true".into()],
+                working_directory: None,
+                stdin: false,
+            },
+            Capability::TerminalProcessControl,
+        ),
+        (
+            Request::TerminalCommandInspect {
+                id: "e".repeat(32),
+                slot: "s1".into(),
+                generation: 0,
+                revision: 0,
+            },
+            Capability::TerminalOutput,
+        ),
+        (
+            Request::TerminalCommandOutput {
+                id: "e".repeat(32),
+                slot: "s1".into(),
+                generation: 0,
+                revision: 0,
+                after: 0,
+                limit: 1,
+            },
+            Capability::TerminalOutput,
+        ),
+        (
+            Request::TerminalCommandWait {
+                id: "e".repeat(32),
+                slot: "s1".into(),
+                generation: 0,
+                revision: 0,
+                timeout_ms: 1,
+            },
+            Capability::TerminalOutput,
+        ),
+        (
+            Request::TerminalCommandCancel {
+                id: "e".repeat(32),
+                slot: "s1".into(),
+                generation: 0,
+                revision: 0,
+                signal: "SIGTERM".into(),
+                timeout_ms: 1,
+            },
+            Capability::TerminalProcessControl,
+        ),
+        (
+            Request::TerminalCommandWrite {
+                id: "e".repeat(32),
+                slot: "s1".into(),
+                generation: 0,
+                revision: 0,
+                contents: vec![1],
+            },
+            Capability::TerminalInput,
+        ),
+        (
+            Request::TerminalCommandCloseInput {
+                id: "e".repeat(32),
+                slot: "s1".into(),
+                generation: 0,
+                revision: 0,
+            },
+            Capability::TerminalInput,
+        ),
+        (
             Request::TerminalWritePane {
                 slot: "s1".into(),
                 generation: 1,
@@ -1732,7 +1968,11 @@ fn all_calls() -> Vec<(Request, Capability)> {
     let mut requests = calls();
     requests.extend([
         (
-            Request::FilesystemChanges { observed: "a".repeat(32), after: 0, limit: 1 },
+            Request::FilesystemChanges {
+                observed: "a".repeat(32),
+                after: 0,
+                limit: 1,
+            },
             Capability::FilesystemRead,
         ),
         (Request::StateRead, Capability::StateRead),
@@ -2243,7 +2483,11 @@ fn filesystem_journal_identity_is_bounded_before_the_host_is_reached() {
     for observed in ["not-hex".to_owned(), "a".repeat(33)] {
         assert!(matches!(
             session.dispatch(
-                &Request::FilesystemChanges { observed, after: 0, limit: 1 },
+                &Request::FilesystemChanges {
+                    observed,
+                    after: 0,
+                    limit: 1
+                },
                 &services(&host),
             ),
             Err(Failure::Failed { .. })

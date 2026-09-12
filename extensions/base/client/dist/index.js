@@ -741,6 +741,32 @@ function exactExecutionInput(input) {
         throw new RangeError('execution stdin chunks must contain between 1 and 65536 bytes');
     return Uint8Array.from(values);
 }
+function exactTerminalCommand(command) {
+    const id = immutableIdentity(command?.id, [32], 'terminal command');
+    if (typeof command?.slot !== 'string' ||
+        command.slot.length === 0 ||
+        !Number.isSafeInteger(command.generation) ||
+        command.generation < 0 ||
+        !Number.isSafeInteger(command.revision) ||
+        command.revision < 0 ||
+        typeof command.running !== 'boolean' ||
+        !Number.isSafeInteger(command.exit_code) ||
+        !Number.isSafeInteger(command.pid) ||
+        !Array.isArray(command.command)) {
+        throw new TypeError('host returned an invalid supervised terminal command');
+    }
+    return { ...command, id };
+}
+function sameTerminalCommand(expected, actual) {
+    const command = exactTerminalCommand(actual);
+    if (command.id !== expected.id ||
+        command.slot !== expected.slot ||
+        command.generation !== expected.generation ||
+        command.revision !== expected.revision) {
+        throw new TypeError('host returned a terminal command for a different immutable pane identity');
+    }
+    return command;
+}
 function exactStateBytes(input) {
     const values = [];
     for (const value of input ?? []) {
@@ -1871,6 +1897,200 @@ export function workspace(session, { signal } = {}) {
                     revision,
                     command: [...command],
                 });
+            },
+            commandStart: async (pane, command, { workingDirectory, stdin = false } = {}) => {
+                if (typeof pane?.slot !== 'string' ||
+                    pane.slot.length === 0 ||
+                    !Number.isSafeInteger(pane.generation) ||
+                    pane.generation < 0 ||
+                    !Number.isSafeInteger(pane.revision) ||
+                    pane.revision < 0) {
+                    throw new TypeError('terminal command requires an exact pane snapshot');
+                }
+                if (workingDirectory !== undefined &&
+                    (typeof workingDirectory !== 'string' ||
+                        !workingDirectory.startsWith('/') ||
+                        workingDirectory.includes('\0') ||
+                        new TextEncoder().encode(workingDirectory).byteLength > 4096)) {
+                    throw new TypeError('terminal command workingDirectory must be an absolute, NUL-free path of at most 4096 bytes');
+                }
+                const started = exactTerminalCommand(expect(await session.call('terminal_command_start', {
+                    slot: pane.slot,
+                    generation: pane.generation,
+                    revision: pane.revision,
+                    command: [...exactCommand(command)],
+                    working_directory: workingDirectory,
+                    stdin,
+                }), 'terminal_command'));
+                if (started.slot !== pane.slot ||
+                    started.generation !== pane.generation ||
+                    started.revision !== pane.revision) {
+                    throw new TypeError('host started a terminal command against a different pane snapshot');
+                }
+                return started;
+            },
+            commandInspect: async (command) => sameTerminalCommand(exactTerminalCommand(command), expect(await session.call('terminal_command_inspect', {
+                id: immutableIdentity(command.id, [32], 'terminal command'),
+                slot: command.slot,
+                generation: command.generation,
+                revision: command.revision,
+            }), 'terminal_command')),
+            commandOutput: async (command, { after = 0, limit = 16 } = {}) => {
+                command = exactTerminalCommand(command);
+                if (!Number.isSafeInteger(after) || after < 0) {
+                    throw new TypeError('terminal command output cursor must be a nonnegative safe integer');
+                }
+                if (!Number.isInteger(limit) || limit < 1 || limit > 16) {
+                    throw new RangeError('terminal command output limit must be between 1 and 16');
+                }
+                const result = expect(await session.call('terminal_command_output', {
+                    id: command.id,
+                    slot: command.slot,
+                    generation: command.generation,
+                    revision: command.revision,
+                    after,
+                    limit,
+                }), 'terminal_command_output');
+                if (result.id !== command.id ||
+                    result.slot !== command.slot ||
+                    result.generation !== command.generation ||
+                    result.revision !== command.revision) {
+                    throw new TypeError('host returned output for a different immutable terminal command');
+                }
+                return {
+                    ...result,
+                    output: exactExecutionOutputPage(result.output, limit, command.id, after),
+                };
+            },
+            commandWait: async (command, { timeoutMs = 30_000 } = {}) => {
+                command = exactTerminalCommand(command);
+                if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
+                    throw new RangeError('terminal command wait timeout must be between 1 and 30000ms');
+                }
+                return sameTerminalCommand(command, expect(await session.call('terminal_command_wait', {
+                    id: command.id,
+                    slot: command.slot,
+                    generation: command.generation,
+                    revision: command.revision,
+                    timeout_ms: timeoutMs,
+                }), 'terminal_command'));
+            },
+            commandCancel: async (command, { signal: commandSignal = 'SIGTERM', timeoutMs = 5_000 } = {}) => {
+                command = exactTerminalCommand(command);
+                if (typeof commandSignal !== 'string' || commandSignal.length === 0) {
+                    throw new TypeError('terminal command cancellation requires a signal');
+                }
+                if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) {
+                    throw new RangeError('terminal command cancellation timeout must be between 1 and 30000ms');
+                }
+                return sameTerminalCommand(command, expect(await session.call('terminal_command_cancel', {
+                    id: command.id,
+                    slot: command.slot,
+                    generation: command.generation,
+                    revision: command.revision,
+                    signal: commandSignal,
+                    timeout_ms: timeoutMs,
+                }), 'terminal_command'));
+            },
+            commandWrite: async (command, input) => {
+                command = exactTerminalCommand(command);
+                const contents = exactExecutionInput(input);
+                const receipt = expect(await session.call('terminal_command_write', {
+                    id: command.id,
+                    slot: command.slot,
+                    generation: command.generation,
+                    revision: command.revision,
+                    contents: Array.from(contents),
+                }), 'terminal_command_input');
+                if (receipt.id !== command.id || receipt.committed !== contents.byteLength) {
+                    throw new TypeError('host returned an invalid terminal command input receipt');
+                }
+                return receipt;
+            },
+            commandCloseInput: (command) => {
+                command = exactTerminalCommand(command);
+                return done('terminal_command_close_input', {
+                    id: command.id,
+                    slot: command.slot,
+                    generation: command.generation,
+                    revision: command.revision,
+                });
+            },
+            commandText: async (pane, { command: argv, workingDirectory, input, maxBytes, pageLimit = 16, pollIntervalMs = 25, signal: abortSignal, cancelSignal = 'SIGTERM', cancelTimeoutMs = 5_000, }) => {
+                if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > 16 * 1024 * 1024) {
+                    throw new RangeError('terminal command maxBytes must be between 1 and 16777216');
+                }
+                if (!Number.isInteger(pageLimit) || pageLimit < 1 || pageLimit > 16) {
+                    throw new RangeError('terminal command pageLimit must be between 1 and 16');
+                }
+                exactExecutionPollInterval(pollIntervalMs);
+                let owned;
+                const chunks = {
+                    stdout: [],
+                    stderr: [],
+                };
+                let total = 0;
+                let after = 0;
+                const abort = async () => {
+                    if (owned?.running) {
+                        owned = await api.terminal.commandCancel(owned, {
+                            signal: cancelSignal,
+                            timeoutMs: cancelTimeoutMs,
+                        });
+                    }
+                };
+                try {
+                    if (abortSignal?.aborted)
+                        throw abortSignal.reason ?? new DOMException('Aborted', 'AbortError');
+                    owned = await api.terminal.commandStart(pane, argv, {
+                        workingDirectory,
+                        stdin: input !== undefined,
+                    });
+                    if (input !== undefined) {
+                        await api.terminal.commandWrite(owned, input);
+                        await api.terminal.commandCloseInput(owned);
+                    }
+                    for (;;) {
+                        if (abortSignal?.aborted)
+                            throw abortSignal.reason ?? new DOMException('Aborted', 'AbortError');
+                        const page = await api.terminal.commandOutput(owned, { after, limit: pageLimit });
+                        if (page.output.gap) {
+                            throw new ExecutionOutputGapError(owned.id, after, page.output.next);
+                        }
+                        for (const entry of page.output.entries) {
+                            total += entry.bytes.length;
+                            if (total > maxBytes)
+                                throw new RangeError('terminal command output exceeded maxBytes');
+                            chunks[entry.stream].push(Uint8Array.from(entry.bytes));
+                        }
+                        after = page.output.next;
+                        if (page.output.eof)
+                            break;
+                        if (!page.output.more && pollIntervalMs > 0) {
+                            await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+                        }
+                    }
+                    owned = await api.terminal.commandWait(owned);
+                    const decode = (parts) => {
+                        const bytes = new Uint8Array(parts.reduce((sum, part) => sum + part.byteLength, 0));
+                        let offset = 0;
+                        for (const part of parts) {
+                            bytes.set(part, offset);
+                            offset += part.byteLength;
+                        }
+                        return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+                    };
+                    return { command: owned, stdout: decode(chunks.stdout), stderr: decode(chunks.stderr) };
+                }
+                catch (cause) {
+                    try {
+                        await abort();
+                    }
+                    catch {
+                        // Preserve the operation failure; the immutable command ID remains on `owned`.
+                    }
+                    throw cause;
+                }
             },
             read: async (slot, lines) => exactPane(expect(await session.call('terminal_read_pane', {
                 slot,
@@ -4562,6 +4782,13 @@ const facadeOverrides = Object.freeze({
     pane_semantic_action: 'terminal.act',
     terminal_read_pane: 'terminal.read',
     terminal_write_pane: 'terminal.writeInput',
+    terminal_command_start: 'terminal.commandStart',
+    terminal_command_inspect: 'terminal.commandInspect',
+    terminal_command_output: 'terminal.commandOutput',
+    terminal_command_wait: 'terminal.commandWait',
+    terminal_command_cancel: 'terminal.commandCancel',
+    terminal_command_write: 'terminal.commandWrite',
+    terminal_command_close_input: 'terminal.commandCloseInput',
     terminal_close_pane: 'terminal.close',
     terminal_close_pane_observed: 'terminal.closeObserved',
     terminal_focus_pane: 'terminal.focus',
@@ -4699,6 +4926,13 @@ export const protocolCoverage = Object.freeze({
             'splitObserved',
             'spawn',
             'spawnObserved',
+            'commandStart',
+            'commandInspect',
+            'commandOutput',
+            'commandWait',
+            'commandCancel',
+            'commandWrite',
+            'commandCloseInput',
             'read',
             'semantics',
             'act',

@@ -120,6 +120,13 @@ const REQUEST_TO_REPLY: &[(&str, &str)] = &[
     ("terminal_split_observed", "identity"),
     ("terminal_spawn", "done"),
     ("terminal_spawn_observed", "done"),
+    ("terminal_command_start", "terminal_command"),
+    ("terminal_command_inspect", "terminal_command"),
+    ("terminal_command_output", "terminal_command_output"),
+    ("terminal_command_wait", "terminal_command"),
+    ("terminal_command_cancel", "terminal_command"),
+    ("terminal_command_write", "terminal_command_input"),
+    ("terminal_command_close_input", "done"),
     ("terminal_read_pane", "text"),
     ("pane_semantic_read", "semantics"),
     ("pane_semantic_action", "done"),
@@ -219,11 +226,15 @@ fn request_capability(request: &str) -> Capability {
         "network_create" | "network_remove" | "network_connect" | "network_disconnect" => Capability::NetworkWrite,
         "terminal_tabs" | "terminal_topology" => Capability::TerminalRead,
         "pane_list" => Capability::PaneObserve,
-        "terminal_read_pane" => Capability::TerminalOutput,
+        "terminal_read_pane" | "terminal_command_inspect" | "terminal_command_output" | "terminal_command_wait" => {
+            Capability::TerminalOutput
+        }
         "pane_semantic_read" => Capability::PaneSemanticRead,
         "pane_semantic_action" => Capability::PaneSemanticControl,
-        "terminal_write_pane" => Capability::TerminalInput,
-        "terminal_spawn" | "terminal_spawn_observed" => Capability::TerminalProcessControl,
+        "terminal_write_pane" | "terminal_command_write" | "terminal_command_close_input" => Capability::TerminalInput,
+        "terminal_spawn" | "terminal_spawn_observed" | "terminal_command_start" | "terminal_command_cancel" => {
+            Capability::TerminalProcessControl
+        }
         "terminal_open_tab"
         | "terminal_pin_tab"
         | "terminal_split"

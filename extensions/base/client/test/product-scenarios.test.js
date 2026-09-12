@@ -124,9 +124,7 @@ function respond(socket, frame, payload) {
   socket.write(encode({ channel: frame.channel, kind: KIND.response, payload }));
 }
 
-test('LLM terminal agent observes, writes, and follows replacement over the extension socket', async () => {
-  let reads = 0;
-  let replaced = false;
+test('LLM terminal agent runs a supervised command without parsing a prompt', async () => {
   const pane = {
     slot: 'term',
     generation: 4,
@@ -156,36 +154,22 @@ test('LLM terminal agent observes, writes, and follows replacement over the exte
         respond(socket, frame, {
           reply: 'panes',
           with: {
-            panes: replaced
-              ? [
-                  {
-                    ...pane,
-                    generation: 5,
-                    revision: 1,
-                    kind: 'surface',
-                    provider: { extension: 'status', provider: 'main' },
-                  },
-                  uiPane,
-                ]
-              : [pane, uiPane],
+            panes: [pane, uiPane],
             truncated: false,
           },
         });
       else if (call === 'event_subscribe' || call === 'event_unsubscribe')
         respond(socket, frame, { reply: 'done' });
       else if (call === 'terminal_read_pane') {
-        reads += 1;
-        const generation = reads < 3 ? 4 : 5;
-        const revision = reads < 3 ? 8 : 1;
         respond(socket, frame, {
           reply: 'text',
           with: {
             slot: 'term',
-            generation,
-            revision,
+            generation: 4,
+            revision: 8,
             columns: 80,
             rows: 24,
-            lines: [revision === 8 ? '$ ' : '$ explain status', revision === 8 ? '' : 'healthy'],
+            lines: ['$ ', ''],
             cursor_column: 0,
             cursor_row: 1,
             truncated: false,
@@ -212,38 +196,40 @@ test('LLM terminal agent observes, writes, and follows replacement over the exte
             truncated: false,
           },
         });
-      } else if (call === 'terminal_write_pane') {
-        replaced = true;
+      } else if (call === 'terminal_command_start') {
         assert.deepEqual(frame.payload.with, {
           slot: 'term',
           generation: 4,
           revision: 8,
-          contents: Array.from(new TextEncoder().encode('explain status\n')),
+          command: ['sh', '-lc', 'explain status'],
+          stdin: false,
         });
-        socket.write(
-          encode({
-            channel: 40,
-            kind: KIND.event,
-            payload: {
-              snapshot: 'pane_changes',
-              of: { slot: 'term', kind: 'surface', generation: 5, revision: 1, coalesced: 0 },
-            },
-          }),
-        );
-        respond(socket, frame, { reply: 'done' });
+        respond(socket, frame, {
+          reply: 'terminal_command',
+          with: { id: 'e'.repeat(32), slot: 'term', generation: 4, revision: 8, running: true, exit_code: 0, pid: 19, command: ['sh', '-lc', 'explain status'] },
+        });
+      } else if (call === 'terminal_command_output') {
+        respond(socket, frame, {
+          reply: 'terminal_command_output',
+          with: { id: 'e'.repeat(32), slot: 'term', generation: 4, revision: 8, output: { entries: [{ sequence: 1, timestamp_ms: 1, stream: 'stdout', bytes: Array.from(new TextEncoder().encode('healthy\n')) }], next: 1, more: false, eof: true, gap: false } },
+        });
+      } else if (call === 'terminal_command_wait') {
+        respond(socket, frame, {
+          reply: 'terminal_command',
+          with: { id: 'e'.repeat(32), slot: 'term', generation: 4, revision: 8, running: false, exit_code: 17, pid: 0, command: ['sh', '-lc', 'explain status'] },
+        });
       }
     },
   );
   assert.equal(run.result.selected.kind, 'terminal');
   assert.equal(run.result.selected.before, '$ \n');
-  assert.match(run.result.selected.after, /Agent result healthy/);
-  assert.equal(run.result.selected.afterKind, 'ui');
-  assert.equal(run.result.selected.replacement, true);
-  assert.equal(
-    run.result.incomplete,
-    true,
-    'replacement UI is recovery context, not settled output from the terminal input',
-  );
+  assert.equal(run.result.selected.stdout, 'healthy\n');
+  assert.equal(run.result.selected.stderr, '');
+  assert.equal(run.result.selected.exitCode, 17);
+  assert.equal(run.result.selected.completed, true);
+  assert.equal(run.result.selected.command, 'e'.repeat(32));
+  assert.deepEqual(run.result.selected.pane, { slot: 'term', generation: 4, revision: 8 });
+  assert.equal(run.result.incomplete, false);
   assert.match(run.result.context.find(({ kind }) => kind === 'ui').text, /Deployment healthy/);
 });
 

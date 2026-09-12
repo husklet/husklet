@@ -340,6 +340,59 @@ pub enum Request {
         revision: u64,
         command: Vec<String>,
     },
+    /// Starts a supervised workspace command only if this exact terminal
+    /// occupant snapshot still exists. Completion never depends on a prompt.
+    TerminalCommandStart {
+        slot: String,
+        generation: u64,
+        revision: u64,
+        command: Vec<String>,
+        working_directory: Option<String>,
+        #[serde(default)]
+        stdin: bool,
+    },
+    TerminalCommandInspect {
+        id: String,
+        slot: String,
+        generation: u64,
+        revision: u64,
+    },
+    TerminalCommandOutput {
+        id: String,
+        slot: String,
+        generation: u64,
+        revision: u64,
+        after: u64,
+        limit: u16,
+    },
+    TerminalCommandWait {
+        id: String,
+        slot: String,
+        generation: u64,
+        revision: u64,
+        timeout_ms: u32,
+    },
+    TerminalCommandCancel {
+        id: String,
+        slot: String,
+        generation: u64,
+        revision: u64,
+        signal: String,
+        timeout_ms: u32,
+    },
+    TerminalCommandWrite {
+        id: String,
+        slot: String,
+        generation: u64,
+        revision: u64,
+        contents: Vec<u8>,
+    },
+    TerminalCommandCloseInput {
+        id: String,
+        slot: String,
+        generation: u64,
+        revision: u64,
+    },
     TerminalReadPane {
         slot: String,
         lines: Option<usize>,
@@ -610,9 +663,14 @@ impl Request {
             | Self::NetworkDisconnect { .. } => Capability::NetworkWrite,
             Self::TerminalTabs | Self::TerminalTopology => Capability::TerminalRead,
             Self::PaneList => Capability::PaneObserve,
-            Self::TerminalWritePane { .. } => Capability::TerminalInput,
+            Self::TerminalWritePane { .. }
+            | Self::TerminalCommandWrite { .. }
+            | Self::TerminalCommandCloseInput { .. } => Capability::TerminalInput,
             Self::TerminalFocusPane { .. } | Self::TerminalFocusPaneObserved { .. } => Capability::TerminalFocus,
-            Self::TerminalSpawn { .. } | Self::TerminalSpawnObserved { .. } => Capability::TerminalProcessControl,
+            Self::TerminalSpawn { .. }
+            | Self::TerminalSpawnObserved { .. }
+            | Self::TerminalCommandStart { .. }
+            | Self::TerminalCommandCancel { .. } => Capability::TerminalProcessControl,
             Self::TerminalOpenTab { .. }
             | Self::TerminalPinTab { .. }
             | Self::TerminalSplit { .. }
@@ -631,7 +689,10 @@ impl Request {
             // Reading what a shell printed is what `TerminalOutput` was separated
             // out for: listing panes says a pane exists, this says what was typed
             // into it and what came back.
-            Self::TerminalReadPane { .. } => Capability::TerminalOutput,
+            Self::TerminalReadPane { .. }
+            | Self::TerminalCommandInspect { .. }
+            | Self::TerminalCommandOutput { .. }
+            | Self::TerminalCommandWait { .. } => Capability::TerminalOutput,
             Self::PaneSemanticRead { .. } => Capability::PaneSemanticRead,
             Self::PaneSemanticAction { .. } => Capability::PaneSemanticControl,
             Self::FilesystemInventory
@@ -788,6 +849,9 @@ pub enum Reply {
     ExecutionOutput(crate::port::ExecutionOutputPage),
     Execution(ExecutionSummary),
     Executions(ExecutionList),
+    TerminalCommand(crate::port::TerminalCommand),
+    TerminalCommandOutput(crate::port::TerminalCommandOutput),
+    TerminalCommandInput(crate::port::TerminalCommandInput),
     Images(crate::port::ImageInventory),
     Image(ImageSummary),
     ImagePullJob(ImagePullJob),

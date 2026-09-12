@@ -6610,6 +6610,161 @@
         }
       ]
     },
+    "TerminalCommand": {
+      "fields": [
+        {
+          "name": "id",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "slot",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "generation",
+          "optional": false,
+          "schema": {
+            "bits": 64,
+            "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "signed": false
+          }
+        },
+        {
+          "name": "revision",
+          "optional": false,
+          "schema": {
+            "bits": 64,
+            "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "signed": false
+          }
+        },
+        {
+          "name": "running",
+          "optional": false,
+          "schema": {
+            "kind": "boolean"
+          }
+        },
+        {
+          "name": "exit_code",
+          "optional": false,
+          "schema": {
+            "bits": 64,
+            "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
+            "signed": true
+          }
+        },
+        {
+          "name": "pid",
+          "optional": false,
+          "schema": {
+            "bits": 64,
+            "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
+            "signed": true
+          }
+        },
+        {
+          "name": "command",
+          "optional": false,
+          "schema": {
+            "kind": "array",
+            "of": {
+              "kind": "string"
+            }
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
+    "TerminalCommandInput": {
+      "fields": [
+        {
+          "name": "id",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "committed",
+          "optional": false,
+          "schema": {
+            "bits": 32,
+            "kind": "integer",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "signed": false
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
+    "TerminalCommandOutput": {
+      "fields": [
+        {
+          "name": "id",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "slot",
+          "optional": false,
+          "schema": {
+            "kind": "string"
+          }
+        },
+        {
+          "name": "generation",
+          "optional": false,
+          "schema": {
+            "bits": 64,
+            "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "signed": false
+          }
+        },
+        {
+          "name": "revision",
+          "optional": false,
+          "schema": {
+            "bits": 64,
+            "kind": "integer",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "signed": false
+          }
+        },
+        {
+          "name": "output",
+          "optional": false,
+          "schema": {
+            "kind": "ref",
+            "name": "ExecutionOutputPage"
+          }
+        }
+      ],
+      "kind": "struct",
+      "serde": {}
+    },
     "TerminalTopology": {
       "fields": [
         {
@@ -8360,6 +8515,34 @@
       "request": "terminal_spawn_observed"
     },
     {
+      "capability": "terminals:process-control",
+      "request": "terminal_command_start"
+    },
+    {
+      "capability": "terminals:output",
+      "request": "terminal_command_inspect"
+    },
+    {
+      "capability": "terminals:output",
+      "request": "terminal_command_output"
+    },
+    {
+      "capability": "terminals:output",
+      "request": "terminal_command_wait"
+    },
+    {
+      "capability": "terminals:process-control",
+      "request": "terminal_command_cancel"
+    },
+    {
+      "capability": "terminals:input",
+      "request": "terminal_command_write"
+    },
+    {
+      "capability": "terminals:input",
+      "request": "terminal_command_close_input"
+    },
+    {
       "capability": "terminals:output",
       "request": "terminal_read_pane"
     },
@@ -8866,6 +9049,34 @@
       "request": "terminal_spawn_observed"
     },
     {
+      "reply": "terminal_command",
+      "request": "terminal_command_start"
+    },
+    {
+      "reply": "terminal_command",
+      "request": "terminal_command_inspect"
+    },
+    {
+      "reply": "terminal_command_output",
+      "request": "terminal_command_output"
+    },
+    {
+      "reply": "terminal_command",
+      "request": "terminal_command_wait"
+    },
+    {
+      "reply": "terminal_command",
+      "request": "terminal_command_cancel"
+    },
+    {
+      "reply": "terminal_command_input",
+      "request": "terminal_command_write"
+    },
+    {
+      "reply": "done",
+      "request": "terminal_command_close_input"
+    },
+    {
       "reply": "text",
       "request": "terminal_read_pane"
     },
@@ -9347,6 +9558,36 @@
             "of": {
               "kind": "ref",
               "name": "ExecutionList"
+            }
+          }
+        },
+        {
+          "name": "terminal_command",
+          "payload": {
+            "kind": "newtype",
+            "of": {
+              "kind": "ref",
+              "name": "TerminalCommand"
+            }
+          }
+        },
+        {
+          "name": "terminal_command_output",
+          "payload": {
+            "kind": "newtype",
+            "of": {
+              "kind": "ref",
+              "name": "TerminalCommandOutput"
+            }
+          }
+        },
+        {
+          "name": "terminal_command_input",
+          "payload": {
+            "kind": "newtype",
+            "of": {
+              "kind": "ref",
+              "name": "TerminalCommandInput"
             }
           }
         },
@@ -11447,6 +11688,399 @@
                   "of": {
                     "kind": "string"
                   }
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "terminal_command_start",
+          "payload": {
+            "fields": [
+              {
+                "name": "slot",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "generation",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "signed": false
+                }
+              },
+              {
+                "name": "revision",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "signed": false
+                }
+              },
+              {
+                "name": "command",
+                "optional": false,
+                "schema": {
+                  "kind": "array",
+                  "of": {
+                    "kind": "string"
+                  }
+                }
+              },
+              {
+                "name": "working_directory",
+                "optional": true,
+                "schema": {
+                  "kind": "optional",
+                  "of": {
+                    "kind": "string"
+                  }
+                }
+              },
+              {
+                "name": "stdin",
+                "optional": true,
+                "schema": {
+                  "kind": "boolean"
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "terminal_command_inspect",
+          "payload": {
+            "fields": [
+              {
+                "name": "id",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "slot",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "generation",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "signed": false
+                }
+              },
+              {
+                "name": "revision",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "signed": false
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "terminal_command_output",
+          "payload": {
+            "fields": [
+              {
+                "name": "id",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "slot",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "generation",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "signed": false
+                }
+              },
+              {
+                "name": "revision",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "signed": false
+                }
+              },
+              {
+                "name": "after",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "signed": false
+                }
+              },
+              {
+                "name": "limit",
+                "optional": false,
+                "schema": {
+                  "bits": 16,
+                  "kind": "integer",
+                  "maximum": 65535,
+                  "minimum": 0,
+                  "signed": false
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "terminal_command_wait",
+          "payload": {
+            "fields": [
+              {
+                "name": "id",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "slot",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "generation",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "signed": false
+                }
+              },
+              {
+                "name": "revision",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "signed": false
+                }
+              },
+              {
+                "name": "timeout_ms",
+                "optional": false,
+                "schema": {
+                  "bits": 32,
+                  "kind": "integer",
+                  "maximum": 4294967295,
+                  "minimum": 0,
+                  "signed": false
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "terminal_command_cancel",
+          "payload": {
+            "fields": [
+              {
+                "name": "id",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "slot",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "generation",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "signed": false
+                }
+              },
+              {
+                "name": "revision",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "signed": false
+                }
+              },
+              {
+                "name": "signal",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "timeout_ms",
+                "optional": false,
+                "schema": {
+                  "bits": 32,
+                  "kind": "integer",
+                  "maximum": 4294967295,
+                  "minimum": 0,
+                  "signed": false
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "terminal_command_write",
+          "payload": {
+            "fields": [
+              {
+                "name": "id",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "slot",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "generation",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "signed": false
+                }
+              },
+              {
+                "name": "revision",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "signed": false
+                }
+              },
+              {
+                "name": "contents",
+                "optional": false,
+                "schema": {
+                  "kind": "array",
+                  "of": {
+                    "bits": 8,
+                    "kind": "integer",
+                    "maximum": 255,
+                    "minimum": 0,
+                    "signed": false
+                  }
+                }
+              }
+            ],
+            "kind": "struct"
+          }
+        },
+        {
+          "name": "terminal_command_close_input",
+          "payload": {
+            "fields": [
+              {
+                "name": "id",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "slot",
+                "optional": false,
+                "schema": {
+                  "kind": "string"
+                }
+              },
+              {
+                "name": "generation",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "signed": false
+                }
+              },
+              {
+                "name": "revision",
+                "optional": false,
+                "schema": {
+                  "bits": 64,
+                  "kind": "integer",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "signed": false
                 }
               }
             ],
@@ -13797,7 +14431,7 @@
       ]
     }
   },
-  "source_fingerprint": "fnv1a64:f9f3366332665271",
+  "source_fingerprint": "fnv1a64:66b7b164c742682f",
   "specification_version": 1,
   "topics": [
     {

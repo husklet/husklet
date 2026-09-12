@@ -195,6 +195,63 @@ fn validate_preferences(preferences: &crate::port::ExtensionPreferences) -> Resu
     Ok(())
 }
 
+fn terminal_command_summary(
+    execution: crate::port::ExecutionSummary,
+    slot: &str,
+    generation: u64,
+    revision: u64,
+) -> crate::port::TerminalCommand {
+    crate::port::TerminalCommand {
+        id: execution.id,
+        slot: slot.to_owned(),
+        generation,
+        revision,
+        running: execution.running,
+        exit_code: execution.exit_code,
+        pid: execution.pid,
+        command: execution.command,
+    }
+}
+
+fn validate_execution_output(page: &crate::port::ExecutionOutputPage, after: u64, limit: u16) -> Result<(), Failure> {
+    let ordered = page
+        .entries
+        .iter()
+        .try_fold(after, |previous, entry| {
+            (entry.sequence > previous).then_some(entry.sequence)
+        })
+        .is_some();
+    let contiguous = page
+        .entries
+        .windows(2)
+        .all(|pair| pair[1].sequence == pair[0].sequence.saturating_add(1));
+    let gap = page
+        .entries
+        .first()
+        .is_some_and(|entry| entry.sequence != after.saturating_add(1));
+    let bytes = page
+        .entries
+        .iter()
+        .fold(0usize, |total, entry| total.saturating_add(entry.bytes.len()));
+    if page.entries.len() > usize::from(limit)
+        || (page.eof && page.more)
+        || bytes > 256 * 1024
+        || !ordered
+        || !contiguous
+        || page.gap != gap
+        || page.next != page.entries.last().map_or(after, |entry| entry.sequence)
+        || page
+            .entries
+            .iter()
+            .any(|entry| !matches!(entry.stream.as_str(), "stdout" | "stderr"))
+    {
+        return Err(Failure::Failed {
+            detail: "host returned invalid or oversized execution output page".into(),
+        });
+    }
+    Ok(())
+}
+
 impl std::ops::Deref for Session {
     type Target = hl_rpc::Session<Topic>;
 
@@ -354,13 +411,21 @@ impl Session {
     }
 
     #[must_use]
-    pub const fn container_grant(&self) -> &ContainerGrant { &self.containers }
+    pub const fn container_grant(&self) -> &ContainerGrant {
+        &self.containers
+    }
     #[must_use]
-    pub const fn image_grant(&self) -> &crate::ImageGrant { &self.images }
+    pub const fn image_grant(&self) -> &crate::ImageGrant {
+        &self.images
+    }
     #[must_use]
-    pub const fn network_grant(&self) -> &crate::NetworkGrant { &self.networks }
+    pub const fn network_grant(&self) -> &crate::NetworkGrant {
+        &self.networks
+    }
     #[must_use]
-    pub const fn volume_grant(&self) -> &crate::VolumeGrant { &self.volumes }
+    pub const fn volume_grant(&self) -> &crate::VolumeGrant {
+        &self.volumes
+    }
     #[must_use]
     pub const fn workspace_environment_grant(&self) -> &crate::WorkspaceEnvironmentGrant {
         &self.workspace_environment
@@ -671,6 +736,13 @@ impl Session {
             | Request::TerminalSplitObserved { .. }
             | Request::TerminalSpawn { .. }
             | Request::TerminalSpawnObserved { .. }
+            | Request::TerminalCommandStart { .. }
+            | Request::TerminalCommandInspect { .. }
+            | Request::TerminalCommandOutput { .. }
+            | Request::TerminalCommandWait { .. }
+            | Request::TerminalCommandCancel { .. }
+            | Request::TerminalCommandWrite { .. }
+            | Request::TerminalCommandCloseInput { .. }
             | Request::TerminalReadPane { .. }
             | Request::TerminalWritePane { .. }
             | Request::TerminalResizeGrid { .. }
@@ -846,41 +918,7 @@ impl Session {
                 }
                 self.resolve_execution(id, port.port())?;
                 let page = port.execution_output(id, *after, *limit)?;
-                let ordered = page
-                    .entries
-                    .iter()
-                    .try_fold(*after, |previous, entry| {
-                        (entry.sequence > previous).then_some(entry.sequence)
-                    })
-                    .is_some();
-                let contiguous = page
-                    .entries
-                    .windows(2)
-                    .all(|pair| pair[1].sequence == pair[0].sequence.saturating_add(1));
-                let gap = page
-                    .entries
-                    .first()
-                    .is_some_and(|entry| entry.sequence != after.saturating_add(1));
-                let bytes = page
-                    .entries
-                    .iter()
-                    .fold(0usize, |total, entry| total.saturating_add(entry.bytes.len()));
-                if page.entries.len() > usize::from(*limit)
-                    || (page.eof && page.more)
-                    || bytes > 256 * 1024
-                    || !ordered
-                    || !contiguous
-                    || page.gap != gap
-                    || page.next != page.entries.last().map_or(*after, |entry| entry.sequence)
-                    || page
-                        .entries
-                        .iter()
-                        .any(|entry| !matches!(entry.stream.as_str(), "stdout" | "stderr"))
-                {
-                    return Err(Failure::Failed {
-                        detail: "host returned invalid or oversized execution output page".into(),
-                    });
-                }
+                validate_execution_output(&page, *after, *limit)?;
                 Ok(Reply::ExecutionOutput(page))
             }
             Request::ExecutionWait { id, timeout_ms } => {
@@ -1497,7 +1535,19 @@ impl Session {
         }
     }
 
-    fn terminal(&self, request: &Request, services: &Services<'_>) -> Result<Reply, Failure> {
+    fn terminal(&mut self, request: &Request, services: &Services<'_>) -> Result<Reply, Failure> {
+        if matches!(
+            request,
+            Request::TerminalCommandStart { .. }
+                | Request::TerminalCommandInspect { .. }
+                | Request::TerminalCommandOutput { .. }
+                | Request::TerminalCommandWait { .. }
+                | Request::TerminalCommandCancel { .. }
+                | Request::TerminalCommandWrite { .. }
+                | Request::TerminalCommandCloseInput { .. }
+        ) {
+            return self.terminal_command(request, services);
+        }
         if matches!(request, Request::TerminalTabs | Request::TerminalTopology) {
             let port = self
                 .peer
@@ -1530,6 +1580,204 @@ impl Session {
         }
         let port = self.peer.authority().port(request.capability(), services.terminal)?;
         Self::command(request, port.port())
+    }
+
+    fn terminal_command(&mut self, request: &Request, services: &Services<'_>) -> Result<Reply, Failure> {
+        if let Request::TerminalCommandStart {
+            slot,
+            generation,
+            revision,
+            command,
+            working_directory,
+            stdin,
+        } = request
+        {
+            validate_terminal_command(command)?;
+            if working_directory.as_ref().is_some_and(|directory| {
+                directory.is_empty()
+                    || !directory.starts_with('/')
+                    || directory.contains('\0')
+                    || directory.len() > 4096
+            }) {
+                return Err(Failure::Conflict {
+                    detail:
+                        "terminal command working_directory must be an absolute, NUL-free path of at most 4096 bytes"
+                            .into(),
+                });
+            }
+            if *stdin {
+                self.peer.authority().permit(Capability::TerminalInput)?;
+            }
+            let terminal = self
+                .peer
+                .authority()
+                .port(Capability::TerminalProcessControl, services.terminal)?;
+            let observed = terminal.read(slot, 0)?;
+            if observed.generation != *generation || observed.revision != *revision {
+                return Err(Failure::Conflict {
+                    detail: format!(
+                        "stale pane identity for {slot}: expected {generation}/{revision}, current {}/{}",
+                        observed.generation, observed.revision
+                    ),
+                });
+            }
+            let container = services.containers.inspect("workspace")?;
+            let id = services.control.execute(
+                "workspace",
+                &container.id,
+                container.generation,
+                command,
+                &[],
+                None,
+                working_directory.as_deref(),
+                *stdin,
+            )?;
+            immutable_identity(&id, &[32], "terminal command")?;
+            let execution = services.containers.execution(&id)?;
+            if execution.container_id != container.id {
+                return Err(Failure::Failed {
+                    detail: "host returned a terminal command owned by another container".into(),
+                });
+            }
+            return Ok(Reply::TerminalCommand(terminal_command_summary(
+                execution,
+                slot,
+                *generation,
+                *revision,
+            )));
+        }
+
+        let (id, slot, generation, revision) = match request {
+            Request::TerminalCommandInspect {
+                id,
+                slot,
+                generation,
+                revision,
+            }
+            | Request::TerminalCommandOutput {
+                id,
+                slot,
+                generation,
+                revision,
+                ..
+            }
+            | Request::TerminalCommandWait {
+                id,
+                slot,
+                generation,
+                revision,
+                ..
+            }
+            | Request::TerminalCommandCancel {
+                id,
+                slot,
+                generation,
+                revision,
+                ..
+            }
+            | Request::TerminalCommandWrite {
+                id,
+                slot,
+                generation,
+                revision,
+                ..
+            }
+            | Request::TerminalCommandCloseInput {
+                id,
+                slot,
+                generation,
+                revision,
+            } => (id, slot, *generation, *revision),
+            _ => unreachable!(),
+        };
+        immutable_identity(id, &[32], "terminal command")?;
+        let observed = services.terminal.read(slot, 0)?;
+        if observed.generation != generation || observed.revision != revision {
+            return Err(Failure::Conflict {
+                detail: format!(
+                    "stale pane identity for {slot}: expected {generation}/{revision}, current {}/{}",
+                    observed.generation, observed.revision
+                ),
+            });
+        }
+        match request {
+            Request::TerminalCommandInspect { .. } => {
+                let execution = services.containers.execution(id)?;
+                Ok(Reply::TerminalCommand(terminal_command_summary(
+                    execution, slot, generation, revision,
+                )))
+            }
+            Request::TerminalCommandOutput { after, limit, .. } => {
+                if *limit == 0 || *limit > 16 {
+                    return Err(Failure::Conflict {
+                        detail: "terminal command output limit must be between 1 and 16".into(),
+                    });
+                }
+                let page = services.containers.execution_output(id, *after, *limit)?;
+                validate_execution_output(&page, *after, *limit)?;
+                Ok(Reply::TerminalCommandOutput(crate::port::TerminalCommandOutput {
+                    id: id.clone(),
+                    slot: slot.clone(),
+                    generation,
+                    revision,
+                    output: page,
+                }))
+            }
+            Request::TerminalCommandWait { timeout_ms, .. } => {
+                if !(1..=30_000).contains(timeout_ms) {
+                    return Err(Failure::Conflict {
+                        detail: "terminal command wait timeout_ms must be between 1 and 30000".into(),
+                    });
+                }
+                let execution = services.containers.execution_wait(id, *timeout_ms)?;
+                Ok(Reply::TerminalCommand(terminal_command_summary(
+                    execution, slot, generation, revision,
+                )))
+            }
+            Request::TerminalCommandCancel { signal, timeout_ms, .. } => {
+                bounded_signal(signal)?;
+                if !(1..=30_000).contains(timeout_ms) {
+                    return Err(Failure::Conflict {
+                        detail: "terminal command cancellation timeout_ms must be between 1 and 30000".into(),
+                    });
+                }
+                services.control.execution_cancel(id, signal, *timeout_ms)?;
+                let execution = services.containers.execution(id)?;
+                Ok(Reply::TerminalCommand(terminal_command_summary(
+                    execution, slot, generation, revision,
+                )))
+            }
+            Request::TerminalCommandWrite { contents, .. } => {
+                if contents.is_empty() || contents.len() > PANE_INPUT_BYTES {
+                    return Err(Failure::Conflict {
+                        detail: format!("terminal command input must contain between 1 and {PANE_INPUT_BYTES} bytes"),
+                    });
+                }
+                let execution = services.containers.execution(id)?;
+                if !execution.running {
+                    return Err(Failure::Conflict {
+                        detail: "terminal command input is only writable while it is running".into(),
+                    });
+                }
+                services.control.execution_write(id, contents)?;
+                Ok(Reply::TerminalCommandInput(crate::port::TerminalCommandInput {
+                    id: id.clone(),
+                    committed: u32::try_from(contents.len()).expect("pane input bound fits u32"),
+                }))
+            }
+            Request::TerminalCommandCloseInput { .. } => {
+                let execution = services.containers.execution(id)?;
+                if !execution.running {
+                    return Err(Failure::Conflict {
+                        detail: "terminal command input can only be closed while it is running".into(),
+                    });
+                }
+                services.control.execution_close_input(id)?;
+                Ok(Reply::Done)
+            }
+            Request::TerminalCommandStart { .. } => unreachable!(),
+            _ => unreachable!(),
+        }
     }
 
     fn command(request: &Request, port: &dyn TerminalSurface) -> Result<Reply, Failure> {
@@ -1649,11 +1897,7 @@ impl Session {
                 let port = self.peer.authority().port(Capability::FilesystemRead, services.files)?;
                 Ok(Reply::FileInventory(port.inventory(&self.filesystem.read)?))
             }
-            Request::FilesystemChanges {
-                observed,
-                after,
-                limit,
-            } => {
+            Request::FilesystemChanges { observed, after, limit } => {
                 if observed.len() != 32 || !observed.bytes().all(|byte| byte.is_ascii_hexdigit()) {
                     return Err(Failure::Failed {
                         detail: "filesystem journal identity must be 32 hexadecimal characters".into(),

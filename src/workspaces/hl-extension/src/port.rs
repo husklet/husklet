@@ -135,6 +135,42 @@ pub struct ExecutionOutputPage {
     pub gap: bool,
 }
 
+/// One supervised command started against an exact terminal-pane snapshot.
+///
+/// The command is an independent workspace execution: its output and exit
+/// status are authoritative and never inferred from the terminal screen.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct TerminalCommand {
+    /// Immutable execution identity. It remains valid if the pane is replaced.
+    pub id: String,
+    /// Pane identity against which creation was fenced.
+    pub slot: String,
+    pub generation: u64,
+    pub revision: u64,
+    pub running: bool,
+    pub exit_code: i64,
+    pub pid: i64,
+    pub command: Vec<String>,
+}
+
+/// Bounded, cursor-addressed output belonging to one terminal command.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct TerminalCommandOutput {
+    pub id: String,
+    pub slot: String,
+    pub generation: u64,
+    pub revision: u64,
+    pub output: ExecutionOutputPage,
+}
+
+/// Positive acknowledgement that all bytes reached a supervised command's
+/// input transport. A missing reply must never be interpreted as committed.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct TerminalCommandInput {
+    pub id: String,
+    pub committed: u32,
+}
+
 /// Bounded container creation authority with no host bind-mount path.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct ContainerCreateSpec {
@@ -1630,8 +1666,8 @@ pub trait WorkspaceFiles {
 #[cfg(test)]
 mod tests {
     use super::{
-        bounded_pane_text, pane_lines, Division, LayoutNode, NetworkStore, Occupant, PaneSummary, PaneText, PANE_LINES,
-        PANE_TEXT_BYTES,
+        Division, LayoutNode, NetworkStore, Occupant, PANE_LINES, PANE_TEXT_BYTES, PaneSummary, PaneText,
+        bounded_pane_text, pane_lines,
     };
 
     #[test]
@@ -1763,44 +1799,54 @@ mod tests {
             protocol: crate::PROTOCOL,
             architectures: vec!["amd64".into()],
         };
-        assert!(super::ExtensionCatalogue {
-            entries: vec![entry.clone()],
-            complete: true,
-        }
-        .validate()
-        .is_ok());
-        assert!(super::ExtensionCatalogue {
-            entries: vec![entry.clone(), entry.clone()],
-            complete: true,
-        }
-        .validate()
-        .is_err());
-        assert!(super::ExtensionCatalogue {
-            entries: vec![super::ExtensionCatalogueEntry {
-                architectures: vec!["amd64".into(), "amd64".into()],
-                ..entry.clone()
-            }],
-            complete: true,
-        }
-        .validate()
-        .is_err());
-        assert!(super::ExtensionCatalogue {
-            entries: vec![super::ExtensionCatalogueEntry {
-                version: String::new(),
-                ..entry.clone()
-            }],
-            complete: true,
-        }
-        .validate()
-        .is_err());
-        assert!(super::ExtensionCatalogue {
-            entries: vec![super::ExtensionCatalogueEntry {
-                description: "unsafe\nmetadata".into(),
-                ..entry
-            }],
-            complete: true,
-        }
-        .validate()
-        .is_err());
+        assert!(
+            super::ExtensionCatalogue {
+                entries: vec![entry.clone()],
+                complete: true,
+            }
+            .validate()
+            .is_ok()
+        );
+        assert!(
+            super::ExtensionCatalogue {
+                entries: vec![entry.clone(), entry.clone()],
+                complete: true,
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            super::ExtensionCatalogue {
+                entries: vec![super::ExtensionCatalogueEntry {
+                    architectures: vec!["amd64".into(), "amd64".into()],
+                    ..entry.clone()
+                }],
+                complete: true,
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            super::ExtensionCatalogue {
+                entries: vec![super::ExtensionCatalogueEntry {
+                    version: String::new(),
+                    ..entry.clone()
+                }],
+                complete: true,
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            super::ExtensionCatalogue {
+                entries: vec![super::ExtensionCatalogueEntry {
+                    description: "unsafe\nmetadata".into(),
+                    ..entry
+                }],
+                complete: true,
+            }
+            .validate()
+            .is_err()
+        );
     }
 }

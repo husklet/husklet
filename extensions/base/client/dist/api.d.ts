@@ -1,5 +1,5 @@
-import type { Capability as GeneratedCapability, FilesystemSelector, ExtensionPreferences, PreferenceValue, Row as WireRow, WireCall, WireReplyFor, WireRequestFor, WireUiEvent } from './generated-protocol.js';
-export type { ExtensionPreferences, FilesystemSelector, PreferenceValue, } from './generated-protocol.js';
+import type { Capability as GeneratedCapability, FilesystemSelector, ExtensionPreferences, PreferenceValue, Row as WireRow, WireCall, WireReplyFor, WireRequestFor, WireUiEvent, TerminalCommand, TerminalCommandInput, TerminalCommandOutput } from './generated-protocol.js';
+export type { ExtensionPreferences, FilesystemSelector, PreferenceValue, TerminalCommand, TerminalCommandInput, TerminalCommandOutput, } from './generated-protocol.js';
 /** One row delivered to a virtualized interface data source. */
 export type DataRow = WireRow;
 /** Environment variable naming the extension's authenticated Unix socket. */
@@ -1516,6 +1516,45 @@ export interface WorkspaceApi {
         }>;
         spawn(slot: string, command: string[]): Promise<void>;
         spawnObserved(slot: string, generation: number, revision: number, command: string[]): Promise<void>;
+        /**
+         * Start a supervised workspace command against one exact terminal snapshot.
+         * Unlike spawn(), completion and exit status never depend on prompt or screen parsing.
+         */
+        commandStart(pane: Pick<PaneText, 'slot' | 'generation' | 'revision'>, command: string[], options?: {
+            workingDirectory?: string;
+            stdin?: boolean;
+        }): Promise<TerminalCommand>;
+        commandInspect(command: TerminalCommand): Promise<TerminalCommand>;
+        commandOutput(command: TerminalCommand, options?: {
+            after?: number;
+            limit?: number;
+        }): Promise<TerminalCommandOutput>;
+        commandWait(command: TerminalCommand, options?: {
+            timeoutMs?: number;
+        }): Promise<TerminalCommand>;
+        commandCancel(command: TerminalCommand, options?: {
+            signal?: string;
+            timeoutMs?: number;
+        }): Promise<TerminalCommand>;
+        /** Returns only after the whole input chunk was flushed by the host transport. */
+        commandWrite(command: TerminalCommand, input: string | Iterable<number>): Promise<TerminalCommandInput>;
+        commandCloseInput(command: TerminalCommand): Promise<void>;
+        /** Run, collect bounded UTF-8 output, and return authoritative process completion. */
+        commandText(pane: Pick<PaneText, 'slot' | 'generation' | 'revision'>, options: {
+            command: string[];
+            workingDirectory?: string;
+            input?: string | Iterable<number>;
+            maxBytes: number;
+            pageLimit?: number;
+            pollIntervalMs?: number;
+            signal?: AbortSignal;
+            cancelSignal?: string;
+            cancelTimeoutMs?: number;
+        }): Promise<{
+            command: TerminalCommand;
+            stdout: string;
+            stderr: string;
+        }>;
         /** Arm and read before CAS spawn, then return a later bounded terminal screen revision. */
         spawnAndWait(slot: string, generation: number, revision: number, command: string[], options?: {
             lines?: number;

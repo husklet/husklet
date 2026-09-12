@@ -29,7 +29,7 @@ wrong caller.
 | Extension shape | Current fit | Relevant API and remaining constraint |
 | --- | --- | --- |
 | Code/embedding index | Strong | `files.pathGrant` distinguishes exact-file roots from recursive subtree roots with host-compatible component matching before any probe; bounded completeness-bearing inventory, identity-preserving ranged reads, and private bounded state support incremental checkpoints. The grant result is a planning snapshot and every operation remains host-authorized. |
-| LLM terminal agent | Strong | Pane inventory, bounded screen text, raw input, command spawn, semantic XML/actions, revisions, and change subscriptions support an observe/act loop without an MCP-specific API. Quiet input waits disclose pane replacement and never settle unrelated replacement content as the input's outcome. |
+| LLM terminal agent | Strong | Pane inventory, bounded screen text, raw input, semantic XML/actions, and a supervised command lifecycle support an observe/act loop without an MCP-specific API. Commands are fenced to an exact pane snapshot, carry immutable identities, bounded cursor output, explicit stdin receipts, cancellation, EOF, and authoritative exit status without parsing prompts. |
 | PostgreSQL GUI | Strong | Exact container/network grants, process/execution APIs, bounded stdin/output, explicit EOF, cancellation, host-resolved credential references, published-port discovery, and virtualized rendered tables cover administration without placing passwords in argv. Credentials have host-private file isolation, not OS-keychain encryption; host port forwarding remains absent. |
 | Container/process inspector | Strong | Container inventories, immutable IDs and generations, exact resource selectors exposed through caller-only `grantedContainers`, `grantedImages`, `grantedNetworks`, and `grantedVolumes`, process snapshots, executions, logs, lifecycle controls, and observed wait helpers are present. |
 | Single-file workspace editor | Strong | `[filesystem]` grants read, write, create, delete, and rename roots independently, and `grantedFilesystem` exposes only the caller's immutable effective selectors, so consent to modify one exact file cannot create, remove, or move it. `stat` plus `writeObserved` provides compare-and-swap replacement. |
@@ -138,6 +138,13 @@ order; the JavaScript client's checks are never treated as a security boundary.
 - `host.terminal.splitObserved(...)` — `terminal_split_observed`, requires `terminals:layout-control`.
 - `host.terminal.spawn(...)` — `terminal_spawn`, requires `terminals:process-control`.
 - `host.terminal.spawnObserved(...)` — `terminal_spawn_observed`, requires `terminals:process-control`.
+- `host.terminal.commandStart(...)` — `terminal_command_start`, requires `terminals:process-control`.
+- `host.terminal.commandInspect(...)` — `terminal_command_inspect`, requires `terminals:output`.
+- `host.terminal.commandOutput(...)` — `terminal_command_output`, requires `terminals:output`.
+- `host.terminal.commandWait(...)` — `terminal_command_wait`, requires `terminals:output`.
+- `host.terminal.commandCancel(...)` — `terminal_command_cancel`, requires `terminals:process-control`.
+- `host.terminal.commandWrite(...)` — `terminal_command_write`, requires `terminals:input`.
+- `host.terminal.commandCloseInput(...)` — `terminal_command_close_input`, requires `terminals:input`.
 - `host.terminal.read(...)` — `terminal_read_pane`, requires `terminals:output`.
 - `host.terminal.writeInput(...)` — `terminal_write_pane`, requires `terminals:input`.
 - `host.terminal.resizeGrid(...)` — `terminal_resize_grid`, requires `terminals:layout-control`.

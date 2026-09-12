@@ -1,5 +1,5 @@
 // Generated from Rust hl-extension protocol/v1.json. Do not edit.
-// Protocol artifact fnv1a64:9a96d96699624f66
+// Protocol artifact fnv1a64:ec45f495d3461b05
 export const PROTOCOL_SPECIFICATION_VERSION = 1;
 export const PROTOCOL_VERSION = 1;
 export const PROTOCOL_BOUNDS = Object.freeze({
@@ -392,6 +392,13 @@ export const PROTOCOL_REPLIES = Object.freeze({
   "terminal_split_observed": "identity",
   "terminal_spawn": "done",
   "terminal_spawn_observed": "done",
+  "terminal_command_start": "terminal_command",
+  "terminal_command_inspect": "terminal_command",
+  "terminal_command_output": "terminal_command_output",
+  "terminal_command_wait": "terminal_command",
+  "terminal_command_cancel": "terminal_command",
+  "terminal_command_write": "terminal_command_input",
+  "terminal_command_close_input": "done",
   "terminal_read_pane": "text",
   "pane_semantic_read": "semantics",
   "pane_semantic_action": "done",
@@ -520,6 +527,13 @@ export const PROTOCOL_REQUEST_CAPABILITIES = Object.freeze({
   "terminal_split_observed": "terminals:layout-control",
   "terminal_spawn": "terminals:process-control",
   "terminal_spawn_observed": "terminals:process-control",
+  "terminal_command_start": "terminals:process-control",
+  "terminal_command_inspect": "terminals:output",
+  "terminal_command_output": "terminals:output",
+  "terminal_command_wait": "terminals:output",
+  "terminal_command_cancel": "terminals:process-control",
+  "terminal_command_write": "terminals:input",
+  "terminal_command_close_input": "terminals:input",
   "terminal_read_pane": "terminals:output",
   "pane_semantic_read": "panes:semantic-read",
   "pane_semantic_action": "panes:semantic-control",
@@ -6941,6 +6955,161 @@ const definitions = {
       }
     ]
   },
+  "TerminalCommand": {
+    "fields": [
+      {
+        "name": "id",
+        "optional": false,
+        "schema": {
+          "kind": "string"
+        }
+      },
+      {
+        "name": "slot",
+        "optional": false,
+        "schema": {
+          "kind": "string"
+        }
+      },
+      {
+        "name": "generation",
+        "optional": false,
+        "schema": {
+          "bits": 64,
+          "kind": "integer",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "signed": false
+        }
+      },
+      {
+        "name": "revision",
+        "optional": false,
+        "schema": {
+          "bits": 64,
+          "kind": "integer",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "signed": false
+        }
+      },
+      {
+        "name": "running",
+        "optional": false,
+        "schema": {
+          "kind": "boolean"
+        }
+      },
+      {
+        "name": "exit_code",
+        "optional": false,
+        "schema": {
+          "bits": 64,
+          "kind": "integer",
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
+          "signed": true
+        }
+      },
+      {
+        "name": "pid",
+        "optional": false,
+        "schema": {
+          "bits": 64,
+          "kind": "integer",
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
+          "signed": true
+        }
+      },
+      {
+        "name": "command",
+        "optional": false,
+        "schema": {
+          "kind": "array",
+          "of": {
+            "kind": "string"
+          }
+        }
+      }
+    ],
+    "kind": "struct",
+    "serde": {}
+  },
+  "TerminalCommandInput": {
+    "fields": [
+      {
+        "name": "id",
+        "optional": false,
+        "schema": {
+          "kind": "string"
+        }
+      },
+      {
+        "name": "committed",
+        "optional": false,
+        "schema": {
+          "bits": 32,
+          "kind": "integer",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "signed": false
+        }
+      }
+    ],
+    "kind": "struct",
+    "serde": {}
+  },
+  "TerminalCommandOutput": {
+    "fields": [
+      {
+        "name": "id",
+        "optional": false,
+        "schema": {
+          "kind": "string"
+        }
+      },
+      {
+        "name": "slot",
+        "optional": false,
+        "schema": {
+          "kind": "string"
+        }
+      },
+      {
+        "name": "generation",
+        "optional": false,
+        "schema": {
+          "bits": 64,
+          "kind": "integer",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "signed": false
+        }
+      },
+      {
+        "name": "revision",
+        "optional": false,
+        "schema": {
+          "bits": 64,
+          "kind": "integer",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "signed": false
+        }
+      },
+      {
+        "name": "output",
+        "optional": false,
+        "schema": {
+          "kind": "ref",
+          "name": "ExecutionOutputPage"
+        }
+      }
+    ],
+    "kind": "struct",
+    "serde": {}
+  },
   "TerminalTopology": {
     "fields": [
       {
@@ -8606,6 +8775,36 @@ const roots = {
           "of": {
             "kind": "ref",
             "name": "ExecutionList"
+          }
+        }
+      },
+      {
+        "name": "terminal_command",
+        "payload": {
+          "kind": "newtype",
+          "of": {
+            "kind": "ref",
+            "name": "TerminalCommand"
+          }
+        }
+      },
+      {
+        "name": "terminal_command_output",
+        "payload": {
+          "kind": "newtype",
+          "of": {
+            "kind": "ref",
+            "name": "TerminalCommandOutput"
+          }
+        }
+      },
+      {
+        "name": "terminal_command_input",
+        "payload": {
+          "kind": "newtype",
+          "of": {
+            "kind": "ref",
+            "name": "TerminalCommandInput"
           }
         }
       },
@@ -10706,6 +10905,399 @@ const roots = {
                 "of": {
                   "kind": "string"
                 }
+              }
+            }
+          ],
+          "kind": "struct"
+        }
+      },
+      {
+        "name": "terminal_command_start",
+        "payload": {
+          "fields": [
+            {
+              "name": "slot",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            },
+            {
+              "name": "generation",
+              "optional": false,
+              "schema": {
+                "bits": 64,
+                "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "signed": false
+              }
+            },
+            {
+              "name": "revision",
+              "optional": false,
+              "schema": {
+                "bits": 64,
+                "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "signed": false
+              }
+            },
+            {
+              "name": "command",
+              "optional": false,
+              "schema": {
+                "kind": "array",
+                "of": {
+                  "kind": "string"
+                }
+              }
+            },
+            {
+              "name": "working_directory",
+              "optional": true,
+              "schema": {
+                "kind": "optional",
+                "of": {
+                  "kind": "string"
+                }
+              }
+            },
+            {
+              "name": "stdin",
+              "optional": true,
+              "schema": {
+                "kind": "boolean"
+              }
+            }
+          ],
+          "kind": "struct"
+        }
+      },
+      {
+        "name": "terminal_command_inspect",
+        "payload": {
+          "fields": [
+            {
+              "name": "id",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            },
+            {
+              "name": "slot",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            },
+            {
+              "name": "generation",
+              "optional": false,
+              "schema": {
+                "bits": 64,
+                "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "signed": false
+              }
+            },
+            {
+              "name": "revision",
+              "optional": false,
+              "schema": {
+                "bits": 64,
+                "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "signed": false
+              }
+            }
+          ],
+          "kind": "struct"
+        }
+      },
+      {
+        "name": "terminal_command_output",
+        "payload": {
+          "fields": [
+            {
+              "name": "id",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            },
+            {
+              "name": "slot",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            },
+            {
+              "name": "generation",
+              "optional": false,
+              "schema": {
+                "bits": 64,
+                "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "signed": false
+              }
+            },
+            {
+              "name": "revision",
+              "optional": false,
+              "schema": {
+                "bits": 64,
+                "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "signed": false
+              }
+            },
+            {
+              "name": "after",
+              "optional": false,
+              "schema": {
+                "bits": 64,
+                "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "signed": false
+              }
+            },
+            {
+              "name": "limit",
+              "optional": false,
+              "schema": {
+                "bits": 16,
+                "kind": "integer",
+                "maximum": 65535,
+                "minimum": 0,
+                "signed": false
+              }
+            }
+          ],
+          "kind": "struct"
+        }
+      },
+      {
+        "name": "terminal_command_wait",
+        "payload": {
+          "fields": [
+            {
+              "name": "id",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            },
+            {
+              "name": "slot",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            },
+            {
+              "name": "generation",
+              "optional": false,
+              "schema": {
+                "bits": 64,
+                "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "signed": false
+              }
+            },
+            {
+              "name": "revision",
+              "optional": false,
+              "schema": {
+                "bits": 64,
+                "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "signed": false
+              }
+            },
+            {
+              "name": "timeout_ms",
+              "optional": false,
+              "schema": {
+                "bits": 32,
+                "kind": "integer",
+                "maximum": 4294967295,
+                "minimum": 0,
+                "signed": false
+              }
+            }
+          ],
+          "kind": "struct"
+        }
+      },
+      {
+        "name": "terminal_command_cancel",
+        "payload": {
+          "fields": [
+            {
+              "name": "id",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            },
+            {
+              "name": "slot",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            },
+            {
+              "name": "generation",
+              "optional": false,
+              "schema": {
+                "bits": 64,
+                "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "signed": false
+              }
+            },
+            {
+              "name": "revision",
+              "optional": false,
+              "schema": {
+                "bits": 64,
+                "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "signed": false
+              }
+            },
+            {
+              "name": "signal",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            },
+            {
+              "name": "timeout_ms",
+              "optional": false,
+              "schema": {
+                "bits": 32,
+                "kind": "integer",
+                "maximum": 4294967295,
+                "minimum": 0,
+                "signed": false
+              }
+            }
+          ],
+          "kind": "struct"
+        }
+      },
+      {
+        "name": "terminal_command_write",
+        "payload": {
+          "fields": [
+            {
+              "name": "id",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            },
+            {
+              "name": "slot",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            },
+            {
+              "name": "generation",
+              "optional": false,
+              "schema": {
+                "bits": 64,
+                "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "signed": false
+              }
+            },
+            {
+              "name": "revision",
+              "optional": false,
+              "schema": {
+                "bits": 64,
+                "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "signed": false
+              }
+            },
+            {
+              "name": "contents",
+              "optional": false,
+              "schema": {
+                "kind": "array",
+                "of": {
+                  "bits": 8,
+                  "kind": "integer",
+                  "maximum": 255,
+                  "minimum": 0,
+                  "signed": false
+                }
+              }
+            }
+          ],
+          "kind": "struct"
+        }
+      },
+      {
+        "name": "terminal_command_close_input",
+        "payload": {
+          "fields": [
+            {
+              "name": "id",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            },
+            {
+              "name": "slot",
+              "optional": false,
+              "schema": {
+                "kind": "string"
+              }
+            },
+            {
+              "name": "generation",
+              "optional": false,
+              "schema": {
+                "bits": 64,
+                "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "signed": false
+              }
+            },
+            {
+              "name": "revision",
+              "optional": false,
+              "schema": {
+                "bits": 64,
+                "kind": "integer",
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "signed": false
               }
             }
           ],

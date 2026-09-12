@@ -1,4 +1,4 @@
-import { TerminalOperationError, connect, workspace } from '@husklet/client';
+import { connect, workspace } from '@husklet/client';
 declare const process: { argv: string[]; stdout: { write(value: string): void } };
 
 type Configuration = { path: string; slot: string; prompt: string; deadlineMs?: number };
@@ -34,32 +34,14 @@ try {
     const cancellation = new AbortController();
     const deadline = setTimeout(() => cancellation.abort('agent interaction deadline'), deadlineMs);
     try {
-      try {
-        const result = await terminal.writeObservedAndWaitForQuietText(
-          observed.snapshot,
-          `${configuration.prompt}\n`,
-          {
-            lines: 80,
-            quietMs: 150,
-            timeoutMs: 5_000,
-            signal: cancellation.signal,
-          },
-        );
-        process.stdout.write(
-          `${JSON.stringify({ context: panes, incomplete: contextIncomplete || !result.settled || result.replaced || (result.changed && result.after.kind === 'ui' && !result.after.complete), selected: { kind: 'terminal', before: observed.text, after: result.changed ? result.after.text : null, afterKind: result.changed ? result.after.kind : null, replacement: result.replaced } })}\n`,
-        );
-      } catch (error) {
-        if (
-          !(error instanceof TerminalOperationError) ||
-          error.operation !== 'write-input' ||
-          !('written' in error.result)
-        ) {
-          throw error;
-        }
-        process.stdout.write(
-          `${JSON.stringify({ context: panes, incomplete: true, selected: { kind: 'terminal', before: observed.text, after: null, replacement: false, inputCommitted: error.result.written, cursor: error.result.after ?? null } })}\n`,
-        );
-      }
+      const result = await terminal.commandText(observed.snapshot, {
+        command: ['sh', '-lc', configuration.prompt],
+        maxBytes: 1024 * 1024,
+        signal: cancellation.signal,
+      });
+      process.stdout.write(
+        `${JSON.stringify({ context: panes, incomplete: contextIncomplete, selected: { kind: 'terminal', before: observed.text, command: result.command.id, stdout: result.stdout, stderr: result.stderr, exitCode: result.command.exit_code, completed: !result.command.running, pane: { slot: result.command.slot, generation: result.command.generation, revision: result.command.revision } } })}\n`,
+      );
     } finally {
       clearTimeout(deadline);
     }
