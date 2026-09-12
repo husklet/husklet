@@ -28,6 +28,7 @@ import {
   acquisitionTechnicalDetail,
   acquisitionLabel,
   acquisitionProgressFraction,
+  availableSections,
   catalogueTrust,
   catalogueCandidateMismatch,
   compactImageReference,
@@ -443,6 +444,49 @@ test('Top presents workspace, extensions, and every resource navigation choice',
     { Length: { Step: 3 } },
     'overview sections use a consistent 12px rhythm',
   );
+});
+
+test('restricted authority packs only reachable navigation groups without empty holes', () => {
+  assert.deepEqual(availableSections(['images:read', 'terminals:read']), ['images', 'terminals']);
+  const stage = host();
+  const frame = stage.render(
+    h(Top, {
+      api: { ...api, grantedCapabilities: ['images:read', 'terminals:read'] },
+      initialSection: 'images',
+      initial: {
+        containers: [],
+        executions: [],
+        images: [],
+        volumes: [],
+        networks: [],
+        terminals: [],
+        extensions: [],
+      },
+    }),
+  );
+  const labels = frame.patches
+    .filter((patch) => patch.SetProp?.prop === 'Label')
+    .map((patch) => patch.SetProp.value.Text);
+  assert.deepEqual(
+    labels.filter((label) => ['Manage', 'Runtime', 'Resources', 'Interface'].includes(label)),
+    ['Resources', 'Interface'],
+    'empty authority groups reserve no heading or vertical spacing',
+  );
+  assert.equal(
+    frame.patches.filter((patch) => patch.Create?.tag === 'NavigationMenuItem').length,
+    2,
+  );
+  const choices = frame.patches
+    .filter((patch) => patch.SetProp?.prop === 'Choices')
+    .find((patch) => patch.SetProp.value?.Choices);
+  assert.deepEqual(
+    choices.SetProp.value.Choices.map((choice) => choice.value),
+    ['images', 'terminals'],
+    'compact and wide navigation expose the same reachable destinations',
+  );
+  assert.ok(labels.includes('Images'), 'the first reachable destination remains visible');
+  for (const unavailable of ['Workspace', 'Containers', 'Volumes', 'Networks'])
+    assert.equal(labels.includes(unavailable), false, unavailable);
 });
 
 test('Top network attachment selects a named container while retaining immutable authority', async () => {

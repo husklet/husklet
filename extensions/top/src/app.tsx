@@ -21,7 +21,13 @@ import {
   ProcessTableSource,
   VolumeDetailsSource,
 } from './model.js';
-import { Navigation, Overview, SECTIONS, type Resource, type Section } from './overview.js';
+import {
+  availableSections,
+  Navigation,
+  Overview,
+  type Resource,
+  type Section,
+} from './overview.js';
 import { Terminals } from './terminals.js';
 import { Processes } from './processes.js';
 import { Executions } from './executions.js';
@@ -32,7 +38,7 @@ import { Containers } from './containers.js';
 import { Workspace } from './workspace.js';
 import { Extensions } from './extensions.js';
 
-export { Overview, SECTIONS } from './overview.js';
+export { availableSections, Overview, SECTIONS } from './overview.js';
 export { Terminals } from './terminals.js';
 export { Processes } from './processes.js';
 export { Executions } from './executions.js';
@@ -64,7 +70,7 @@ export {
   filterInstalledExtensions,
 } from './extensions.js';
 
-const { useCallback, useEffect, useRef, useState } = React;
+const { useCallback, useEffect, useMemo, useRef, useState } = React;
 export const SIDEBAR_WIDTH_KEY = 'sidebar.width';
 export const SIDEBAR_WIDTH_MIN = 144;
 export const SIDEBAR_WIDTH_MAX = 240;
@@ -125,7 +131,15 @@ export function Top({
   initial = {},
   initialSection = 'workspace',
 }: TopProps) {
+  const sections = useMemo(
+    () => availableSections(api.grantedCapabilities),
+    [api.grantedCapabilities],
+  );
+  // A provider deep-link may intentionally open a denied page so its recovery
+  // action can explain and repair authority. Navigation itself lists only
+  // destinations the current installation can use.
   const [section, setSection] = useState<Section>(initialSection);
+  const compactSections = sections.includes(section) ? sections : [section, ...sections];
   const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_WIDTH_DEFAULT);
   const persistedSidebarWidth = useRef<number | null>(null);
   const sidebarWasResized = useRef(false);
@@ -210,7 +224,7 @@ export function Top({
   useEffect(
     () =>
       selections?.subscribe((event) => {
-        if ('pane_provider' in event && SECTIONS.includes(event.pane_provider as Section))
+        if ('pane_provider' in event && sections.includes(event.pane_provider as Section))
           setSection(event.pane_provider as Section);
         if ('snapshot' in event && event.snapshot === 'containers') void reloadContainers();
         if ('snapshot' in event && event.snapshot === 'images') void reloadImages();
@@ -218,7 +232,15 @@ export function Top({
         if ('snapshot' in event && event.snapshot === 'networks') void reloadNetworks();
         if ('snapshot' in event && event.snapshot === 'terminal') void reloadTerminals();
       }),
-    [selections, reloadContainers, reloadImages, reloadVolumes, reloadNetworks, reloadTerminals],
+    [
+      selections,
+      sections,
+      reloadContainers,
+      reloadImages,
+      reloadVolumes,
+      reloadNetworks,
+      reloadTerminals,
+    ],
   );
   useEffect(() => {
     if (typeof api.subscribe !== 'function') return undefined;
@@ -319,15 +341,15 @@ export function Top({
         <Select
           width={{ minimum: { chars: 14 }, maximum: { chars: 24 } }}
           value={section}
-          choices={SECTIONS.map((name) => ({ value: name, label: sectionTitle(name) }))}
+          choices={compactSections.map((name) => ({ value: name, label: sectionTitle(name) }))}
           onChange={(event) => {
             const selected = String(event.value ?? '');
-            if (SECTIONS.includes(selected as Section)) setSection(selected as Section);
+            if (compactSections.includes(selected as Section)) setSection(selected as Section);
           }}
         />
       </Row>
       <Row width={{ minimum: { chars: 18 }, maximum: { chars: 30 } }} height="fill">
-        <Navigation section={section} onSelect={setSection} />
+        <Navigation section={section} sections={sections} onSelect={setSection} />
       </Row>
       {body}
     </Responsive>

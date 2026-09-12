@@ -104,6 +104,7 @@ test('network inventory keeps management and destructive disclosure in one compa
     'Row',
     'CardContent',
   ]);
+  assert.deepEqual(property(stage, 'Manage connections', 'Size'), { ControlSize: 'Small' });
   assert.deepEqual(ancestorTags(stage, 'Danger zone').slice(0, 3), ['Row', 'Row', 'CardContent']);
   assert.deepEqual(property(stage, 'Danger zone', 'Tooltip'), {
     Text: 'Remove this network from the workspace',
@@ -253,6 +254,9 @@ test('resource inspection actions become explicit compact close actions', async 
   await settled();
   assert.ok(labelled(networkStage, 'Network details'));
   assert.deepEqual(property(networkStage, 'Hide connections', 'Variant'), { Variant: 'Filled' });
+  assert.deepEqual(property(networkStage, 'Hide connections', 'Size'), {
+    ControlSize: 'Small',
+  });
   invoke(networkStage, 'Hide connections');
   await settled();
   assert.equal(currentLabels(networkStage).includes('Network details'), false);

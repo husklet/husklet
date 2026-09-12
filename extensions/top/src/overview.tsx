@@ -19,6 +19,7 @@ import {
   type ContainerSummary,
   type ExecutionSummary,
   type ExtensionSummary,
+  type ExtensionCapability,
   type ImageSummary,
   type NetworkSummary,
   type TabSummary,
@@ -39,6 +40,27 @@ export const SECTIONS = [
 ] as const;
 export type Section = (typeof SECTIONS)[number];
 
+const SECTION_CAPABILITIES: Record<Section, readonly ExtensionCapability[]> = {
+  workspace: ['workspaces:read'],
+  settings: ['workspaces:read'],
+  extensions: ['extensions:read'],
+  containers: ['containers:read'],
+  processes: ['containers:read'],
+  executions: ['containers:read'],
+  images: ['images:read'],
+  volumes: ['volumes:read'],
+  networks: ['networks:read'],
+  terminals: ['terminals:read'],
+};
+
+export function availableSections(granted: readonly ExtensionCapability[] | undefined): Section[] {
+  if (granted === undefined) return [...SECTIONS];
+  const held = new Set(granted);
+  return SECTIONS.filter((section) =>
+    SECTION_CAPABILITIES[section].some((capability) => held.has(capability)),
+  );
+}
+
 export type Resource<T> = {
   data: T[] | undefined;
   loading: boolean;
@@ -49,9 +71,11 @@ export type Resource<T> = {
 
 export function Navigation({
   section,
+  sections = SECTIONS,
   onSelect,
 }: {
   section: Section;
+  sections?: readonly Section[];
   onSelect: (section: Section) => void;
 }) {
   const groups: { label: string; sections: Section[] }[] = [
@@ -64,25 +88,31 @@ export function Navigation({
     <Column grow={false} width="fill" height="fill" pad={1} gap={1}>
       <Scroll grow width="fill" height="fill">
         <Column gap={1}>
-          {groups.map((group) => (
-            <Column key={group.label} gap={0}>
-              <ListSubheader label={group.label} />
-              <NavigationMenu gap={0}>
-                {group.sections.map((name) => (
-                  <NavigationMenuItem
-                    key={name}
-                    label={navigationTitle(name)}
-                    icon={navigationIcon(name)}
-                    selected={section === name}
-                    variant={section === name ? 'filled' : 'ghost'}
-                    tone={section === name ? 'accent' : 'neutral'}
-                    tooltip={`Open ${navigationTitle(name)}`}
-                    onInvoke={() => onSelect(name)}
-                  />
-                ))}
-              </NavigationMenu>
-            </Column>
-          ))}
+          {groups
+            .map((group) => ({
+              ...group,
+              sections: group.sections.filter((candidate) => sections.includes(candidate)),
+            }))
+            .filter((group) => group.sections.length > 0)
+            .map((group) => (
+              <Column key={group.label} gap={0}>
+                <ListSubheader label={group.label} />
+                <NavigationMenu gap={0}>
+                  {group.sections.map((name) => (
+                    <NavigationMenuItem
+                      key={name}
+                      label={navigationTitle(name)}
+                      icon={navigationIcon(name)}
+                      selected={section === name}
+                      variant={section === name ? 'filled' : 'ghost'}
+                      tone={section === name ? 'accent' : 'neutral'}
+                      tooltip={`Open ${navigationTitle(name)}`}
+                      onInvoke={() => onSelect(name)}
+                    />
+                  ))}
+                </NavigationMenu>
+              </Column>
+            ))}
         </Column>
       </Scroll>
     </Column>

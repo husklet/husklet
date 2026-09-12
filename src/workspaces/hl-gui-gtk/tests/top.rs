@@ -140,33 +140,31 @@ mod unix {
             .set_write_timeout(Some(DEADLINE))
             .expect("Top writes are bounded");
         let mut wire = Wire::new(stream);
+        let mut granted = vec![
+            Capability::Interface,
+            Capability::PreferenceRead,
+            Capability::WorkspaceRead,
+            Capability::ExtensionRead,
+            Capability::ExtensionInstall,
+            Capability::ImageRead,
+            Capability::NetworkRead,
+            Capability::NetworkCreate,
+            Capability::NetworkRemove,
+            Capability::NetworkConnect,
+            Capability::NetworkDisconnect,
+            Capability::NetworkPublish,
+            Capability::TerminalRead,
+        ];
+        if !deny_volume_access {
+            granted.extend([Capability::ContainerRead, Capability::VolumeRead]);
+        }
         wire.send(
             &codec::welcome(&Welcome {
                 protocol: PROTOCOL,
                 host: "top-gtk-e2e".into(),
                 workspace: "fixture-workspace".into(),
                 peer: ExtensionName::new("top").expect("valid extension name"),
-                granted: Grant::new([
-                    Capability::Interface,
-                    Capability::PreferenceRead,
-                    Capability::WorkspaceRead,
-                    Capability::ExtensionRead,
-                    Capability::ExtensionInstall,
-                    Capability::ContainerRead,
-                    Capability::ImageRead,
-                    if deny_volume_access {
-                        Capability::Interface
-                    } else {
-                        Capability::VolumeRead
-                    },
-                    Capability::NetworkRead,
-                    Capability::NetworkCreate,
-                    Capability::NetworkRemove,
-                    Capability::NetworkConnect,
-                    Capability::NetworkDisconnect,
-                    Capability::NetworkPublish,
-                    Capability::TerminalRead,
-                ]),
+                granted: Grant::new(granted),
                 filesystem: hl_extension::FilesystemGrant::default(),
                 containers: hl_extension::ContainerGrant::default(),
                 images: hl_extension::ImageGrant::default(),
@@ -2160,6 +2158,19 @@ mod unix {
             capture(&window, "volume-detail-collapsed-narrow", 600, 800);
         }
         if fixture == "populated" && deny_volume_access {
+            let headings = widgets_with_class(&root, "hl-listsubheader")
+                .iter()
+                .filter_map(|header| header.downcast_ref::<gtk::Label>())
+                .map(|header| header.text().to_string())
+                .collect::<Vec<_>>();
+            assert_eq!(
+                headings,
+                ["Manage", "Resources", "Interface"],
+                "restricted navigation packs surviving groups without a Runtime hole"
+            );
+            assert!(!has_label(&root, "Containers"));
+            assert!(!has_label(&root, "Processes"));
+            assert!(!has_label(&root, "Executions"));
             let _ = surface.reports().drain();
             find_button(&root, "Inspect").emit_clicked();
             settle_toolkit();
