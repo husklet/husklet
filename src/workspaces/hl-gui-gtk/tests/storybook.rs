@@ -1448,7 +1448,7 @@ mod unix {
                 .into_iter()
                 .filter(|frame| frame.has_css_class("hl-card"))
                 .collect::<Vec<_>>();
-            assert_eq!(cards.len(), 5, "Card workbench must render five bounded live specimens");
+            assert_eq!(cards.len(), 6, "Card workbench must render six bounded live specimens");
             assert!(
                 cards
                     .iter()
@@ -1502,6 +1502,15 @@ mod unix {
                         .any(|label| label.text() == "Compact card")
                 })
                 .expect("Card sizing specimen crossed the real extension socket");
+            let inventory = cards
+                .iter()
+                .find(|card| {
+                    descendants::<gtk::Label>(card.upcast_ref())
+                        .iter()
+                        .any(|label| label.text() == "Inventory record")
+                })
+                .expect("fill-width inventory Card crossed the real extension socket");
+            assert!(inventory.hexpands(), "inventory Card must retain native fill authority");
             assert!(!compact.hexpands(), "32ch Card must not inherit native fill authority");
             assert!(
                 compact.width() < cards[0].width(),
@@ -1516,6 +1525,11 @@ mod unix {
             assert!(
                 !compact.hexpands(),
                 "32ch Card gained fill authority after a narrow resize"
+            );
+            assert!(
+                inventory.width() >= 540,
+                "fill-width inventory Card collapsed to {}px at narrow width",
+                inventory.width()
             );
             assert!(long.width() <= 552, "long Card copy escaped 16px narrow insets");
             capture_story(&realized_window, "Card narrow");

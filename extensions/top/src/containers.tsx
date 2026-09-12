@@ -209,7 +209,7 @@ export function Containers({
           onRetry={resource.reload}
         >
           {view.records.map((item) => (
-            <Card key={item.id} variant={selected === item.id ? 'filled' : 'outline'}>
+            <Card key={item.id} variant={selected === item.id ? 'filled' : 'outline'} width="fill">
               <CardHeader
                 label={item.name || shortId(item.id)}
                 detail={item.image}

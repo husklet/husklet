@@ -363,6 +363,16 @@ mod unix {
                 assert!(refresh.has_css_class("hl-iconbutton"));
                 assert!(refresh.has_css_class("size-small"));
                 assert!(refresh.grab_focus(), "container refresh is keyboard reachable");
+                let card = widgets_with_class(&root, "hl-card")
+                    .into_iter()
+                    .next()
+                    .expect("container inventory renders a card");
+                let minimum = if width == 1_200 { 900 } else { 540 };
+                assert!(
+                    card.width() >= minimum,
+                    "{width_name} container card collapsed to {}px instead of using the page width",
+                    card.width()
+                );
             }
             if fixture == "populated" && name == "settings" {
                 let label = find_label(&root, "Execution lifetime");

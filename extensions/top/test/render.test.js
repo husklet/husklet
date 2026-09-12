@@ -129,6 +129,20 @@ function containerResource(...ids) {
   };
 }
 
+test('container inventory records fill the available page width', () => {
+  const stage = host();
+  stage.render(
+    h(Containers, {
+      api,
+      resource: containerResource('a'.repeat(64)),
+      onOpenExtensions: () => {},
+    }),
+  );
+  assert.deepEqual(ancestorProperty(stage, 'container-1', 'Card', 'Width'), {
+    Length: 'Fill',
+  });
+});
+
 function chooseContainer(stage, id) {
   const choice = stage.frames
     .flatMap((frame) => frame.patches)

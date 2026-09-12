@@ -18,22 +18,41 @@ function props(frame, id) {
   );
 }
 
+function ancestorProps(frame, id, tag) {
+  const patches = frame.patches;
+  const tags = new Map(
+    patches.filter((patch) => patch.Create).map((patch) => [patch.Create.id, patch.Create.tag]),
+  );
+  const parents = new Map(
+    patches
+      .filter((patch) => patch.Insert)
+      .map((patch) => [patch.Insert.child, patch.Insert.parent]),
+  );
+  let node = id;
+  while (parents.has(node)) {
+    node = parents.get(node);
+    if (tags.get(node) === tag) return props(frame, node);
+  }
+  return undefined;
+}
+
 test('Card owns a dedicated single-component document with canonical anatomy', () => {
   assert.equal(componentPages.Card, CardWorkbench);
   const frame = host().render(h(CardWorkbench));
   const headings = creations(frame, 'Heading').map((id) => props(frame, id).Label?.Text);
-  assert.deepEqual(headings.slice(0, 6), [
+  assert.deepEqual(headings.slice(0, 7), [
     'Card',
     'Overview',
     'Anatomy',
     'Variants',
     'Sizing',
+    'Inventory layout',
     'Wrapping',
   ]);
   assert(headings.includes('API'));
 
   const cards = creations(frame, 'Card');
-  assert.equal(cards.length, 5);
+  assert.equal(cards.length, 6);
   const variants = cards.map((id) => props(frame, id).Variant?.Variant);
   assert(variants.includes('Outline'));
   assert(variants.includes('Filled'));
@@ -44,6 +63,11 @@ test('Card owns a dedicated single-component document with canonical anatomy', (
     cards.some((id) => props(frame, id).Width?.Length?.Chars === 32),
     'Card documents a bounded native outer width',
   );
+  const inventory = creations(frame, 'CardHeader').find(
+    (id) => props(frame, id).Label?.Text === 'Inventory record',
+  );
+  assert.ok(inventory, 'Card documents an operational inventory record');
+  assert.deepEqual(ancestorProps(frame, inventory, 'Card')?.Width, { Length: 'Fill' });
 });
 
 test('Card examples keep compact explicit actions and long copy inside the component', () => {

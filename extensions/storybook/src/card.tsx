@@ -85,6 +85,24 @@ export function CardWorkbench() {
         </Card>
       </DocumentationSection>
 
+      <DocumentationSection title="Inventory layout">
+        <Text
+          label="Use fill width for a single-column operational inventory. It preserves the page rhythm and leaves room for identity, state, and actions at narrow widths."
+          color="text-dim"
+          wrap
+        />
+        <Card variant="outline" width="fill">
+          <CardHeader label="Inventory record" detail="alpine:3.20" />
+          <CardContent>
+            <Text label="Exited · ID aaaaaaaaaaaa" color="text-dim" />
+          </CardContent>
+          <CardActions>
+            <Button label="Details" size="small" />
+            <Button label="Start" size="small" variant="outline" />
+          </CardActions>
+        </Card>
+      </DocumentationSection>
+
       <DocumentationSection title="Wrapping">
         <Card variant="outline" width="fill">
           <CardHeader
