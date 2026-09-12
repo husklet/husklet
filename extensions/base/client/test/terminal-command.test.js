@@ -4,11 +4,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { mkdtemp, rm } from 'node:fs/promises';
 import test from 'node:test';
-import { connect, TerminalCommandOperationError, workspace } from '../dist/index.js';
+import { connect, ExtensionError, TerminalCommandOperationError, workspace } from '../dist/index.js';
 import { CONTROL, KIND, Reader, encode } from '../dist/wire.js';
 
 const id = 'e'.repeat(32);
-const owner = 'sample';
+const owner = 'a'.repeat(32);
 const pane = { slot: 'term-1', generation: 3, revision: 9 };
 const running = {
   id,
@@ -192,6 +192,68 @@ test('supervised command output survives reconnect and originating pane replacem
     await resumed.close();
   } finally {
     for (const connection of connections) connection.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('a command from a replaced installation is denied over fragmented framing without poisoning the session', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-terminal-command-incarnation-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const requests = [];
+  const server = net.createServer((socket) => {
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.kind !== KIND.request) continue;
+        requests.push(frame.payload);
+        const payload =
+          frame.payload.call === 'terminal_command_output'
+            ? {
+                error: 'denied',
+                capability: 'terminals:output',
+                detail: 'terminal command belongs to another extension installation',
+              }
+            : {
+                reply: 'workspace',
+                with: { name: 'dev', architecture: 'arm64', image: 'alpine' },
+              };
+        fragmented(socket, {
+          channel: frame.channel,
+          kind: KIND.response,
+          ...(payload.error ? { flags: 3 } : {}),
+          payload,
+        });
+      }
+    });
+    fragmented(socket, {
+      channel: CONTROL,
+      kind: KIND.open,
+      payload: {
+        protocol: 1,
+        peer: 'replacement-installation',
+        granted: ['terminals:output', 'workspaces:read'],
+      },
+    });
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    await assert.rejects(
+      workspace(session).terminal.commandOutput(running, { after: 0, limit: 1 }),
+      (error) =>
+        error instanceof ExtensionError &&
+        error.kind === 'denied' &&
+        error.message.includes('another extension installation'),
+    );
+    assert.equal((await workspace(session).info()).name, 'dev');
+    assert.deepEqual(requests[0], {
+      call: 'terminal_command_output',
+      with: { id, owner, ...pane, after: 0, limit: 1 },
+    });
+    assert.equal(requests[1].call, 'workspace_info');
+    await session.close();
+  } finally {
     await new Promise((resolve) => server.close(resolve));
     await rm(directory, { recursive: true, force: true });
   }

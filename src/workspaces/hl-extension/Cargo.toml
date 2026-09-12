@@ -20,6 +20,7 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 syn = { version = "2", features = ["extra-traits", "full", "parsing"] }
 toml = { workspace = true }
+uuid = { workspace = true }
 
 [lints]
 workspace = true

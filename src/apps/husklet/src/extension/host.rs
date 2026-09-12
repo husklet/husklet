@@ -838,7 +838,7 @@ fn converse<S: Supply>(supply: &Arc<S>, plan: &Plan, queue: &Queue, voice: &Voic
     let opened = Conversation::new_scoped_owned(
         stream,
         plan.authority(),
-        plan.record.name.to_string(),
+        plan.record.incarnation.clone(),
         plan.workspace.clone(),
         queue.clone(),
         plan.record.containers.clone(),
@@ -1186,6 +1186,7 @@ tab_title = "Sample"
     fn plan(socket: &Path) -> Plan {
         let manifest = manifest();
         let record = Record {
+            incarnation: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
             containers: hl_extension::ContainerGrant::default(),
             images: hl_extension::ImageGrant::default(),
             networks: hl_extension::NetworkGrant::default(),

@@ -419,10 +419,21 @@ fn a_record_round_trips_through_serde_unchanged() {
 
 #[test]
 fn a_record_written_before_versions_were_persisted_remains_readable() {
-    let old = r#"{"name":"containers","image_digest":"sha256:first","granted":["containers:read"],"enabled":false,"installed_at":1000,"pane_providers":[]}"#;
+    let old = r#"{"name":"containers","incarnation":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","image_digest":"sha256:first","granted":["containers:read"],"enabled":false,"installed_at":1000,"pane_providers":[]}"#;
     let record: Record = serde_json::from_str(old).expect("legacy record");
     assert_eq!(record.version, "");
     assert_eq!(record.image_digest, "sha256:first");
+}
+
+#[test]
+fn a_record_without_an_authority_incarnation_is_not_reused() {
+    let stale = r#"{"name":"containers","image_digest":"sha256:first","granted":["containers:read"],"enabled":false,"installed_at":1000,"pane_providers":[]}"#;
+    assert!(serde_json::from_str::<Record>(stale).is_err());
+    let malformed = stale.replace(
+        "\"image_digest\"",
+        "\"incarnation\":\"same-name\",\"image_digest\"",
+    );
+    assert!(serde_json::from_str::<Record>(&malformed).is_err());
 }
 
 #[test]

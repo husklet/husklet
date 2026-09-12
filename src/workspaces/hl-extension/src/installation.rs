@@ -27,6 +27,9 @@ use crate::manifest::{
 pub struct Record {
     /// Identity of the extension, and the key it is stored under.
     pub name: ExtensionName,
+    /// Immutable authority incarnation, rotated by every lifecycle replacement.
+    #[serde(deserialize_with = "deserialize_incarnation")]
+    pub incarnation: String,
     /// Digest of the image the grant was given for.
     pub image_digest: String,
     /// Manifest version consented to for this digest. Empty only for records
@@ -63,6 +66,28 @@ pub struct Record {
     /// Identity and authority remain the separate fields above.
     #[serde(default)]
     pub declaration: Option<Manifest>,
+}
+
+fn incarnation() -> String {
+    uuid::Uuid::new_v4().simple().to_string()
+}
+
+fn deserialize_incarnation<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = <String as serde::Deserialize>::deserialize(deserializer)?;
+    if value.len() == 32
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        Ok(value)
+    } else {
+        Err(serde::de::Error::custom(
+            "extension incarnation must be exactly 32 lowercase hexadecimal characters",
+        ))
+    }
 }
 
 impl Record {
@@ -451,6 +476,7 @@ impl Installation {
         let entry = self.entries.entry(manifest.name.clone()).or_insert_with(|| {
             let mut record = Record {
                 name: manifest.name.clone(),
+                incarnation: incarnation(),
                 image_digest: digest.to_owned(),
                 version: manifest.version.clone(),
                 granted,
@@ -576,6 +602,7 @@ impl Installation {
         }
         let mut next = Record {
             name: update.name,
+            incarnation: incarnation(),
             image_digest: update.candidate_digest,
             version: update.candidate_version,
             granted,
@@ -622,7 +649,10 @@ impl Installation {
             .entries
             .get_mut(name)
             .ok_or_else(|| Objection::Absence(name.clone()))?;
-        entry.record.enabled = true;
+        if !entry.record.enabled {
+            entry.record.enabled = true;
+            entry.record.incarnation = incarnation();
+        }
         Ok(&entry.record)
     }
 
@@ -636,7 +666,10 @@ impl Installation {
             .entries
             .get_mut(name)
             .ok_or_else(|| Objection::Absence(name.clone()))?;
-        entry.record.enabled = false;
+        if entry.record.enabled {
+            entry.record.enabled = false;
+            entry.record.incarnation = incarnation();
+        }
         // A deliberate disable is also an explicit answer to a crash loop.
         // Retaining the terminal marker would present a stopped extension as
         // faulted forever and make a later enable indistinguishable from retry.
@@ -1083,6 +1116,56 @@ mod tests {
                 .install(&manifest, "sha256:b", &manifest.capabilities, 20)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn lifecycle_replacements_rotate_the_command_authority_incarnation() {
+        fn assert_incarnation(value: &str) {
+            assert_eq!(value.len(), 32);
+            assert!(value
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)));
+        }
+
+        let mut installation = Installation::new();
+        let mut first_manifest = manifest(&[Capability::Interface]);
+        let name = first_manifest.name.clone();
+        let installed = installation
+            .install(&first_manifest, "sha256:first", &first_manifest.capabilities, 1)
+            .expect("installed")
+            .incarnation
+            .clone();
+        assert_incarnation(&installed);
+        assert_eq!(installation.record(&name).expect("same record").incarnation, installed);
+
+        let enabled = installation.enable(&name).expect("enabled").incarnation.clone();
+        assert_incarnation(&enabled);
+        assert_ne!(enabled, installed);
+        assert_eq!(
+            installation.enable(&name).expect("still enabled").incarnation,
+            enabled,
+            "idempotent lifecycle requests do not invalidate reconnect authority"
+        );
+        let disabled = installation.disable(&name).expect("disabled").incarnation.clone();
+        assert_ne!(disabled, enabled);
+
+        first_manifest.version = "2.0.0".to_owned();
+        let update = installation.prepare_update(&first_manifest, "sha256:second").expect("update");
+        let updated = installation
+            .commit_update(update, &first_manifest.capabilities, 2, |_, _| Ok::<_, ()>(()))
+            .expect("committed")
+            .incarnation
+            .clone();
+        assert_ne!(updated, disabled);
+
+        installation.uninstall(&name).expect("uninstalled");
+        let reinstalled = installation
+            .install(&first_manifest, "sha256:second", &first_manifest.capabilities, 3)
+            .expect("reinstalled")
+            .incarnation
+            .clone();
+        assert_incarnation(&reinstalled);
+        assert_ne!(reinstalled, updated);
     }
 
     #[test]

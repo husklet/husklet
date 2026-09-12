@@ -994,9 +994,7 @@ function exactTerminalCommand(command) {
   const id = immutableIdentity(command?.id, [32], 'terminal command');
   if (
     typeof command?.owner !== 'string' ||
-    command.owner.length === 0 ||
-    command.owner.length > 64 ||
-    !/^[a-z0-9][a-z0-9._-]*$/.test(command.owner) ||
+    !/^[0-9a-f]{32}$/.test(command.owner) ||
     typeof command?.slot !== 'string' ||
     command.slot.length === 0 ||
     !Number.isSafeInteger(command.generation) ||

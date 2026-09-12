@@ -604,6 +604,7 @@ mod halt_tests {
             workspace_environment: hl_extension::WorkspaceEnvironmentGrant::default(),
         };
         let record = Record {
+            incarnation: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
             containers: hl_extension::ContainerGrant::default(),
             images: hl_extension::ImageGrant::default(),
             networks: hl_extension::NetworkGrant::default(),

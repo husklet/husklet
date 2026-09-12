@@ -130,7 +130,7 @@ groups
   .get('Terminal and panes')
   .push(
     '- A supervised terminal command remains inspectable, readable, writable, waitable, and cancellable by its immutable returned identity after its originating pane is replaced or the extension reconnects. The pane snapshot fences creation only.',
-    '- Every supervised command carries its authenticated extension owner. All follow-up calls echo that owner and the Rust host rejects a copied command from another extension before execution lookup, while reconnects under the same extension identity remain valid.',
+    '- Every supervised command carries its authenticated, immutable installation incarnation. All follow-up calls echo that owner and the Rust host rejects copied or lifecycle-stale command authority before execution lookup. Reconnecting the same installed record remains valid; disable, update, regrant, uninstall, and reinstall rotate or discard the incarnation.',
     '- `host.terminal.commandText(...)` throws `TerminalCommandOperationError` after any post-start failure, preserving the immutable command, failed phase, and last completely consumed output cursor so reconnecting callers can resume without relaunching or guessing.',
   );
 groups

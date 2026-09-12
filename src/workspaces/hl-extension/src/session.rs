@@ -1700,9 +1700,7 @@ impl Session {
             _ => unreachable!(),
         };
         immutable_identity(id, &[32], "terminal command")?;
-        crate::ExtensionName::new(owner.clone()).map_err(|_| Failure::Conflict {
-            detail: "terminal command owner is not a bounded extension identity".into(),
-        })?;
+        immutable_identity(owner, &[32], "terminal command owner")?;
         if owner != &self.extension_identity {
             return Err(Failure::Denied {
                 capability: request.capability().as_str().into(),

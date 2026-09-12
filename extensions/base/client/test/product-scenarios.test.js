@@ -125,6 +125,7 @@ function respond(socket, frame, payload) {
 }
 
 test('LLM terminal agent runs a supervised command without parsing a prompt', async () => {
+  const commandOwner = 'a'.repeat(32);
   const pane = {
     slot: 'term',
     generation: 4,
@@ -206,17 +207,17 @@ test('LLM terminal agent runs a supervised command without parsing a prompt', as
         });
         respond(socket, frame, {
           reply: 'terminal_command',
-          with: { id: 'e'.repeat(32), owner: 'product-scenario', slot: 'term', generation: 4, revision: 8, running: true, exit_code: 0, pid: 19, command: ['sh', '-lc', 'explain status'] },
+          with: { id: 'e'.repeat(32), owner: commandOwner, slot: 'term', generation: 4, revision: 8, running: true, exit_code: 0, pid: 19, command: ['sh', '-lc', 'explain status'] },
         });
       } else if (call === 'terminal_command_output') {
         respond(socket, frame, {
           reply: 'terminal_command_output',
-          with: { id: 'e'.repeat(32), owner: 'product-scenario', slot: 'term', generation: 4, revision: 8, output: { entries: [{ sequence: 1, timestamp_ms: 1, stream: 'stdout', bytes: Array.from(new TextEncoder().encode('healthy\n')) }], next: 1, more: false, eof: true, gap: false } },
+          with: { id: 'e'.repeat(32), owner: commandOwner, slot: 'term', generation: 4, revision: 8, output: { entries: [{ sequence: 1, timestamp_ms: 1, stream: 'stdout', bytes: Array.from(new TextEncoder().encode('healthy\n')) }], next: 1, more: false, eof: true, gap: false } },
         });
       } else if (call === 'terminal_command_wait') {
         respond(socket, frame, {
           reply: 'terminal_command',
-          with: { id: 'e'.repeat(32), owner: 'product-scenario', slot: 'term', generation: 4, revision: 8, running: false, exit_code: 17, pid: 0, command: ['sh', '-lc', 'explain status'] },
+          with: { id: 'e'.repeat(32), owner: commandOwner, slot: 'term', generation: 4, revision: 8, running: false, exit_code: 17, pid: 0, command: ['sh', '-lc', 'explain status'] },
         });
       }
     },

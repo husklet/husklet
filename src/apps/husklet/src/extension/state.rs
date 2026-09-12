@@ -228,6 +228,7 @@ mod tests {
         let temporary = tempfile::tempdir().expect("temporary directory");
         let records = records(temporary.path());
         let record = Record {
+            incarnation: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
             containers: hl_extension::ContainerGrant::default(),
             images: hl_extension::ImageGrant::default(),
             networks: hl_extension::NetworkGrant::default(),
@@ -256,6 +257,7 @@ mod tests {
         let name = ExtensionName::new("sample").expect("name");
         records
             .save(&Record {
+                incarnation: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
                 containers: hl_extension::ContainerGrant::default(),
                 images: hl_extension::ImageGrant::default(),
                 networks: hl_extension::NetworkGrant::default(),
