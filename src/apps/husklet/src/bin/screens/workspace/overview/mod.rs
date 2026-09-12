@@ -222,10 +222,11 @@ impl<'a> Overview<'a> {
                 &[]
             };
             let name = entry.name.clone();
+            let image_digest = entry.image_digest.clone();
             let anchored = Rc::clone(&anchored);
             let faulted = Rc::new(move |restarts| {
                 if let Some(shelf) = anchored.borrow().upgrade() {
-                    shelf.fault(&name, restarts);
+                    shelf.fault(&name, &image_digest, restarts);
                 }
             });
             let events = observed

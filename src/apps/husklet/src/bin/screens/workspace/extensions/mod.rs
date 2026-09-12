@@ -168,8 +168,12 @@ impl Shelf {
         self.revision.set(revision);
     }
 
-    pub fn fault(self: &Rc<Self>, name: &ExtensionName, restarts: u32) {
-        if let Err(refusal) = self.roster.borrow_mut().fault(name, restarts) {
+    pub fn fault(self: &Rc<Self>, name: &ExtensionName, image_digest: &str, restarts: u32) {
+        if let Err(refusal) = self
+            .roster
+            .borrow_mut()
+            .fault_if_digest(name, image_digest, restarts)
+        {
             hl_log::hl_error!(hl_log::tag::RUNTIME, "recording extension fault for {name}: {refusal}");
         }
         self.refresh(name);

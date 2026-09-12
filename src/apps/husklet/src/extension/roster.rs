@@ -471,6 +471,23 @@ impl<S: Storage> Roster<S> {
     /// Records a crash loop observed by the live host and makes it visible to
     /// every central Settings page, including after an application restart.
     pub fn fault(&mut self, name: &ExtensionName, restarts: u32) -> Result<(), Refusal> {
+        self.fault_loaded(name, restarts)
+    }
+
+    /// Records a crash only for the exact sidecar incarnation the host observed.
+    pub fn fault_if_digest(
+        &mut self,
+        name: &ExtensionName,
+        image_digest: &str,
+        restarts: u32,
+    ) -> Result<(), Refusal> {
+        let _transition = registration_lock();
+        self.reload()?;
+        self.require_digest(name, image_digest)?;
+        self.fault_loaded(name, restarts)
+    }
+
+    fn fault_loaded(&mut self, name: &ExtensionName, restarts: u32) -> Result<(), Refusal> {
         let previous = self.installation.clone();
         self.installation.fault(name, restarts)?;
         if let Err(fault) = self.records.save_fault(name, restarts) {
@@ -950,6 +967,34 @@ mod tests {
         assert_eq!(persisted[0].image_digest, "sha256:new");
         assert_eq!(persisted[0].granted, replacement.capabilities);
         assert_eq!(persisted[0].stage, Stage::Standby);
+    }
+
+    #[test]
+    fn late_fault_from_removed_sidecar_cannot_fault_its_replacement() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let asked = manifest("sample", &[Capability::Interface]);
+        let mut installer = opened(temporary.path());
+        installer
+            .register(&asked, "sha256:old", &asked.capabilities, 7)
+            .expect("old install");
+        installer.enable(&asked.name).expect("old enabled");
+        let mut old_host = opened(temporary.path());
+
+        installer.remove_if_digest(&asked.name, "sha256:old").expect("old removal");
+        let replacement = manifest("sample", &[Capability::ContainerRead]);
+        installer
+            .register(&replacement, "sha256:new", &replacement.capabilities, 8)
+            .expect("replacement install");
+        installer.enable(&replacement.name).expect("replacement enabled");
+
+        assert!(old_host
+            .fault_if_digest(&asked.name, "sha256:old", 5)
+            .is_err());
+        let persisted = opened(temporary.path()).entries();
+        assert_eq!(persisted.len(), 1);
+        assert_eq!(persisted[0].image_digest, "sha256:new");
+        assert_eq!(persisted[0].granted, replacement.capabilities);
+        assert_eq!(persisted[0].stage, Stage::Duty);
     }
 
     #[test]
