@@ -314,6 +314,17 @@ test('the rendered million-row table exposes only the declared editable column',
   );
 });
 
+test('the DataTable story teaches a quiet edit affordance instead of permanent form chrome', () => {
+  const frame = host().render(h(LargeDataTableStory, { source: new LargeRecordSource() }));
+  assert.ok(
+    frame.patches.some(
+      (patch) =>
+        patch.SetProp?.prop === 'Label' &&
+        patch.SetProp.value?.Text?.includes('Editable cells read like table data at rest'),
+    ),
+  );
+});
+
 test('the high-density operations story is selectable in the shipped playground', () => {
   const stage = host();
   const source = new LargeRecordSource();

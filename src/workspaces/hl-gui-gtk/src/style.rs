@@ -299,6 +299,9 @@ fn components(css: &mut String, theme: &Theme) {
          .hl-chip {{ min-height: 24px; padding: 1px 8px; border-radius: {pill}px; background: {raised}; border-color: {line}; }}\n\
          .hl-separator {{ background: {line}; min-height: 1px; min-width: 1px; }}\n\
          .hl-datatable, .hl-list {{ background: {surface}; border: 1px solid {line}; border-radius: {radius}px; }}\n\
+         columnview entry.hl-table-editor {{ min-height: 24px; padding: 1px 8px; margin: 2px 0; background: transparent; border-color: transparent; box-shadow: none; border-radius: {radius}px; }}\n\
+         columnview entry.hl-table-editor:hover {{ background: {raised}; border-color: {line}; }}\n\
+         columnview entry.hl-table-editor:focus-within {{ background: {surface}; border-color: {accent}; box-shadow: inset 0 0 0 1px {accent}; }}\n\
          .hl-heading {{ font-weight: 600; letter-spacing: -0.1px; }}\n\
          .hl-text {{ color: {text}; }}\n\
          columnview header button {{ background: {raised}; color: {dim}; font-weight: 600; }}\n\
@@ -524,6 +527,20 @@ mod tests {
         assert!(css.contains(".hl-table { background: #0f1115; border: 1px solid #323843;"));
         assert!(css.contains(".hl-tablehead .hl-tablecell { background: #21252d;"));
         assert!(css.contains(".hl-tablecell { min-height: 32px; padding: 6px 8px; border-bottom: 1px solid #323843;"));
+    }
+
+    #[test]
+    fn editable_table_cells_are_quiet_until_the_edit_affordance_is_relevant() {
+        let css = super::sheet(&Theme::dark());
+        assert!(css.contains(
+            "columnview entry.hl-table-editor { min-height: 24px; padding: 1px 8px; margin: 2px 0; background: transparent; border-color: transparent; box-shadow: none;"
+        ));
+        assert!(css.contains(
+            "columnview entry.hl-table-editor:hover { background: #21252d; border-color: #323843;"
+        ));
+        assert!(css.contains(
+            "columnview entry.hl-table-editor:focus-within { background: #171a20; border-color: #559df7; box-shadow: inset 0 0 0 1px #559df7;"
+        ));
     }
 
     #[test]

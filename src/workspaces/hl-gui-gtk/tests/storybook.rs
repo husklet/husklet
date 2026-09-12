@@ -1392,6 +1392,23 @@ mod unix {
             surface.rows(&window).expect("GTK accepts the bounded row window");
             settle_toolkit();
             let view = find::<gtk::ColumnView>(&root, |_| true);
+            let editors = descendants::<gtk::Entry>(view.upcast_ref());
+            assert!(!editors.is_empty(), "editable DataTable column realizes native editors");
+            assert!(
+                editors.iter().all(|entry| entry.has_css_class("hl-table-editor") && !entry.has_frame()),
+                "editable cells use quiet borderless table chrome at rest"
+            );
+            assert!(
+                editors.iter().all(|entry| {
+                    entry.tooltip_text().is_some_and(|label| {
+                        label
+                            .strip_prefix("Workspace record, row ")
+                            .and_then(|row| row.parse::<u64>().ok())
+                            .is_some_and(|row| row > 0)
+                    })
+                }),
+                "editable cells expose one-based logical row identities"
+            );
             let table = view
                 .ancestor(gtk::ScrolledWindow::static_type())
                 .and_then(|widget| widget.downcast::<gtk::ScrolledWindow>().ok())
@@ -2496,6 +2513,7 @@ mod unix {
                 let entry = find::<gtk::Entry>(root, |entry| entry.text().starts_with("record-"));
                 let authoritative = entry.text();
                 let row = authoritative.strip_prefix("record-").expect("visible row identity");
+                let row = row.parse::<u64>().expect("numeric visible row identity") + 1;
                 let accessible_name = format!("Workspace record, row {row}");
                 assert_eq!(
                     entry.tooltip_text().as_deref(),

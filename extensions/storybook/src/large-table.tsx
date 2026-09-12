@@ -243,6 +243,10 @@ export function LargeDataTableStory({ source }: { source: LargeRecordSource }) {
           label="Ready rows carry stable identities so focus, selection, and edits survive window changes."
           wrap
         />
+        <Text
+          label="Editable cells read like table data at rest; hover or focus reveals the edit boundary, and Enter proposes the change."
+          wrap
+        />
       </DocumentationSection>
       <DocumentationSection title="Behavior">
         <Row gap={2} wrap={true}>

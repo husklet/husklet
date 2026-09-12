@@ -15,6 +15,7 @@ const CHARACTER_PIXELS: i32 = 9;
 /// Horizontal margin applied to each side of a cell.
 const CELL_MARGIN: i32 = 8;
 const NARROW_TABLE_PIXELS: i32 = 720;
+const TABLE_EDITOR: &str = "hl-table-editor";
 
 /// Applies a collection-shaped property.
 pub(crate) fn configure(
@@ -247,6 +248,10 @@ fn setup(
     if editable {
         let entry = gtk::Entry::new();
         entry.set_has_frame(false);
+        // An editable grid is still a grid, not a column of permanently open
+        // form fields. The class keeps cells quiet at rest and lets the shared
+        // sheet reveal the editing boundary on hover and keyboard focus.
+        entry.add_css_class(TABLE_EDITOR);
         entry.set_max_length(Cell::MAX_TEXT_BYTES as i32);
         entry.set_margin_start(CELL_MARGIN);
         entry.set_margin_end(CELL_MARGIN);
@@ -333,7 +338,7 @@ fn bind(item: &gtk::glib::Object, index: usize, title: &str) {
     }
     if let Ok(entry) = child.downcast::<gtk::Entry>() {
         entry.set_text(value);
-        let label = format!("{title}, row {}", item.position());
+        let label = format!("{title}, row {}", item.position() + 1);
         entry.update_property(&[gtk::accessible::Property::Label(&label)]);
         entry.set_tooltip_text(Some(&label));
     }
