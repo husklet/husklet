@@ -19,6 +19,7 @@ pub fn sheet(theme: &Theme) -> String {
     variants(&mut css, theme);
     scales(&mut css, theme);
     control_sizes(&mut css);
+    inline_buttons(&mut css, theme);
     spacing(&mut css, theme);
     components(&mut css, theme);
     css
@@ -233,7 +234,28 @@ fn control_sizes(css: &mut String) {
          button.size-large > box { border-spacing: 8px; } button.size-large image { -gtk-icon-size: 20px; }\n\
          button.hl-iconbutton.size-small { min-width: 28px; min-height: 28px; padding: 0; }\n\
          button.hl-iconbutton.size-medium { min-width: 36px; min-height: 36px; padding: 0; }\n\
-         button.hl-iconbutton.size-large { min-width: 44px; min-height: 44px; padding: 0; }\n",
+         button.hl-iconbutton.size-large { min-width: 44px; min-height: 44px; padding: 0; }\n\
+         button.hl-inline-button { min-height: 44px; padding: 0; background: transparent; border-color: transparent; box-shadow: none; }\n\
+         button.hl-inline-button > .hl-inline-button-chrome { min-height: 18px; padding: 4px 8px; border: 1px solid transparent; border-radius: 6px; font-size: 12px; }\n",
+    );
+}
+
+fn inline_buttons(css: &mut String, theme: &Theme) {
+    let _ = writeln!(
+        css,
+        "button.hl-inline-button, button.hl-inline-button:hover, button.hl-inline-button:active {{ background: transparent; border-color: transparent; box-shadow: none; }}\n\
+         button.hl-inline-button > .hl-inline-button-chrome {{ background: transparent; color: {text}; border-color: transparent; }}\n\
+         button.hl-inline-button.variant-outline > .hl-inline-button-chrome {{ border-color: {line}; }}\n\
+         button.hl-inline-button.variant-filled > .hl-inline-button-chrome {{ background: {text}; color: {ground}; border-color: {text}; }}\n\
+         button.hl-inline-button.variant-filled.tone-accent > .hl-inline-button-chrome {{ background: {accent}; color: {ground}; border-color: {accent}; }}\n\
+         button.hl-inline-button:hover > .hl-inline-button-chrome {{ background: {raised}; color: {text}; border-color: {accent}; }}\n\
+         button.hl-inline-button:disabled > .hl-inline-button-chrome {{ background: transparent; color: {faint}; border-color: {line}; }}",
+        text = theme.color(Token::Text).hex(),
+        ground = theme.color(Token::Ground).hex(),
+        line = theme.color(Token::Line).hex(),
+        raised = theme.color(Token::Raised).hex(),
+        accent = theme.color(Token::Accent).hex(),
+        faint = theme.color(Token::TextFaint).hex(),
     );
 }
 
@@ -481,6 +503,18 @@ mod tests {
             "button.size-large { min-height: 44px; padding: 12px 16px; font-size: 16px; border-radius: 8px;"
         ));
         assert!(css.contains("button.hl-iconbutton.size-large { min-width: 44px; min-height: 44px; padding: 0;"));
+    }
+
+    #[test]
+    fn inline_buttons_separate_hit_target_from_visual_chrome() {
+        let css = super::sheet(&Theme::dark());
+        assert!(css.contains("button.hl-inline-button { min-height: 44px; padding: 0;"));
+        assert!(css.contains(
+            "button.hl-inline-button > .hl-inline-button-chrome { min-height: 18px; padding: 4px 8px;"
+        ));
+        assert!(css.contains(
+            "button.hl-inline-button.variant-outline > .hl-inline-button-chrome { border-color: #323843;"
+        ));
     }
 
     #[test]

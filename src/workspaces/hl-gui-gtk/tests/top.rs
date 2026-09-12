@@ -405,13 +405,7 @@ mod unix {
                 );
                 for label in ["Details", "Start"] {
                     let action = find_button(&card, label);
-                    assert!(action.has_css_class("size-small"));
-                    assert!(
-                        action.height() <= 32,
-                        "{width_name} container action {label:?} exceeded 32px: {}",
-                        action.height()
-                    );
-                    assert!(action.grab_focus(), "{label} remains keyboard reachable");
+                    assert_inline_action(&action, width_name, &format!("container {label}"));
                 }
                 let secondary = find_expander(&card, "More actions");
                 assert!(secondary.has_css_class("variant-outline"));
@@ -668,13 +662,7 @@ mod unix {
                 let manage = find_button(&root, "Manage connections");
                 assert_eq!(refresh.icon_name().as_deref(), Some("view-refresh-symbolic"));
                 assert_eq!(refresh.accessible_role(), gtk::AccessibleRole::Button);
-                assert!(manage.has_css_class("size-small"));
-                assert!(
-                    manage.allocation().height() <= 40,
-                    "{width_name} network management action is too tall: {}px",
-                    manage.allocation().height()
-                );
-                assert!(manage.grab_focus());
+                assert_inline_action(&manage, width_name, "network management");
                 let network_card = widgets_with_class(&root, "hl-card")
                     .into_iter()
                     .next()
@@ -789,10 +777,8 @@ mod unix {
                     card.height()
                 );
                 let inspect = find_button(&card, "Inspect");
-                assert!(inspect.has_css_class("size-small"));
                 assert!(inspect.has_css_class("variant-outline"));
-                assert_eq!(inspect.height(), 28, "{width_name} volume inspection control height");
-                assert!(inspect.grab_focus(), "volume inspection is keyboard reachable");
+                assert_inline_action(&inspect, width_name, "volume inspection");
                 let danger = find_expander(&card, "Danger zone");
                 assert!(danger.has_css_class("variant-outline"));
                 assert_eq!(danger.height(), 28, "{width_name} volume danger disclosure height");
@@ -811,8 +797,9 @@ mod unix {
                     "{width_name} volume actions split across rows: inspect={inspect_bounds:?}, danger={danger_bounds:?}"
                 );
                 assert!(
-                    vertical_end(&root, &card) <= 240,
-                    "{width_name} first volume record fell below the first 240px"
+                    vertical_end(&root, &card) <= if width == 1_200 { 240 } else { 264 },
+                    "{width_name} first volume record ended at {}px",
+                    vertical_end(&root, &card)
                 );
                 if width == 1_200 {
                     danger.emit_by_name::<()>("activate", &[]);
@@ -854,14 +841,8 @@ mod unix {
                     card.height()
                 );
                 let inspect = find_button(&card, "Inspect");
-                assert!(inspect.has_css_class("size-small"));
                 assert!(inspect.has_css_class("variant-outline"));
-                assert!(
-                    inspect.height() <= 32,
-                    "{width_name} image Inspect action exceeded 32px: {}",
-                    inspect.height()
-                );
-                assert!(inspect.grab_focus(), "image Inspect action is keyboard reachable");
+                assert_inline_action(&inspect, width_name, "image inspection");
                 let danger = find_expander(&card, "Danger zone");
                 assert!(danger.has_css_class("variant-outline"));
                 assert_eq!(
@@ -927,7 +908,7 @@ mod unix {
                     "{width_name} execution card collapsed to {}px instead of using the page width",
                     card.width()
                 );
-                let maximum = if width == 1_200 { 88 } else { 120 };
+                let maximum = if width == 1_200 { 88 } else { 128 };
                 assert!(
                     card.height() <= maximum,
                     "{width_name} collapsed execution record stacked its summary to {}px",
@@ -947,12 +928,7 @@ mod unix {
                 }
                 for label in ["Details", "Load output", "Wait up to 5s"] {
                     let action = find_button(&card, label);
-                    assert!(action.has_css_class("size-small"));
-                    assert!(
-                        action.height() <= 32,
-                        "{width_name} execution action {label:?} exceeded 32px: {}",
-                        action.height()
-                    );
+                    assert_inline_action(&action, width_name, &format!("execution {label}"));
                 }
                 assert!(
                     find_button(&card, "Details").grab_focus(),
@@ -1733,14 +1709,17 @@ mod unix {
                     card.width()
                 );
                 find_labelled(&expanded_root, "No containers connected.");
+                assert_inline_action(
+                    &find_button(&expanded_root, "Hide connections"),
+                    width_name,
+                    "hide network connections",
+                );
                 capture(&window, &format!("expanded-networks-{width_name}"), width, 800);
             }
             assert!(has_label(&expanded_root, "Connected containers · 0"));
             assert!(has_label(&expanded_root, "Hide connections"));
             let hide_connections = find_button(&expanded_root, "Hide connections");
-            assert!(hide_connections.has_css_class("size-small"));
             assert!(hide_connections.has_css_class("variant-filled"));
-            assert!(hide_connections.allocation().height() <= 40);
             assert!(!find_expander(&expanded_root, "Danger zone").is_expanded());
             assert_label_order(
                 &expanded_root,
@@ -3570,6 +3549,35 @@ mod unix {
             found.extend(widgets_with_class(&current, class));
         }
         found
+    }
+
+    fn assert_inline_action(button: &gtk::Button, width: &str, purpose: &str) {
+        assert!(
+            button.has_css_class("hl-inline-button"),
+            "{width} {purpose} action does not use reusable inline chrome"
+        );
+        assert_eq!(button.accessible_role(), gtk::AccessibleRole::Button);
+        assert!(button.is_focusable(), "{width} {purpose} action is not focusable");
+        if button.is_sensitive() {
+            assert!(
+                button.grab_focus(),
+                "{width} {purpose} action is not keyboard reachable"
+            );
+        }
+        assert!(
+            button.height() >= 44,
+            "{width} {purpose} hit target is only {}px",
+            button.height()
+        );
+        let chrome = widgets_with_class(button.upcast_ref(), "hl-inline-button-chrome")
+            .into_iter()
+            .next()
+            .expect("inline action owns compact visual chrome");
+        assert!(
+            chrome.height() <= 30,
+            "{width} {purpose} chrome expanded to {}px",
+            chrome.height()
+        );
     }
 
     fn assert_overview_recovery(root: &gtk::Widget, width: i32, case: &str) {

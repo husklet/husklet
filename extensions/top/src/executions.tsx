@@ -8,6 +8,7 @@ import {
   ConfirmAction,
   Expander,
   Heading,
+  InlineButton,
   IconButton,
   InlineMessage,
   KeyValueTable,
@@ -285,9 +286,8 @@ export function Executions({
               }
               actions={
                 <>
-                  <Button
+                  <InlineButton
                     label={selected === item.id ? 'Hide details' : 'Details'}
-                    size="small"
                     variant="filled"
                     tone="accent"
                     enabled={!busy}
@@ -295,15 +295,13 @@ export function Executions({
                       selected === item.id ? setSelected('') : void inspect(item.id)
                     }
                   />
-                  <Button
+                  <InlineButton
                     label={busy === `logs:${item.id}` ? 'Loading logs…' : 'Load output'}
-                    size="small"
                     enabled={!busy}
                     onInvoke={() => void logs(item.id)}
                   />
-                  <Button
+                  <InlineButton
                     label={busy === `wait:${item.id}` ? 'Waiting…' : 'Wait up to 5s'}
-                    size="small"
                     enabled={!busy && item.running}
                     onInvoke={() => void wait(item.id)}
                   />

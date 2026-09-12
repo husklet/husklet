@@ -1,5 +1,5 @@
 // Generated from Rust hl-extension protocol/v1.json. Do not edit.
-// Protocol artifact fnv1a64:da33a0b68c89b52d
+// Protocol artifact fnv1a64:bc006945bf30a625
 export const PROTOCOL_SPECIFICATION_VERSION = 1;
 export const PROTOCOL_VERSION = 1;
 export const PROTOCOL_BOUNDS = Object.freeze({
@@ -7196,6 +7196,12 @@ const definitions = {
       },
       {
         "name": "StackFrame",
+        "payload": {
+          "kind": "unit"
+        }
+      },
+      {
+        "name": "InlineButton",
         "payload": {
           "kind": "unit"
         }

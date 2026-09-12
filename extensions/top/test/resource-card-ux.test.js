@@ -45,12 +45,8 @@ test('image inventory is a full-width compact summary with secondary inspection 
   )?.SetProp.id;
   assert.ok(
     frame.patches.some(
-      (patch) =>
-        patch.SetProp?.id === inspect &&
-        patch.SetProp.prop === 'Size' &&
-        patch.SetProp.value?.ControlSize === 'Small',
+      (patch) => patch.Create?.id === inspect && patch.Create.tag === 'InlineButton',
     ),
-    'the frequent inspect operation remains compact',
   );
   assert.ok(
     frame.patches.some(
@@ -104,7 +100,7 @@ test('network inventory keeps management and destructive disclosure in one compa
     'Row',
     'CardContent',
   ]);
-  assert.deepEqual(property(stage, 'Manage connections', 'Size'), { ControlSize: 'Small' });
+  assert.equal(tag(stage, 'Manage connections'), 'InlineButton');
   assert.deepEqual(ancestorTags(stage, 'Danger zone').slice(0, 3), ['Row', 'Row', 'CardContent']);
   assert.deepEqual(property(stage, 'Danger zone', 'Tooltip'), {
     Text: 'Remove this network from the workspace',
@@ -157,7 +153,7 @@ test('volume inventory keeps inspection and destructive disclosure in one compac
     }),
   );
 
-  assert.deepEqual(property(stage, 'Inspect', 'Size'), { ControlSize: 'Small' });
+  assert.equal(tag(stage, 'Inspect'), 'InlineButton');
   assert.deepEqual(property(stage, 'Inspect', 'Variant'), { Variant: 'Outline' });
   assert.deepEqual(ancestorTags(stage, 'Inspect').slice(0, 3), ['Row', 'Row', 'CardContent']);
   assert.deepEqual(ancestorTags(stage, 'Danger zone').slice(0, 3), ['Row', 'Row', 'CardContent']);
@@ -194,7 +190,7 @@ test('resource inspection actions become explicit compact close actions', async 
   await settled();
   assert.ok(labelled(imageStage, 'Image summary'));
   assert.deepEqual(property(imageStage, 'Hide details', 'Variant'), { Variant: 'Filled' });
-  assert.deepEqual(property(imageStage, 'Hide details', 'Size'), { ControlSize: 'Small' });
+  assert.equal(tag(imageStage, 'Hide details'), 'InlineButton');
   invoke(imageStage, 'Hide details');
   await settled();
   assert.equal(currentLabels(imageStage).includes('Image summary'), false);
@@ -254,9 +250,7 @@ test('resource inspection actions become explicit compact close actions', async 
   await settled();
   assert.ok(labelled(networkStage, 'Network details'));
   assert.deepEqual(property(networkStage, 'Hide connections', 'Variant'), { Variant: 'Filled' });
-  assert.deepEqual(property(networkStage, 'Hide connections', 'Size'), {
-    ControlSize: 'Small',
-  });
+  assert.equal(tag(networkStage, 'Hide connections'), 'InlineButton');
   invoke(networkStage, 'Hide connections');
   await settled();
   assert.equal(currentLabels(networkStage).includes('Network details'), false);
@@ -406,6 +400,14 @@ function labelled(stage, label) {
     .flatMap((frame) => frame.patches)
     .filter((patch) => patch.SetProp?.prop === 'Label' && patch.SetProp.value?.Text === label)
     .at(-1);
+}
+
+function tag(stage, label) {
+  const patches = stage.frames.flatMap((frame) => frame.patches);
+  const id = patches
+    .filter((patch) => patch.SetProp?.prop === 'Label' && patch.SetProp.value?.Text === label)
+    .at(-1)?.SetProp.id;
+  return patches.find((patch) => patch.Create?.id === id)?.Create.tag;
 }
 
 function property(stage, label, prop) {

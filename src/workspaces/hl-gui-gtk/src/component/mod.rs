@@ -73,6 +73,7 @@ pub(crate) fn widget(tag: Tag) -> gtk::Widget {
         | Tag::InlineMessage
         | Tag::ValidationSummary => feedback::widget(tag),
         Tag::Button
+        | Tag::InlineButton
         | Tag::IconButton
         | Tag::ToggleButton
         | Tag::ButtonGroup

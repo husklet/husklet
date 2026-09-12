@@ -87,6 +87,7 @@ export const {
   InlineMessage,
   ValidationSummary,
   Button,
+  InlineButton,
   IconButton,
   ToggleButton,
   ButtonGroup,

@@ -108,6 +108,32 @@ fn prop_notes(tag: Tag) -> String {
                 "When true, replaces the leading icon with activity, prevents invocation, and keeps the action label visible.",
             ),
         ],
+        Tag::InlineButton => &[
+            (
+                "Label",
+                "Visible row action text. Its compact chrome retains a 44px interaction target.",
+            ),
+            (
+                "Icon",
+                "Optional leading named icon; it supplements the label and never replaces the accessible name.",
+            ),
+            (
+                "Variant",
+                "Visual emphasis within a dense resource row: outline for inspection and filled for the active close action.",
+            ),
+            (
+                "Tone",
+                "Semantic color intent. Use danger only for destructive actions.",
+            ),
+            (
+                "Enabled",
+                "When false, prevents invocation. Explain the unmet prerequisite in nearby text.",
+            ),
+            (
+                "Busy",
+                "When true, replaces the leading icon with activity and prevents invocation.",
+            ),
+        ],
         Tag::IconButton => &[
             (
                 "Label",
@@ -455,6 +481,7 @@ fn family(tag: Tag) -> &'static str {
         | Tag::InlineMessage
         | Tag::ValidationSummary => "feedback",
         Tag::Button
+        | Tag::InlineButton
         | Tag::IconButton
         | Tag::ToggleButton
         | Tag::ButtonGroup

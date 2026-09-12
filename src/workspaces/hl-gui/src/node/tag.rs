@@ -359,6 +359,9 @@ catalogue! {
     DiffLine: leaf, props[Label, Value, Tone], triggers[],
     StackTrace: children, props[Gap], triggers[],
     StackFrame: leaf, props[Label, Value, Tone], triggers[],
+
+    // Appended protocol additions preserve every established tag discriminant.
+    InlineButton: children, props[Label, Icon, Enabled, Busy, Variant, Tone], triggers[Invoke, Key, Focus, Pointer, Context],
 }
 
 #[cfg(test)]

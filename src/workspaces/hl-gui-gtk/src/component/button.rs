@@ -9,6 +9,7 @@ use super::{axis, slot};
 pub(crate) fn widget(tag: Tag) -> gtk::Widget {
     match tag {
         Tag::Button => standard().upcast(),
+        Tag::InlineButton => inline().upcast(),
         Tag::IconButton => icon().upcast(),
         Tag::ToggleButton => toggle().upcast(),
         Tag::ButtonGroup | Tag::ToggleButtonGroup => group().upcast(),
@@ -29,6 +30,20 @@ pub(crate) fn widget(tag: Tag) -> gtk::Widget {
 fn standard() -> gtk::Button {
     let widget = sized(action());
     let content = axis::row(0);
+    content.append(&slot::emblem_image());
+    content.append(&slot::activity_spinner());
+    content.append(&slot::caption_label());
+    widget.set_child(Some(&content));
+    widget
+}
+
+/// A quiet row action keeps a full interaction target while drawing compact chrome.
+fn inline() -> gtk::Button {
+    let widget = action();
+    widget.add_css_class("hl-inline-button");
+    let content = axis::row(0);
+    content.add_css_class("hl-inline-button-chrome");
+    content.set_valign(gtk::Align::Center);
     content.append(&slot::emblem_image());
     content.append(&slot::activity_spinner());
     content.append(&slot::caption_label());

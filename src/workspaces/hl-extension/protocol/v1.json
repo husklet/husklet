@@ -6850,6 +6850,12 @@
           "payload": {
             "kind": "unit"
           }
+        },
+        {
+          "name": "InlineButton",
+          "payload": {
+            "kind": "unit"
+          }
         }
       ]
     },

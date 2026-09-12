@@ -18,7 +18,9 @@ pub(crate) fn apply(widget: &gtk::Widget, node: &Node, prop: Prop, value: &PropV
         Prop::Placeholder => text::placeholder(widget, value),
         Prop::Icon => {
             text::icon(widget, value);
-            if node.tag == Tag::Button && node.prop(Prop::Busy).and_then(PropValue::as_flag).unwrap_or(false) {
+            if matches!(node.tag, Tag::Button | Tag::InlineButton)
+                && node.prop(Prop::Busy).and_then(PropValue::as_flag).unwrap_or(false)
+            {
                 if let Some(emblem) = crate::component::slot::emblem(widget) {
                     emblem.set_visible(false);
                 }
@@ -83,7 +85,8 @@ fn tooltip(widget: &gtk::Widget, value: &PropValue) {
 }
 
 fn enabled(widget: &gtk::Widget, node: &Node, value: &PropValue) {
-    let busy = node.tag == Tag::Button && node.prop(Prop::Busy).and_then(PropValue::as_flag).unwrap_or(false);
+    let busy = matches!(node.tag, Tag::Button | Tag::InlineButton)
+        && node.prop(Prop::Busy).and_then(PropValue::as_flag).unwrap_or(false);
     widget.set_sensitive(value.as_flag().unwrap_or(true) && !busy);
 }
 
@@ -133,7 +136,7 @@ fn busy(widget: &gtk::Widget, node: &Node, value: &PropValue) {
     }
     spinner.set_visible(state);
 
-    if node.tag == Tag::Button {
+    if matches!(node.tag, Tag::Button | Tag::InlineButton) {
         widget.update_state(&[gtk::accessible::State::Busy(state)]);
         if let Some(emblem) = crate::component::slot::emblem(widget) {
             let has_icon = node

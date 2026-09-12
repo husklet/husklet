@@ -4954,6 +4954,11 @@ test('image removal and prune require an explicit confirmation step', async () =
   const stage = host();
   const frame = stage.render(h(Images, { api: controlled, resource }));
   assert.equal(
+    taggedProperty(stageFromFrame(frame), 'Inspect', 'InlineButton', 'Variant')?.Variant,
+    'Outline',
+    'image inspection uses the reusable inline action instead of shrinking its hit target',
+  );
+  assert.equal(
     ancestorProperty(stageFromFrame(frame), 'Image maintenance', 'Card', 'Grow'),
     undefined,
     'maintenance stays content-height on wide windows',
@@ -5453,10 +5458,7 @@ test('volume and network panels render bounded real inventories and controls', (
   assert.equal(taggedProperty(volumeStage, 'cache', 'CardHeader', 'Align')?.Align, 'Start');
   assert.ok(taggedProperty(volumeStage, 'cache', 'CardHeader', 'Width'));
   assert.deepEqual(ancestorTags(volumeStage, 'Inspect').slice(0, 3), ['Row', 'Row', 'CardContent']);
-  assert.deepEqual(taggedProperty(volumeStage, 'Inspect', 'Button', 'Size'), {
-    ControlSize: 'Small',
-  });
-  assert.deepEqual(taggedProperty(volumeStage, 'Inspect', 'Button', 'Variant'), {
+  assert.deepEqual(taggedProperty(volumeStage, 'Inspect', 'InlineButton', 'Variant'), {
     Variant: 'Outline',
   });
   assert.deepEqual(ancestorTags(volumeStage, 'Danger zone').slice(0, 3), [
@@ -5524,9 +5526,9 @@ test('volume and network panels render bounded real inventories and controls', (
     'CardContent',
   ]);
   assert.deepEqual(
-    taggedProperty(networkStage, 'Manage connections', 'Button', 'Size'),
-    { ControlSize: 'Small' },
-    'connection management remains a compact secondary action beside network identity',
+    taggedProperty(networkStage, 'Manage connections', 'InlineButton', 'Enabled')?.Flag,
+    true,
+    'connection management uses compact chrome with a full interaction target',
   );
   const destructive = (frame, label) => {
     const id = frame.patches.find(
@@ -6801,8 +6803,7 @@ test('container controls follow the real daemon lifecycle states', () => {
   assert.equal(taggedProperty(stage, 'More actions', 'Expander', 'Variant')?.Variant, 'Outline');
   assert.equal(taggedProperty(stage, 'More actions', 'Expander', 'Width')?.Length, 'Content');
   assert.equal(taggedProperty(stage, 'More actions', 'Expander', 'Justify')?.Align, 'Center');
-  assert.equal(taggedProperty(stage, 'Details', 'Button', 'Variant')?.Variant, 'Filled');
-  assert.equal(taggedProperty(stage, 'Details', 'Button', 'Size')?.ControlSize, 'Small');
+  assert.equal(taggedProperty(stage, 'Details', 'InlineButton', 'Variant')?.Variant, 'Filled');
   assert.equal(
     ancestorTags(stage, 'Details').includes('CardActions'),
     false,
@@ -6821,8 +6822,7 @@ test('container controls follow the real daemon lifecycle states', () => {
   stage.render(h(Containers, { api, resource: inventory('created') }));
   assert.equal(isEnabled(stage, 'Remove'), true, 'created containers are removable');
   assert.equal(isEnabled(stage, 'Start'), true, 'created containers are startable');
-  assert.equal(taggedProperty(stage, 'Start', 'Button', 'Variant')?.Variant, 'Outline');
-  assert.equal(taggedProperty(stage, 'Start', 'Button', 'Size')?.ControlSize, 'Small');
+  assert.equal(taggedProperty(stage, 'Start', 'InlineButton', 'Variant')?.Variant, 'Outline');
 
   stage = host();
   stage.render(h(Containers, { api, resource: inventory('exited') }));
@@ -7194,9 +7194,7 @@ test('execution details, separate bounded streams, wait and retry are operationa
   );
   assert.deepEqual(ancestorProperty(stage, 'Details', 'Card', 'Width'), { Length: 'Fill' });
   for (const label of ['Details', 'Load output', 'Wait up to 5s']) {
-    assert.deepEqual(taggedProperty(stage, label, 'Button', 'Size'), {
-      ControlSize: 'Small',
-    });
+    assert.notEqual(taggedProperty(stage, label, 'InlineButton', 'Enabled'), undefined);
   }
   invoke(stage, 'Details');
   await settled();

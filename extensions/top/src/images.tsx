@@ -14,6 +14,7 @@ import {
   FormLabel,
   Heading,
   IconButton,
+  InlineButton,
   Meter,
   ResourceState,
   RecoveryState,
@@ -324,7 +325,7 @@ export function Images({
               detail={shortId(item.id)}
               status={<Text label={bytes(item.size)} color="text-dim" />}
               actions={
-                <Button
+                <InlineButton
                   label={
                     inspection.id !== item.id
                       ? 'Inspect'
@@ -334,7 +335,6 @@ export function Images({
                           ? 'Retry inspect'
                           : 'Hide details'
                   }
-                  size="small"
                   variant={inspection.id === item.id ? 'filled' : 'outline'}
                   tone={inspection.id === item.id ? 'accent' : 'neutral'}
                   enabled={!busy && inspection.state !== 'loading'}

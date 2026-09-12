@@ -15,6 +15,7 @@ import {
   Heading,
   IconButton,
   InlineMessage,
+  InlineButton,
   ResourceState,
   RecoveryState,
   ResourceIdentity,
@@ -409,7 +410,7 @@ export function Networks({
                     actions={
                       inspectionNeedsAccess ? null : (
                         <>
-                          <Button
+                          <InlineButton
                             key={`manage-${id}`}
                             label={
                               inspection.id !== id
@@ -422,7 +423,6 @@ export function Networks({
                             }
                             variant={inspection.id === id ? 'filled' : 'outline'}
                             tone={inspection.id === id ? 'accent' : 'neutral'}
-                            size="small"
                             enabled={inspection.state !== 'loading'}
                             onInvoke={() => toggleInspection(network)}
                           />

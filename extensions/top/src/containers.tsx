@@ -7,6 +7,7 @@ import {
   ConfirmAction,
   Expander,
   Heading,
+  InlineButton,
   IconButton,
   ResourceState,
   Row,
@@ -222,7 +223,7 @@ export function Containers({
                     {selected === item.id &&
                     inspection.state === 'error' &&
                     isAuthorityDenial(inspection.error) ? null : (
-                      <Button
+                      <InlineButton
                         label={
                           selected === item.id
                             ? inspection.state === 'loading'
@@ -234,16 +235,14 @@ export function Containers({
                         }
                         variant="filled"
                         tone="accent"
-                        size="small"
                         enabled={busy === ''}
                         onInvoke={() => toggleDetails(item)}
                       />
                     )}
                     {startable(item.state) ? (
-                      <Button
+                      <InlineButton
                         label="Start"
                         variant="outline"
-                        size="small"
                         enabled={busy === ''}
                         onInvoke={() => act('start', item.id, undefined, item.generation)}
                       />

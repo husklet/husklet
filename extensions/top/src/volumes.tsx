@@ -12,6 +12,7 @@ import {
   FormLabel,
   Heading,
   IconButton,
+  InlineButton,
   ResourceState,
   RecoveryState,
   Row,
@@ -218,7 +219,7 @@ export function Volumes({
                 detail={volume.driver}
                 actions={
                   inspectionNeedsAccess ? null : (
-                    <Button
+                    <InlineButton
                       label={
                         inspection.name !== volume.name
                           ? 'Inspect'
@@ -228,7 +229,6 @@ export function Volumes({
                               ? 'Retry inspect'
                               : 'Hide details'
                       }
-                      size="small"
                       variant={inspection.name === volume.name ? 'filled' : 'outline'}
                       tone={inspection.name === volume.name ? 'accent' : 'neutral'}
                       enabled={inspection.state !== 'loading'}
