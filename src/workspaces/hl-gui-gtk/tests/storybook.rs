@@ -1292,7 +1292,7 @@ mod unix {
                 .collect::<Vec<_>>();
             assert_eq!(
                 destinations.len(),
-                11,
+                12,
                 "the Buttons family remains one bounded component list"
             );
             let heights = destinations.iter().map(|button| button.height()).collect::<Vec<_>>();
