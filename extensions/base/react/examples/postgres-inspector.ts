@@ -122,11 +122,12 @@ try {
   const cache = createWindowCache<string[][]>(32);
   cache.set('0:initial', firstPage);
   const source = 1;
+  const version = 1;
   const provideRows = async (
     request: RowRequest,
     { signal }: { signal: AbortSignal },
   ): Promise<readonly DataRow[]> => {
-    if (request.source !== source) return [];
+    if (request.source !== source || request.version !== version) return [];
     const cacheKey = `${request.range.start}:${JSON.stringify(request.sort)}:${request.filter ?? ''}`;
     let records =
       request.range.start === 0 && !request.sort && !request.filter
@@ -178,7 +179,7 @@ try {
   );
   await surface.ready;
   await surface.source({ Open: { source, columns: schema } });
-  await surface.source({ Length: { source, version: 1, rows: total } });
+  await surface.source({ Length: { source, version, rows: total } });
   await surface.flush();
   process.stdout.write(
     `${JSON.stringify({ container: container.id, processes: processes.processes.length, queryRows: total, networks: networks.length, slot: surface.slot })}\n`,

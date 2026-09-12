@@ -82,6 +82,12 @@ async function host({ reuseSlots = false, rejectFirstRender = false } = {}) {
       eventChannel += 1;
       (await arrived).write(encode({ channel: eventChannel, kind: KIND.event, payload }));
     },
+    async pushFragmented(payload) {
+      eventChannel += 1;
+      const frame = encode({ channel: eventChannel, kind: KIND.event, payload });
+      const stream = await arrived;
+      for (const byte of frame) stream.write(Buffer.of(byte));
+    },
     close() {
       accepted?.destroy();
       server.close();
@@ -316,6 +322,76 @@ test('virtualized row requests route to their owning surface with the exact curs
   });
   assert.deepEqual(errors, []);
   await Promise.all([first.close(), second.close()]);
+  await session.close();
+  stage.close();
+});
+
+test('published source version refuses unannounced Postgres windows without running SQL', async () => {
+  const stage = await host();
+  const errors = [];
+  const requests = [];
+  const session = await connect({
+    path: stage.socket,
+    onEventError: (error) => errors.push(error),
+  });
+  const surface = render(h(DataTable, { source: 17, schema: [] }), session, {
+    title: 'Postgres million-row browser',
+    rows: (request) => {
+      requests.push(request);
+      return [{ key: request.range.start, cells: [{ Text: 'database row' }] }];
+    },
+  });
+  await surface.ready;
+  await surface.source({ Length: { source: 17, version: 4, rows: 1_000_000 } });
+
+  const window = {
+    source: 17,
+    range: { start: 999_936, count: 64 },
+    sort: null,
+    filter: null,
+    slot: surface.slot,
+  };
+  await stage.pushFragmented({ ...window, id: 80, version: 5 });
+  await until(() => stage.answers.length === 1);
+  assert.equal(requests.length, 0, 'an unannounced generation never reaches database code');
+  assert.deepEqual(stage.answers[0].window, {
+    source: 17,
+    version: 5,
+    request: 80,
+    range: window.range,
+    rows: [],
+  });
+
+  await stage.pushFragmented({ ...window, id: 81, version: 4 });
+  await until(() => stage.answers.length === 2);
+  assert.equal(requests.length, 1, 'the exact published generation remains usable');
+  assert.equal(stage.answers[1].window.request, 81);
+  assert.deepEqual(stage.answers[1].window.rows, [
+    { key: 999_936, cells: [{ Text: 'database row' }] },
+  ]);
+  let staleSignal;
+  surface.setRowProvider((_request, { signal }) => {
+    staleSignal = signal;
+    return new Promise(() => {});
+  });
+  await stage.pushFragmented({ ...window, id: 82, version: 4 });
+  await until(() => staleSignal !== undefined);
+  await surface.source({ Invalidate: { source: 17, version: 6 } });
+  assert.equal(staleSignal.aborted, true, 'publishing a database snapshot cancels old SQL');
+  await until(() => stage.answers.length === 3);
+  assert.equal(stage.answers[2].window.request, 82);
+  assert.deepEqual(stage.answers[2].window.rows, []);
+
+  surface.setRowProvider((request) => [
+    { key: request.range.start, cells: [{ Text: 'replacement snapshot' }] },
+  ]);
+  await stage.pushFragmented({ ...window, id: 83, version: 6 });
+  await until(() => stage.answers.length === 4);
+  assert.deepEqual(stage.answers[3].window.rows, [
+    { key: 999_936, cells: [{ Text: 'replacement snapshot' }] },
+  ]);
+  assert.deepEqual(errors, []);
+  await surface.close();
   await session.close();
   stage.close();
 });

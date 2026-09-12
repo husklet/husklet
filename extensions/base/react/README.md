@@ -267,6 +267,14 @@ virtual table traverses a large dataset. It uses least-recently-used eviction, s
 reading a window preserves it across nearby scroll churn; limits must be from 1
 through 1,024 entries.
 
+Once `surface.source(...)` successfully publishes a versioned `Length`, `Invalidate`,
+or `Window` mutation, React treats that version as the extension's authoritative
+snapshot. Row requests for older or unannounced newer versions are answered empty
+without invoking the provider; publishing a replacement version also aborts obsolete
+provider work. Providers should still compare both `request.source` and
+`request.version` before issuing database or filesystem work, so their own caches and
+transactions use the same immutable identity.
+
 `vocabulary` exports both lists, and `tags` exports every component name.
 
 ### Terminal transcript

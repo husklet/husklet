@@ -62,6 +62,8 @@ interface RenderHandle {
   rowQueue: RowPending[];
   /** Highest host revision observed for each source on this surface. */
   rowVersions: Map<number, number>;
+  /** Exact source revisions successfully published by this extension. */
+  publishedRowVersions: Map<number, number>;
 }
 interface RowTask {
   request: RowRequest;
@@ -146,6 +148,11 @@ function deliverRows(
   const handle = request.slot === undefined ? undefined : registry?.slots.get(request.slot);
   const provider = handle?.rowProvider;
   if (!registry || !handle || !provider) return false;
+  const publishedVersion = handle.publishedRowVersions.get(request.source);
+  if (publishedVersion !== undefined && request.version !== publishedVersion) {
+    answerRows(session, { request, channel }, []);
+    return true;
+  }
   const latestVersion = handle.rowVersions.get(request.source);
   if (latestVersion !== undefined && request.version < latestVersion) {
     answerRows(session, { request, channel }, []);
@@ -205,6 +212,48 @@ function answerRows(session: Session, pending: RowPending | RowTask, rows: reado
     range: pending.request.range,
     rows: [...rows],
   });
+}
+
+function publishRowVersion(
+  session: Session,
+  handle: RenderHandle,
+  source: number,
+  version: number,
+) {
+  handle.publishedRowVersions.set(source, version);
+  handle.rowVersions.set(source, version);
+  const retained = [];
+  for (const pending of handle.rowQueue) {
+    if (pending.request.source === source && pending.request.version !== version)
+      answerRows(session, pending, []);
+    else retained.push(pending);
+  }
+  handle.rowQueue = retained;
+  for (const task of handle.rowActive) {
+    if (task.request.source === source && task.request.version !== version) {
+      task.controller.abort(new Error('row source version was superseded'));
+      answerRows(session, task, []);
+      handle.rowActive.delete(task);
+    }
+  }
+}
+
+function retireRowSource(session: Session, handle: RenderHandle, source: number) {
+  handle.publishedRowVersions.delete(source);
+  handle.rowVersions.delete(source);
+  const retained = [];
+  for (const pending of handle.rowQueue) {
+    if (pending.request.source === source) answerRows(session, pending, []);
+    else retained.push(pending);
+  }
+  handle.rowQueue = retained;
+  for (const task of handle.rowActive) {
+    if (task.request.source === source) {
+      task.controller.abort(new Error('row source was retired'));
+      answerRows(session, task, []);
+      handle.rowActive.delete(task);
+    }
+  }
 }
 
 function drainRows(
@@ -344,6 +393,7 @@ export function render(
     rowActive: new Set<RowTask>(),
     rowQueue: [],
     rowVersions: new Map<number, number>(),
+    publishedRowVersions: new Map<number, number>(),
   } as unknown as RenderHandle;
   registry.handles.add(handle);
 
@@ -402,12 +452,29 @@ export function render(
     },
     async source(mutation: SourceMutation) {
       const owned = await ready;
+      const normalized = sourceMutation(mutation) as SourceMutation;
       const reply = await session.call('source_resize_at', {
         slot: owned,
-        mutation: sourceMutation(mutation) as SourceMutation,
+        mutation: normalized,
       });
       if (reply?.reply !== 'done')
         throw new Error(`host replied ${reply?.reply ?? 'without a tag'}, expected done`);
+      if ('Open' in normalized) {
+        retireRowSource(session, handle, normalized.Open.source);
+      } else if ('Close' in normalized) {
+        retireRowSource(session, handle, normalized.Close.source);
+      } else if ('Length' in normalized) {
+        publishRowVersion(session, handle, normalized.Length.source, normalized.Length.version);
+      } else if ('Invalidate' in normalized) {
+        publishRowVersion(
+          session,
+          handle,
+          normalized.Invalidate.source,
+          normalized.Invalidate.version,
+        );
+      } else if ('Window' in normalized) {
+        publishRowVersion(session, handle, normalized.Window.source, normalized.Window.version);
+      }
     },
     setRowProvider(provider: RowProvider | null) {
       for (const pending of handle.rowQueue) answerRows(session, pending, []);
@@ -426,6 +493,7 @@ export function render(
       for (const pending of handle.rowQueue) answerRows(session, pending, []);
       handle.rowQueue.length = 0;
       handle.rowVersions.clear();
+      handle.publishedRowVersions.clear();
       for (const task of handle.rowActive) {
         task.controller.abort(new Error('surface closed'));
         answerRows(session, task, []);
