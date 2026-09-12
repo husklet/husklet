@@ -3092,14 +3092,19 @@ export function workspace(session, { signal } = {}) {
         if (signal?.aborted)
             throw outputAbort(signal);
         const scoped = signal ? api.withSignal(signal) : api;
-        let changed;
-        const observed = new Promise((resolve) => {
-            changed = resolve;
-        });
+        let announced;
+        let wake;
         const stop = await scoped.watchPaneChanges((change) => {
             if (change.slot === slot &&
                 (change.generation !== generation || change.revision !== revision))
-                changed(change);
+                if (wake) {
+                    const resolve = wake;
+                    wake = undefined;
+                    resolve(change);
+                }
+                else {
+                    announced = change;
+                }
         });
         let timer;
         let abort;
@@ -3109,27 +3114,43 @@ export function workspace(session, { signal } = {}) {
                 throw new Error('terminal screen cursor changed before input authority');
             }
             await scoped.terminal.writeInput(slot, generation, revision, contents);
-            const change = await Promise.race([
-                observed,
-                new Promise((resolve) => {
-                    timer = setTimeout(() => resolve(null), timeoutMs);
-                }),
-                new Promise((_, reject) => {
-                    abort = () => reject(outputAbort(signal));
-                    signal?.addEventListener('abort', abort, { once: true });
-                }),
-            ]);
-            if (change === null)
-                return { changed: false, before };
-            const readable = projectReadable ? await scoped.terminal.toText(slot, { lines }) : undefined;
-            const after = readable?.snapshot ?? (await scoped.terminal.read(slot, lines));
-            if (!projectReadable && after.generation !== generation) {
-                throw new Error('terminal pane was replaced before input result could be verified');
+            const deadline = Date.now() + timeoutMs;
+            const aborted = new Promise((_, reject) => {
+                abort = () => reject(outputAbort(signal));
+                signal?.addEventListener('abort', abort, { once: true });
+            });
+            for (;;) {
+                if (!announced) {
+                    const remaining = deadline - Date.now();
+                    if (remaining < 1)
+                        return { changed: false, before };
+                    const change = await Promise.race([
+                        new Promise((resolve) => {
+                            wake = resolve;
+                        }),
+                        new Promise((resolve) => {
+                            timer = setTimeout(() => resolve(null), remaining);
+                        }),
+                        aborted,
+                    ]);
+                    clearTimeout(timer);
+                    if (change === null)
+                        return { changed: false, before };
+                }
+                else {
+                    announced = undefined;
+                }
+                const readable = projectReadable
+                    ? await scoped.terminal.toText(slot, { lines })
+                    : undefined;
+                const after = readable?.snapshot ?? (await scoped.terminal.read(slot, lines));
+                if (after.generation === generation && after.revision === revision)
+                    continue;
+                if (!projectReadable && after.generation !== generation) {
+                    throw new Error('terminal pane was replaced before input result could be verified');
+                }
+                return { changed: true, before, after: readable ?? after };
             }
-            if (after.generation === generation && after.revision === revision) {
-                throw new Error('pane change did not advance the terminal screen cursor');
-            }
-            return { changed: true, before, after: readable ?? after };
         }
         finally {
             clearTimeout(timer);

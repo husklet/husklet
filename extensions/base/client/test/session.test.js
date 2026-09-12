@@ -8168,6 +8168,7 @@ test('real Unix writeAndWait subscribes and reads before bytes, then returns adv
   const slot = 'pane-input';
   let writes = 0;
   let reads = 0;
+  let delayFirstAdvance = true;
   const screen = (revision, lines) => ({
     slot,
     generation: 4,
@@ -8195,16 +8196,30 @@ test('real Unix writeAndWait subscribes and reads before bytes, then returns adv
         } else if (frame.payload.call === 'terminal_read_pane') {
           reads += 1;
           assert.deepEqual(frame.payload.with, { slot, lines: 20 });
+          const stale = delayFirstAdvance ? reads <= 2 : reads === 1;
           socket.write(
             encode({
               channel: 2,
               kind: KIND.response,
               payload: {
                 reply: 'text',
-                with: screen(reads === 1 ? 7 : 8, reads === 1 ? ['$ '] : ['$ ^C']),
+                with: screen(stale ? 7 : 8, stale ? ['$ '] : ['$ ^C']),
               },
             }),
           );
+          if (writes === 1 && reads === 2) {
+            delayFirstAdvance = false;
+            const advanced = encode({
+              channel: 100,
+              kind: KIND.event,
+              payload: {
+                snapshot: 'pane_changes',
+                of: { slot, kind: 'terminal', generation: 4, revision: 8, coalesced: 0 },
+              },
+            });
+            socket.write(advanced.subarray(0, 5));
+            setImmediate(() => socket.write(advanced.subarray(5)));
+          }
         } else if (frame.payload.call === 'terminal_write_pane') {
           writes += 1;
           assert.deepEqual(frame.payload.with, {
@@ -8258,6 +8273,7 @@ test('real Unix writeAndWait subscribes and reads before bytes, then returns adv
       'event_subscribe',
       'terminal_read_pane',
       'terminal_write_pane',
+      'terminal_read_pane',
       'terminal_read_pane',
       'event_unsubscribe',
     ]);
