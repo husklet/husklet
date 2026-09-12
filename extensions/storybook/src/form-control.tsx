@@ -47,6 +47,14 @@ export function FormControlWorkbench() {
         />
       </DocumentationSection>
 
+      <DocumentationSection title="Settings fields">
+        <FormControl gap={1} width={{ chars: 38 }}>
+          <FormLabel label="Default shell" />
+          <Entry value="" placeholder="Automatic when empty" />
+          <FormHelperText label="A placeholder shows an example; it does not replace the field label." />
+        </FormControl>
+      </DocumentationSection>
+
       <DocumentationSection title="Inline actions">
         <FormControl gap={1} width={{ minimum: { chars: 20 }, maximum: { chars: 64 } }}>
           <FormLabel label="Image reference" />

@@ -379,6 +379,16 @@ mod unix {
                 );
                 let image = find_entry_placeholder(&root, "registry/image:tag");
                 let shell = find_entry_placeholder(&root, "Automatic when empty");
+                assert_eq!(
+                    find_label(&root, "Workspace image").mnemonic_widget(),
+                    Some(image.clone().upcast()),
+                    "Workspace image visibly and accessibly labels its Entry"
+                );
+                assert_eq!(
+                    find_label(&root, "Default shell").mnemonic_widget(),
+                    Some(shell.clone().upcast()),
+                    "Default shell visibly and accessibly labels its Entry"
+                );
                 let controls = [
                     image.clone().upcast::<gtk::Widget>(),
                     shell.clone().upcast(),

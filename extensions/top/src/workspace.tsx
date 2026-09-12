@@ -626,8 +626,8 @@ function field(
   onChange: (event: Change) => void,
 ) {
   return (
-    <Column gap={1}>
-      <Text label={label} />
+    <FormControl gap={1} width={CONTROL_WIDTH}>
+      <FormLabel label={label} />
       <Entry
         value={value}
         placeholder={placeholder}
@@ -636,7 +636,7 @@ function field(
         align="start"
         onChange={onChange}
       />
-    </Column>
+    </FormControl>
   );
 }
 function colorField(label: string, value: string | null, onChange: (value: string | null) => void) {

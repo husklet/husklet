@@ -682,6 +682,8 @@ test('Top owns workspace settings and extension management in the same tab', asy
     'the settings route has an unambiguous accessible page heading',
   );
   assert.ok(labelled(stage, 'Runtime'));
+  assert.deepEqual(ancestorTags(stage, 'Workspace image').slice(0, 1), ['FormControl']);
+  assert.deepEqual(ancestorTags(stage, 'Default shell').slice(0, 1), ['FormControl']);
   assert.deepEqual(ancestorTags(stage, 'Execution lifetime').slice(0, 1), ['FormControl']);
   const lifetime = formControlField(stage, 'Execution lifetime', 'Select');
   assert.deepEqual(latestProperty(stage, lifetime, 'Value'), { Text: 'live' });

@@ -48,6 +48,9 @@ test('FormControl teaches real states, ownership, and associations before API', 
   assert(text.some((label) => label?.includes('as its description')));
   assert(text.indexOf('States') < text.indexOf('API'));
   assert(text.indexOf('Accessibility') < text.indexOf('API'));
+  assert(text.includes('Settings fields'));
+  assert(text.includes('Default shell'));
+  assert(text.includes('A placeholder shows an example; it does not replace the field label.'));
 });
 
 test('FormControl documents one compact wrapping row for a field and its actions', () => {
