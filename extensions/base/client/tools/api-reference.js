@@ -76,6 +76,7 @@ groups
   .get('Containers')
   .push(
     '- Container list, inspection, and inventory snapshots include a bounded `ports` view, preserving automatically assigned host ports for long-lived service extensions under the same container selector authority.',
+    '- Extension sidecars have no network interface. Service clients run through exact-generation `containers.execStreaming(...)` / `execJsonLines(...)`; credentials are resolved into the child environment by the host and never returned to extension code. Use `inspectObserved(...)` for a saved service target so container replacement requires explicit reselection.',
   );
 groups
   .get('Terminal and panes')

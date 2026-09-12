@@ -30,7 +30,12 @@ const session = await connect({ path: configuration.path, pendingLimit: 8, timeo
 let executionId: string | undefined;
 try {
   const containers = workspace(session).containers;
-  const container = await containers.inspect(configuration.containerId);
+  // A saved database target is an exact lifecycle identity. Never follow a reused
+  // container ID/name onto a replacement generation without fresh user selection.
+  const container = await containers.inspectObserved(
+    configuration.containerId,
+    configuration.generation,
+  );
   if (container.state !== 'running') throw new Error('Postgres container is not running');
 
   const query = configuration.query.trim().replace(/;$/, '');

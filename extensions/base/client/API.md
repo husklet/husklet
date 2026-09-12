@@ -103,6 +103,7 @@ order; the JavaScript client's checks are never treated as a security boundary.
 - `host.containers.execWithCredentials(...)` — `container_exec_credential`, requires `containers:execute`.
 - `host.containers.attachTerminal(...)` — `container_attach_terminal`, requires `containers:attach`.
 - Container list, inspection, and inventory snapshots include a bounded `ports` view, preserving automatically assigned host ports for long-lived service extensions under the same container selector authority.
+- Extension sidecars have no network interface. Service clients run through exact-generation `containers.execStreaming(...)` / `execJsonLines(...)`; credentials are resolved into the child environment by the host and never returned to extension code. Use `inspectObserved(...)` for a saved service target so container replacement requires explicit reselection.
 
 ## Processes and executions
 

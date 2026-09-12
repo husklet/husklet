@@ -951,3 +951,37 @@ test('Postgres GUI stays live and serves a scrolled database window before host 
     false,
   );
 });
+
+test('Postgres browser refuses a replacement generation before resolving credentials or executing', async () => {
+  const id = 'c'.repeat(64);
+  const run = await scenario(
+    'postgres-browser.ts',
+    {
+      containerId: id,
+      generation: 7,
+      database: 'app',
+      query: 'select 1',
+      passwordCredential: 'postgres.password',
+    },
+    (socket, frame) => {
+      assert.equal(frame.payload.call, 'container_inspect_observed');
+      socket.write(
+        encode({
+          channel: frame.channel,
+          kind: KIND.response,
+          flags: 3,
+          payload: {
+            error: 'conflict',
+            detail: 'container generation changed: expected 7, current 8',
+          },
+        }),
+      );
+    },
+    1,
+    ['containers:read', 'containers:execute', 'containers:input', 'credentials:inject'],
+  );
+  assert.deepEqual(run.calls, [
+    { call: 'container_inspect_observed', with: { id, generation: 7 } },
+  ]);
+  assert.match(run.stderr, /container generation changed/);
+});
