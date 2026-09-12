@@ -124,6 +124,80 @@ test('supervised terminal command is authoritative over fragmented real Unix fra
   }
 });
 
+test('aborting idle command polling immediately cancels the exact supervised command', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-terminal-command-abort-'));
+  const socketPath = path.join(directory, 'host.sock');
+  const calls = [];
+  const server = net.createServer((socket) => {
+    const reader = new Reader();
+    socket.on('data', (chunk) => {
+      for (const frame of reader.take(chunk)) {
+        if (frame.kind !== KIND.request) continue;
+        calls.push(frame.payload);
+        const call = frame.payload.call;
+        const payload =
+          call === 'terminal_command_start'
+            ? { reply: 'terminal_command', with: running }
+            : call === 'terminal_command_output'
+              ? {
+                  reply: 'terminal_command_output',
+                  with: {
+                    id,
+                    owner,
+                    ...pane,
+                    output: { entries: [], next: 0, more: false, eof: false, gap: false },
+                  },
+                }
+              : call === 'terminal_command_cancel'
+                ? {
+                    reply: 'terminal_command',
+                    with: { ...running, running: false, exit_code: 130, pid: 0 },
+                  }
+                : (() => {
+                    throw new Error(`unexpected ${call}`);
+                  })();
+        fragmented(socket, { channel: frame.channel, kind: KIND.response, payload });
+      }
+    });
+    fragmented(socket, {
+      channel: CONTROL,
+      kind: KIND.open,
+      payload: {
+        protocol: 1,
+        peer: 'terminal-command-abort',
+        granted: ['terminals:process-control', 'terminals:output'],
+      },
+    });
+  });
+  await new Promise((resolve) => server.listen(socketPath, resolve));
+  try {
+    const session = await connect({ path: socketPath });
+    const controller = new AbortController();
+    const started = Date.now();
+    const operation = workspace(session).terminal.commandText(pane, {
+      command: running.command,
+      maxBytes: 64,
+      pollIntervalMs: 60_000,
+      signal: controller.signal,
+      cancelSignal: 'SIGINT',
+      cancelTimeoutMs: 1_000,
+    });
+    while (!calls.some(({ call }) => call === 'terminal_command_output'))
+      await new Promise((resolve) => setImmediate(resolve));
+    controller.abort('agent deadline');
+    await assert.rejects(operation, TerminalCommandOperationError);
+    assert(Date.now() - started < 1_000, 'abort must not wait for the 60 second poll interval');
+    assert.deepEqual(calls.at(-1), {
+      call: 'terminal_command_cancel',
+      with: { id, owner, ...pane, signal: 'SIGINT', timeout_ms: 1_000 },
+    });
+    await session.close();
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('supervised command output survives reconnect and originating pane replacement', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'husklet-terminal-command-resume-'));
   const socketPath = path.join(directory, 'host.sock');

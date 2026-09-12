@@ -38,6 +38,8 @@ try {
         command: ['sh', '-lc', configuration.prompt],
         maxBytes: 1024 * 1024,
         signal: cancellation.signal,
+        cancelSignal: 'SIGINT',
+        cancelTimeoutMs: 1_000,
       });
       process.stdout.write(
         `${JSON.stringify({ context: panes, incomplete: contextIncomplete, selected: { kind: 'terminal', before: observed.text, command: result.command.id, stdout: result.stdout, stderr: result.stderr, exitCode: result.command.exit_code, completed: !result.command.running, pane: { slot: result.command.slot, generation: result.command.generation, revision: result.command.revision } } })}\n`,

@@ -2153,7 +2153,7 @@ export function workspace(session, { signal } = {}) {
                         if (page.output.eof)
                             break;
                         if (!page.output.more && pollIntervalMs > 0) {
-                            await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+                            await outputPoll(pollIntervalMs, abortSignal);
                         }
                     }
                     phase = 'wait';

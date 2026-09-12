@@ -1581,6 +1581,7 @@ export interface WorkspaceApi {
     commandCloseInput(command: TerminalCommand): Promise<void>;
     /**
      * Run, collect bounded UTF-8 output, and return authoritative process completion.
+     * Abort interrupts idle output polling immediately before cancelling the owned command.
      * Post-start failures throw `TerminalCommandOperationError`, preserving the immutable
      * command and last completely consumed output cursor for reconnect-safe recovery.
      */

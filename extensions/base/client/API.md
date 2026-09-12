@@ -183,7 +183,7 @@ order; the JavaScript client's checks are never treated as a security boundary.
 - `host.terminal.openTabAndWait(...)` — arms pane observation before opening the session-owned tab and verifies a pane under the exact returned tab identity; post-creation observation failures retain `{ tab, title }` in `TerminalOperationError`; requires `panes:observe`, `terminals:layout-control`, and `terminals:process-control`.
 - A supervised terminal command remains inspectable, readable, writable, waitable, and cancellable by its immutable returned identity after its originating pane is replaced or the extension reconnects. The pane snapshot fences creation only.
 - Every supervised command carries its authenticated, immutable installation incarnation. All follow-up calls echo that owner and the Rust host rejects copied or lifecycle-stale command authority before execution lookup. Reconnecting the same installed record remains valid; disable, update, regrant, uninstall, and reinstall rotate or discard the incarnation.
-- `host.terminal.commandText(...)` throws `TerminalCommandOperationError` after any post-start failure, preserving the immutable command, failed phase, and last completely consumed output cursor so reconnecting callers can resume without relaunching or guessing.
+- `host.terminal.commandText(...)` interrupts idle polling immediately on abort, cancels the exact owned command, and throws `TerminalCommandOperationError` after any post-start failure with the immutable command, failed phase, and last completely consumed output cursor.
 
 ## Files
 
